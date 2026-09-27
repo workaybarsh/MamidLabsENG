@@ -1,0 +1,285 @@
+{
+  "note": "Profile file catalog. Rows with an empty repo field are installed manually; rows with a repo can be downloaded from the app.",
+  "profiles": [
+    {
+      "id": "max",
+      "label": "Qwen3.8 MAX",
+      "hardware": "16 GB VRAM / 32 GB RAM",
+      "summary": "Deep reasoning, 32K context, image reading on. Measured speed ~25 tok/s.",
+      "files": [
+        {
+          "label": "Language model (Qwen3.8 27B IQ4_XS)",
+          "target": "models/Qwen3.8-27B-Abliterated-IQ4_XS/Qwen3.8-27B-Abliterated-IQ4_XS.gguf",
+          "repo": "windowsxp811203/Qwen3.8-27B-Abliterated-GGUF",
+          "revision": "efb07baa690a1bc7beb53ee067b4b57c7025b5e7",
+          "filename": "Qwen3.8-27B-Abliterated-IQ4_XS.gguf",
+          "bytes": 15309039488
+        },
+        {
+          "label": "Image projector (mmproj F16)",
+          "target": "models/Qwen3.8-27B-Abliterated-IQ4_XS/mmproj-Qwen3.8-27B-Abliterated-F16.gguf",
+          "repo": "windowsxp811203/Qwen3.8-27B-Abliterated-GGUF",
+          "revision": "efb07baa690a1bc7beb53ee067b4b57c7025b5e7",
+          "filename": "mmproj-Qwen3.8-27B-Abliterated-F16.gguf",
+          "bytes": 927607328
+        },
+        {
+          "label": "Krea-2 Turbo (image)",
+          "target": "ComfyUI/models/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+          "bytes": 13141730784
+        },
+        {
+          "label": "Qwen3-VL 4B text encoder",
+          "target": "ComfyUI/models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+          "bytes": 5242467968
+        },
+        {
+          "label": "Qwen Image VAE",
+          "target": "ComfyUI/models/vae/qwen_image_vae.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "vae/qwen_image_vae.safetensors",
+          "bytes": 253806246
+        },
+        {
+          "label": "Krea-2 style reference LoRA (optional)",
+          "target": "ComfyUI/models/loras/krea2_style_reference.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "loras/krea2_style_reference.safetensors",
+          "bytes": 457111760
+        },
+        {
+          "label": "Krea-2 realism LoRA (used only when a realistic image is requested)",
+          "target": "ComfyUI/models/loras/krea2_realism_lora.safetensors",
+          "repo": "gokaygokay/Krea-2-Realism-LoRA",
+          "revision": "32f0436ac10e985134364e7555898c9f121a46ce",
+          "filename": "krea2_realism_lora.safetensors",
+          "bytes": 469288512
+        },
+        {
+          "label": "Krea 2 Identity Edit v1.2 LoRA (photo editing, identity preserved)",
+          "target": "ComfyUI/models/loras/krea2_identity_edit_v1_2.safetensors",
+          "repo": "conradlocke/krea2-identity-edit",
+          "revision": "89e9e7a09ee2e5c9331e952063d79b1b8a703280",
+          "filename": "krea2_identity_edit_v1_2.safetensors",
+          "bytes": 1828256432
+        },
+        {
+          "label": "Wan 2.2 TI2V 5B (video)",
+          "target": "ComfyUI/models/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+          "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+          "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+          "filename": "split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+          "bytes": 9999658848
+        },
+        {
+          "label": "UMT5 XXL text encoder",
+          "target": "ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+          "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+          "filename": "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "bytes": 6735906897
+        },
+        {
+          "label": "Wan 2.2 VAE",
+          "target": "ComfyUI/models/vae/wan2.2_vae.safetensors",
+          "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+          "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+          "filename": "split_files/vae/wan2.2_vae.safetensors",
+          "bytes": 1409400960
+        }
+      ]
+    },
+    {
+      "id": "flash",
+      "label": "Qwen3.8 27B",
+      "hardware": "16 GB VRAM / 32 GB RAM",
+      "summary": "Same files as MAX, shorter thinking budget. Measured speed ~23-24 tok/s.",
+      "files": [
+        {
+          "label": "Language model (Qwen3.8 27B IQ4_XS)",
+          "target": "models/Qwen3.8-27B-Abliterated-IQ4_XS/Qwen3.8-27B-Abliterated-IQ4_XS.gguf",
+          "repo": "windowsxp811203/Qwen3.8-27B-Abliterated-GGUF",
+          "revision": "efb07baa690a1bc7beb53ee067b4b57c7025b5e7",
+          "filename": "Qwen3.8-27B-Abliterated-IQ4_XS.gguf",
+          "bytes": 15309039488
+        },
+        {
+          "label": "Image projector (mmproj F16)",
+          "target": "models/Qwen3.8-27B-Abliterated-IQ4_XS/mmproj-Qwen3.8-27B-Abliterated-F16.gguf",
+          "repo": "windowsxp811203/Qwen3.8-27B-Abliterated-GGUF",
+          "revision": "efb07baa690a1bc7beb53ee067b4b57c7025b5e7",
+          "filename": "mmproj-Qwen3.8-27B-Abliterated-F16.gguf",
+          "bytes": 927607328
+        },
+        {
+          "label": "Krea-2 Turbo (image)",
+          "target": "ComfyUI/models/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+          "bytes": 13141730784
+        },
+        {
+          "label": "Qwen3-VL 4B text encoder",
+          "target": "ComfyUI/models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+          "bytes": 5242467968
+        },
+        {
+          "label": "Qwen Image VAE",
+          "target": "ComfyUI/models/vae/qwen_image_vae.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "vae/qwen_image_vae.safetensors",
+          "bytes": 253806246
+        },
+        {
+          "label": "Krea-2 style reference LoRA (optional)",
+          "target": "ComfyUI/models/loras/krea2_style_reference.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "loras/krea2_style_reference.safetensors",
+          "bytes": 457111760
+        },
+        {
+          "label": "Krea-2 realism LoRA (used only when a realistic image is requested)",
+          "target": "ComfyUI/models/loras/krea2_realism_lora.safetensors",
+          "repo": "gokaygokay/Krea-2-Realism-LoRA",
+          "revision": "32f0436ac10e985134364e7555898c9f121a46ce",
+          "filename": "krea2_realism_lora.safetensors",
+          "bytes": 469288512
+        },
+        {
+          "label": "Krea 2 Identity Edit v1.2 LoRA (photo editing, identity preserved)",
+          "target": "ComfyUI/models/loras/krea2_identity_edit_v1_2.safetensors",
+          "repo": "conradlocke/krea2-identity-edit",
+          "revision": "89e9e7a09ee2e5c9331e952063d79b1b8a703280",
+          "filename": "krea2_identity_edit_v1_2.safetensors",
+          "bytes": 1828256432
+        },
+        {
+          "label": "Wan 2.2 TI2V 5B (video)",
+          "target": "ComfyUI/models/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+          "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+          "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+          "filename": "split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+          "bytes": 9999658848
+        },
+        {
+          "label": "UMT5 XXL text encoder",
+          "target": "ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+          "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+          "filename": "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "bytes": 6735906897
+        },
+        {
+          "label": "Wan 2.2 VAE",
+          "target": "ComfyUI/models/vae/wan2.2_vae.safetensors",
+          "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+          "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+          "filename": "split_files/vae/wan2.2_vae.safetensors",
+          "bytes": 1409400960
+        }
+      ]
+    },
+    {
+      "id": "lite",
+      "label": "Qwen3.5 9B LITE",
+      "hardware": "8 GB VRAM / 16 GB RAM",
+      "summary": "9B language model for 8 GB cards (32K context, image understanding with mmproj Q8_0), the GGUF quantized (Q4_K_M) version of Krea-2 Turbo for images, a 480p / 3 s limit for video. ComfyUI runs in low-VRAM mode; generation is noticeably slower than on the 16 GB profile.",
+      "files": [
+        {
+          "label": "Language model (Huihui-Qwen3.5 9B Q5_K_M)",
+          "target": "models/Huihui-Qwen3.5-9B-abliterated-i1-GGUF/Huihui-Qwen3.5-9B-abliterated.i1-Q5_K_M.gguf",
+          "repo": "mradermacher/Huihui-Qwen3.5-9B-abliterated-i1-GGUF",
+          "revision": "4cc15cd6f643e668e18902550f80e2274a212473",
+          "filename": "Huihui-Qwen3.5-9B-abliterated.i1-Q5_K_M.gguf",
+          "bytes": 6522005152
+        },
+        {
+          "label": "Image projector (mmproj Q8_0)",
+          "target": "models/Huihui-Qwen3.5-9B-abliterated-i1-GGUF/Huihui-Qwen3.5-9B-abliterated.mmproj-Q8_0.gguf",
+          "repo": "mradermacher/Huihui-Qwen3.5-9B-abliterated-GGUF",
+          "revision": "9f646d7eda193ddf2348134f3bff3d49eed7a2c6",
+          "filename": "Huihui-Qwen3.5-9B-abliterated.mmproj-Q8_0.gguf",
+          "bytes": 624229760
+        },
+        {
+          "label": "Krea-2 Turbo GGUF Q4_K_M (image, requires the ComfyUI-GGUF custom node)",
+          "target": "ComfyUI/models/unet/krea2_turbo-Q4_K_M.gguf",
+          "repo": "vantagewithai/Krea-2-Turbo-GGUF",
+          "revision": "390847e2835c16bdf82303731e3d35b874760d89",
+          "filename": "krea2_turbo-Q4_K_M.gguf",
+          "bytes": 7486289184
+        },
+        {
+          "label": "Qwen3-VL 4B text encoder (Krea-2, shared with MAX/FLASH)",
+          "target": "ComfyUI/models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+          "bytes": 5242467968
+        },
+        {
+          "label": "Qwen Image VAE (Krea-2, shared with MAX/FLASH)",
+          "target": "ComfyUI/models/vae/qwen_image_vae.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "vae/qwen_image_vae.safetensors",
+          "bytes": 253806246
+        },
+        {
+          "label": "Krea-2 style reference LoRA (optional, shared with MAX/FLASH)",
+          "target": "ComfyUI/models/loras/krea2_style_reference.safetensors",
+          "repo": "Comfy-Org/Krea-2",
+          "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+          "filename": "loras/krea2_style_reference.safetensors",
+          "bytes": 457111760
+        },
+        {
+          "label": "Krea-2 realism LoRA (used only when a realistic image is requested)",
+          "target": "ComfyUI/models/loras/krea2_realism_lora.safetensors",
+          "repo": "gokaygokay/Krea-2-Realism-LoRA",
+          "revision": "32f0436ac10e985134364e7555898c9f121a46ce",
+          "filename": "krea2_realism_lora.safetensors",
+          "bytes": 469288512
+        },
+        {
+          "label": "Wan 2.2 TI2V 5B (video)",
+          "target": "ComfyUI/models/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+          "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+          "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+          "filename": "split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+          "bytes": 9999658848
+        },
+        {
+          "label": "UMT5 XXL text encoder",
+          "target": "ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+          "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+          "filename": "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "bytes": 6735906897
+        },
+        {
+          "label": "Wan 2.2 VAE",
+          "target": "ComfyUI/models/vae/wan2.2_vae.safetensors",
+          "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+          "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+          "filename": "split_files/vae/wan2.2_vae.safetensors",
+          "bytes": 1409400960
+        }
+      ]
+    }
+  ]
+}

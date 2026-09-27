@@ -1,0 +1,11 @@
+# Text files are stored with LF in the repository; on Windows the working copy is checked out per the git setting.
+* text=auto
+
+# Binary files
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.mp4  binary
+*.pdf  binary
+*.pptx binary
+*.bmp  binary

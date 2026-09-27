@@ -1,0 +1,13 @@
+# venv\imagegen environment: ComfyUI and the video frame tools.
+# $script:ImagegenPackages in scripts\install-mamidlabs.ps1 is read from this file.
+#
+# torch/torchvision/torchaudio are NOT in this file: the CUDA 13.0 wheels come from a
+# separate index (https://download.pytorch.org/whl/cu130) and are installed separately
+# so they do not get mixed up with the default CPU wheels on PyPI:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+#   pip install -r requirements\imagegen.txt
+#
+# ComfyUI's own requirements.txt is installed separately from the ComfyUI folder.
+#
+# The version is locked from a venv\imagegen environment verified on Windows 11.
+av==18.1.0

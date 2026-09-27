@@ -1,0 +1,18 @@
+# venv\app environment: chat tools (web search, document read/write, HF download).
+# $script:AppPackages in scripts\install-mamidlabs.ps1 is read from this file; the list was
+# derived from the actual imports in the agent/*.py files.
+#
+# Versions are locked from an environment verified on Windows 11 + Python 3.12, so every
+# install gets the same package versions.
+#
+# Install: venv\app\Scripts\python.exe -m pip install -r requirements\app.txt
+requests==2.34.2
+pillow==12.3.0
+huggingface_hub==1.32.0
+ddgs==9.16.0
+pypdf==6.19.0
+reportlab==5.0.1
+python-docx==1.2.0
+python-pptx==1.0.2
+openpyxl==3.1.5
+rarfile==4.5

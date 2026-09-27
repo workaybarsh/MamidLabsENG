@@ -1,0 +1,25 @@
+# Large / generated / third-party folders - not kept in the source repository
+/ComfyUI/
+/venv/
+/runtime/
+/models/
+/llama.cpp/
+/tools/
+
+# Runtime data and personal content
+/outputs/
+/logs/
+/chats/
+/settings/
+/backup-*/
+
+# Python
+__pycache__/
+*.pyc
+
+# Windows / editor
+Thumbs.db
+.vs/
+
+# Setup package output
+dist/

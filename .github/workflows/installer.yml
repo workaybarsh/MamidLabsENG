@@ -1,0 +1,94 @@
+name: Installer package
+
+# Builds the one-click setup wizard (dist\MamidLabs_Setup.exe) with Inno Setup 6.
+# The single source of the version is MyAppVersion in packaging\windows\mamidlabs.iss.
+# Branch, PR and manual runs only build and upload an artifact. When a v* tag is pushed,
+# the tag is checked against the .iss version and the package is published to a GitHub
+# Release, using the matching CHANGELOG.md section as the release notes.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+    branches: ['**']
+    paths:
+      - 'packaging/**'
+      - 'assets/**'
+      - 'scripts/**'
+      - 'agent/**'
+      - 'qwen-desktop.ps1'
+      - 'launch-qwen-desktop.vbs'
+      - 'requirements/**'
+      - 'docs/installation.md'
+      - 'README.md'
+      - 'LICENSE'
+      - '.github/workflows/installer.yml'
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - 'assets/**'
+      - 'scripts/**'
+      - 'agent/**'
+      - 'qwen-desktop.ps1'
+      - 'launch-qwen-desktop.vbs'
+      - 'requirements/**'
+      - 'docs/installation.md'
+      - 'README.md'
+      - 'LICENSE'
+      - '.github/workflows/installer.yml'
+
+jobs:
+  package:
+    name: Windows · Inno Setup
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $iss = Get-Content -LiteralPath packaging\windows\mamidlabs.iss -Raw
+          $version = [regex]::Match($iss, '#define MyAppVersion "([0-9]+\.[0-9]+\.[0-9]+)"').Groups[1].Value
+          if (!$version) { throw 'MyAppVersion not found in mamidlabs.iss' }
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "The tag ($env:GITHUB_REF_NAME) does not match the .iss version (v$version)"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build the wizard
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\windows\mamidlabs.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC exit code $LASTEXITCODE" }
+          if (!(Test-Path dist\MamidLabs_Setup.exe)) { throw 'dist\MamidLabs_Setup.exe was not created' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MamidLabs_Setup
+          path: dist/MamidLabs_Setup.exe
+          retention-days: 14
+
+      - name: Publish release (GitHub Release)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $tag = "v$version"
+          $changelog = Get-Content -LiteralPath CHANGELOG.md -Raw
+          $section = [regex]::Match($changelog, "(?ms)^## \[$([regex]::Escape($version))\][^\n]*\n(.*?)(?=^## \[|\z)").Groups[1].Value.Trim()
+          if (!$section) { throw "No [$version] section in CHANGELOG.md" }
+          Set-Content -LiteralPath release-notes.md -Value $section -Encoding utf8
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist\MamidLabs_Setup.exe --clobber
+          } else {
+            gh release create $tag dist\MamidLabs_Setup.exe --title "MamidLabs $version" --notes-file release-notes.md --verify-tag
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release exit code $LASTEXITCODE" }
