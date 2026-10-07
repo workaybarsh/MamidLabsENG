@@ -3,6 +3,18 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixes
+- Fixed the intermittent **"An existing connection was forcibly closed by the remote host."**
+  (WSAECONNRESET) error seen during local model streaming. The server can close a keep-alive
+  connection that sits idle while an agent tool runs (web search, OCR, document reading); when the
+  client reused that stale connection the stream failed mid-answer. Local requests now open a fresh
+  connection every turn (`Connection: close`; negligible on loopback, and the server-side KV cache
+  and prefill savings are preserved). When answer text has already been received, a drop is no
+  longer treated as an error, so a completed answer is not given a spurious "[Error]" line.
+  (`agent/qwen-inference.ps1`)
+
 ## [1.0.0] - 2026-09-27
 
 First stable release.

@@ -271,6 +271,14 @@ happens before the stream starts is retried once; after a partial answer has sta
 not replayed automatically. If the stream is cut, the text received so far is kept and the real
 error cause is shown. The cancel button also interrupts a pending network read.
 
+For local requests the connection is re-established on every turn (`Connection: close`). The server
+can close a keep-alive connection that sits idle while an agent tool runs (web search, OCR, document
+reading); when the client reused that stale connection the stream failed mid-answer with "An existing
+connection was forcibly closed by the remote host." (WSAECONNRESET). On loopback a fresh connection
+costs next to nothing and the server-side KV cache (and its prefill savings) is unaffected. If the
+connection drops after answer text has already been received it is not reported as an error, so a
+completed answer does not get a spurious "[Error]" line appended underneath.
+
 ## Image reading and OCR
 
 When an image is attached, the user text is checked deterministically. "What is in the image?" and

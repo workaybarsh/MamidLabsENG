@@ -770,6 +770,14 @@ function Invoke-ChatCompletion([hashtable]$body, [hashtable]$shared, [bool]$emit
                     $request.Headers.Add('anthropic-version', '2023-06-01')
                 } elseif ($JobData.apiKey) { $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', [string]$JobData.apiKey) }
             }
+            # The local server can close a keep-alive connection that sits idle while a tool
+            # runs (web search, OCR, documents); when the same HttpClient reuses that dead
+            # connection, the stream fails MID-ANSWER with "An existing connection was
+            # forcibly closed by the remote host" (WSAECONNRESET) - observed repeatedly on
+            # real Windows. Closing the connection for local requests forces a fresh one per
+            # turn; on loopback the cost is negligible and the server-side KV cache (and its
+            # prefill savings) is unaffected.
+            if ($provider -eq 'local') { $request.Headers.ConnectionClose = $true }
             try {
                 $response = $script:http.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token).GetAwaiter().GetResult()
             } catch {
@@ -879,7 +887,21 @@ function Invoke-ChatCompletion([hashtable]$body, [hashtable]$shared, [bool]$emit
         }
     } catch {
         if ($cts.IsCancellationRequested) { throw [OperationCanceledException]::new('The local model request was cancelled or timed out.') }
-        throw
+        $cause = $_.Exception.GetBaseException()
+        $isReset = $cause -is [IO.IOException] -or $cause -is [Net.Sockets.SocketException] -or
+            $cause -is [Net.Http.HttpRequestException]
+        # The local server can drop the connection after it produced the answer and released
+        # its slot (before the [DONE]/finish chunk arrives). When there is no tool call and we
+        # already hold answer text, that is not an error; the UI must not append a spurious
+        # "[Error] ... forcibly closed" line under the answer (seen exactly like this on real
+        # Windows: the answer arrives and the error appears below it). Treat the received text
+        # as complete; genuine (content-less) drops are still reported as errors.
+        if ($provider -eq 'local' -and $isReset -and !$shared.Cancel -and
+            $result.toolParts.Count -eq 0 -and ![string]::IsNullOrWhiteSpace($result.content) -and !$result.finishReason) {
+            $result.finishReason = 'connection-closed'
+        } else {
+            throw
+        }
     } finally {
         Send-StreamMetrics $result $false
         $shared.Cts = $null

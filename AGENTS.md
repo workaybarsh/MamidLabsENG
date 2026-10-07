@@ -429,4 +429,5 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-07 | Fixed the intermittent "forcibly closed by the remote host" (WSAECONNRESET) error during local model streaming: local requests now use a fresh connection per turn and a drop after answer text is no longer treated as an error. | agent/qwen-inference.ps1, tests/test_stream_watchdog.py, tests/test_qwen_contracts.py, docs/technical-notes.md |
 | 2026-09-27 | 1.0.0 first release. | all |

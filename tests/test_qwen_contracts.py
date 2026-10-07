@@ -93,6 +93,18 @@ def test_api_video_tools_do_not_advertise_unsupported_video_continuation():
     assert "do not use mode=video." in inference
 
 
+def test_stream_watchdog_uses_fresh_connection_and_survives_dropped_stream():
+    """The local server can close a keep-alive connection that sits idle while a tool
+    runs; reusing that stale connection failed mid-stream with "An existing connection
+    was forcibly closed by the remote host." (WSAECONNRESET). The fix: local requests
+    close the connection (a fresh one per turn) and a drop with answer text in hand is
+    not treated as an error."""
+    inference = read_text("agent/qwen-inference.ps1")
+
+    assert "if ($provider -eq 'local') { $request.Headers.ConnectionClose = $true }" in inference
+    assert "$result.finishReason = 'connection-closed'" in inference
+
+
 def test_ocr_model_swap_keeps_json_response_separate_from_status_events():
     inference = read_text("agent/qwen-inference.ps1")
     start = inference.index("function Invoke-ImageOcrWithModelSwap")
