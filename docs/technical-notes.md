@@ -279,6 +279,10 @@ costs next to nothing and the server-side KV cache (and its prefill savings) is 
 connection drops after answer text has already been received it is not reported as an error, so a
 completed answer does not get a spurious "[Error]" line appended underneath.
 
+When the internet chip is on but the network drops (hotspot, DNS timeout), the web search, page
+reading and reference image tools do not raise; they return valid error JSON so the agent loop
+completes its answer without breaking. This behavior is verified by `tests/test_offline_mode.py`.
+
 ## Image reading and OCR
 
 When an image is attached, the user text is checked deterministically. "What is in the image?" and
