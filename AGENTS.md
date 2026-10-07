@@ -307,7 +307,8 @@ python -m pytest -q          # ~250 tests, ~90 s; no extra setup needed (tests/c
 - `test_uninstall.py` really deletes in a fake root; it uses Windows PowerShell 5.1.
 - **Smoke test steps:** `chat`, `document`, `offline` (the web tool returns error JSON without
   crashing while offline), `network_switch` (no turn errors while the network goes online/offline),
-  `ocr`, `image`, `edit`, `post_media_switch` (the speed
+  `history_resume` (save chat → reload → continue; no errors), `ocr`, `image`, `edit`,
+  `post_media_switch` (the speed
   ratio after an image must be ≥ 0.7), `video`.
 - **CI:** `tests.yml` (windows-latest, Python 3.12) on every push/PR; `installer.yml` when
   package-related paths change. Merged into `master` via PR.
@@ -431,6 +432,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-07 | Added a `history_resume` step to the smoke test: save chat with DPAPI → reload → continue; no turn errors (skippable with `-SkipHistoryResume`). `test_chat_storage.py` verifies the save/load serialization. | scripts/smoke-test.ps1, tests/test_chat_storage.py |
 | 2026-10-07 | Added a `network_switch` step to the smoke test: across successive turns the network goes online/offline and the local worker must not error in any turn (skippable with `-SkipNetworkSwitch`). | scripts/smoke-test.ps1, scripts/setup-run.ps1, agent/qwen-inference.ps1 |
 | 2026-10-07 | Broadened the local-stream drop tolerance: when a usable result exists (finish_reason or answer text or a tool call), a dropped connection is not an error, so no "[Error]" line is added under the answer. | agent/qwen-inference.ps1, tests/test_stream_watchdog.py |
 | 2026-10-07 | Added an `offline` step to the smoke test: after installation, network access is cut to prove the web tool returns error JSON without crashing (skippable with `-SkipOffline`). | scripts/smoke-test.ps1, scripts/setup-run.ps1, tests/test_offline_mode.py |

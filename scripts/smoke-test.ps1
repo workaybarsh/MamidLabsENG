@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    End-to-end smoke test after installation: chat, document, offline tools, network switches, OCR, image, video.
+    End-to-end smoke test after installation: chat, document, offline tools, network switches, history resume, OCR, image, video.
 
 .DESCRIPTION
     install-mamidlabs.ps1 only prepares the infrastructure (binaries, environments);
@@ -44,6 +44,8 @@ param(
     [switch]$SkipOffline,
     # Skips the network-switch (online<->offline) step.
     [switch]$SkipNetworkSwitch,
+    # Skips the resume-from-history (close -> reopen -> load -> continue) step.
+    [switch]$SkipHistoryResume,
     # If the post-media chat speed drops below this ratio (relative to the first measurement) it counts as VRAM overflow.
     [double]$MinSpeedRatio = 0.7,
     [string]$ReportPath
@@ -248,6 +250,71 @@ if ($SkipNetworkSwitch) {
         Report 'network_switch' $false $_.Exception.Message
     } finally {
         $env:HTTP_PROXY = $savedHttp; $env:HTTPS_PROXY = $savedHttps
+    }
+}
+
+# ------------------------------------------- resume from history (close -> reopen)
+# User scenario: close the program MID-CONVERSATION, reopen it, load the chat from
+# history and continue. The chat is stored as the model-facing message list, encrypted
+# with DPAPI (Save-Chat); on reopen it is loaded the same way (Load-Chat) and the
+# continuation turn is sent with that history. This step runs the full serialization
+# round-trip plus a continuation turn; no turn may error.
+Write-Section 'Resume from history (close -> reopen)'
+if ($SkipHistoryResume) {
+    Write-Host '   [skip] -SkipHistoryResume given'
+} elseif (!(Wait-ForHealth 5)) {
+    Skip 'history_resume' 'the local model is not ready (the chat step may not have run)'
+} else {
+    try {
+        Add-Type -AssemblyName System.Security.Cryptography.ProtectedData -ErrorAction SilentlyContinue
+        $prefix = 'MAMIDLABS-CHAT-DPAPI-V2'
+        $chatFile = Join-Path $env:TEMP 'mamidlabs-smoke-reload.json'
+        $turns = @(
+            @{ role = 'user'; content = 'What is the Einstein riddle? Explain briefly.' }
+        )
+        # 1) First turn: a real request that may also trigger a tool call.
+        $jobData = @{
+            root = $Root; messages = @($turns)
+            provider = 'local'; model = "smoke-$Profile"; profile = $Profile
+            maxTokens = 400; contextLimit = 32768; boundFolder = $null
+            consultProviders = @{}; attachedDocuments = @(); currentImagePaths = @()
+            hasCurrentImage = $false; multiImageOcr = $false; multiImageOcrMode = $false
+            internet = $true; agent = $false; office = $false; documentCreate = $false; effort = 'low'
+        }
+        $shared = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full'
+            AskTool = $null; AskDetail = $null; AskAnswer = $null; AskId = $null; AskDeadline = $null })
+        $job = Start-ThreadJob -FilePath (Join-Path $Root 'agent\qwen-inference.ps1') -ArgumentList $jobData, $shared
+        $items = @(Receive-Job -Job $job -Wait); Remove-Job -Job $job -Force
+        $err1 = @($items | Where-Object { $_.kind -eq 'error' })
+        if ($err1.Count) { throw "The first turn errored: $($err1[0].text)" }
+        $done = @($items | Where-Object { $_.kind -eq 'done' }) | Select-Object -Last 1
+        if (!$done) { throw 'The first turn produced no done event.' }
+        # Persistent message list: the user message plus the tool exchange from done.
+        $chatMessages = @($turns) + @($done.data)
+        # 2) Save like Save-Chat (DPAPI).
+        $payload = @{ id = 'smoketest000000000000000000000000'; title = 'smoke-reload'; messages = @($chatMessages); transcript = @() }
+        $json = $payload | ConvertTo-Json -Depth 30
+        $cipher = [Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($json), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+        [IO.File]::WriteAllText($chatFile, ($prefix + "`n" + [Convert]::ToBase64String($cipher)), [Text.UTF8Encoding]::new($false))
+        # 3) Load like Load-Chat.
+        $raw = Get-Content -LiteralPath $chatFile -Raw -Encoding UTF8
+        $plain = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect(
+            [Convert]::FromBase64String($raw.Substring($prefix.Length + 1).Trim()), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))
+        $reloaded = @(($plain | ConvertFrom-Json).messages)
+        if ($reloaded.Count -lt 2) { throw "The reloaded history is incomplete ($($reloaded.Count) messages)." }
+        # 4) Continuation turn: add a new user message to the reloaded history.
+        $jobData2 = $jobData.Clone(); $jobData2.messages = @($reloaded) + @(@{ role = 'user'; content = 'Now summarize that in one sentence.' })
+        $shared2 = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full'
+            AskTool = $null; AskDetail = $null; AskAnswer = $null; AskId = $null; AskDeadline = $null })
+        $job2 = Start-ThreadJob -FilePath (Join-Path $Root 'agent\qwen-inference.ps1') -ArgumentList $jobData2, $shared2
+        $items2 = @(Receive-Job -Job $job2 -Wait); Remove-Job -Job $job2 -Force
+        $err2 = @($items2 | Where-Object { $_.kind -eq 'error' })
+        if ($err2.Count) { throw "The continuation turn errored: $($err2[0].text)" }
+        Report 'history_resume' $true ("Saved, reloaded ($($reloaded.Count) messages) and continued; no errors")
+    } catch {
+        Report 'history_resume' $false $_.Exception.Message
+    } finally {
+        Remove-Item -LiteralPath (Join-Path $env:TEMP 'mamidlabs-smoke-reload.json') -Force -ErrorAction SilentlyContinue
     }
 }
 

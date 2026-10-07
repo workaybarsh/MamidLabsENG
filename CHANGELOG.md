@@ -13,6 +13,8 @@ follow [Semantic Versioning](https://semver.org/).
   temporarily to prove the web tool returns error JSON without crashing.
 - Added a **`network_switch`** step to the smoke test: across successive turns the network goes
   online/offline (internet coming and going) and the local worker must not error in any turn.
+- Added a **`history_resume`** step to the smoke test: closing the program mid-conversation and
+  reopening it, the chat is saved, reloaded and continued; no turn errors.
 
 ### Fixes
 - Fixed the intermittent **"An existing connection was forcibly closed by the remote host."**
