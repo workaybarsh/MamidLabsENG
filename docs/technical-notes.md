@@ -275,9 +275,10 @@ For local requests the connection is re-established on every turn (`Connection: 
 can close a keep-alive connection that sits idle while an agent tool runs (web search, OCR, document
 reading); when the client reused that stale connection the stream failed mid-answer with "An existing
 connection was forcibly closed by the remote host." (WSAECONNRESET). On loopback a fresh connection
-costs next to nothing and the server-side KV cache (and its prefill savings) is unaffected. If the
-connection drops after answer text has already been received it is not reported as an error, so a
-completed answer does not get a spurious "[Error]" line appended underneath.
+costs next to nothing and the server-side KV cache (and its prefill savings) is unaffected. When a
+usable result exists (finish_reason received, answer text present, or a tool call present) and the
+connection drops, it is not reported as an error, so a completed answer does not get a spurious
+"[Error]" line appended underneath. Only content-less, tool-less, incomplete drops are errors.
 
 When the internet chip is on but the network drops (hotspot, DNS timeout), the web search, page
 reading and reference image tools do not raise; they return valid error JSON so the agent loop

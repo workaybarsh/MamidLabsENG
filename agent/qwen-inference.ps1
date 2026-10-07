@@ -890,15 +890,17 @@ function Invoke-ChatCompletion([hashtable]$body, [hashtable]$shared, [bool]$emit
         $cause = $_.Exception.GetBaseException()
         $isReset = $cause -is [IO.IOException] -or $cause -is [Net.Sockets.SocketException] -or
             $cause -is [Net.Http.HttpRequestException]
-        # The local server can drop the connection after it produced the answer and released
-        # its slot (before the [DONE]/finish chunk arrives). When there is no tool call and we
-        # already hold answer text, that is not an error; the UI must not append a spurious
-        # "[Error] ... forcibly closed" line under the answer (seen exactly like this on real
-        # Windows: the answer arrives and the error appears below it). Treat the received text
-        # as complete; genuine (content-less) drops are still reported as errors.
-        if ($provider -eq 'local' -and $isReset -and !$shared.Cancel -and
-            $result.toolParts.Count -eq 0 -and ![string]::IsNullOrWhiteSpace($result.content) -and !$result.finishReason) {
-            $result.finishReason = 'connection-closed'
+        # The local server can close the connection after it produced the answer (before the
+        # [DONE] chunk arrives). When we hold a USABLE result (finish_reason received, answer
+        # text present, or a tool call present) that is not an error; the UI must not append a
+        # spurious "[Error] ... forcibly closed" line under the answer (seen exactly like this
+        # on real Windows: the answer arrives and the error appears below it). Important: if
+        # finish_reason already arrived the answer is COMPLETE; the connection closing right
+        # after is normal and must not be reported. Genuine (empty/tool-less/incomplete) drops
+        # are still reported as errors.
+        $usable = $result.finishReason -or ![string]::IsNullOrWhiteSpace($result.content) -or $result.toolParts.Count -gt 0
+        if ($provider -eq 'local' -and $isReset -and !$shared.Cancel -and $usable) {
+            if (!$result.finishReason) { $result.finishReason = 'connection-closed' }
         } else {
             throw
         }

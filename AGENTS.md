@@ -306,7 +306,8 @@ python -m pytest -q          # ~250 tests, ~90 s; no extra setup needed (tests/c
   these tests are skipped; a skipped test does not count as a pass.
 - `test_uninstall.py` really deletes in a fake root; it uses Windows PowerShell 5.1.
 - **Smoke test steps:** `chat`, `document`, `offline` (the web tool returns error JSON without
-  crashing while offline), `ocr`, `image`, `edit`, `post_media_switch` (the speed
+  crashing while offline), `network_switch` (no turn errors while the network goes online/offline),
+  `ocr`, `image`, `edit`, `post_media_switch` (the speed
   ratio after an image must be ≥ 0.7), `video`.
 - **CI:** `tests.yml` (windows-latest, Python 3.12) on every push/PR; `installer.yml` when
   package-related paths change. Merged into `master` via PR.
@@ -430,6 +431,8 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-07 | Added a `network_switch` step to the smoke test: across successive turns the network goes online/offline and the local worker must not error in any turn (skippable with `-SkipNetworkSwitch`). | scripts/smoke-test.ps1, scripts/setup-run.ps1, agent/qwen-inference.ps1 |
+| 2026-10-07 | Broadened the local-stream drop tolerance: when a usable result exists (finish_reason or answer text or a tool call), a dropped connection is not an error, so no "[Error]" line is added under the answer. | agent/qwen-inference.ps1, tests/test_stream_watchdog.py |
 | 2026-10-07 | Added an `offline` step to the smoke test: after installation, network access is cut to prove the web tool returns error JSON without crashing (skippable with `-SkipOffline`). | scripts/smoke-test.ps1, scripts/setup-run.ps1, tests/test_offline_mode.py |
 | 2026-10-07 | Added offline behavior tests: web search, page reading and reference image tools return clean error JSON (no exception) when the network is down; the real tool subprocess behind a black-hole proxy fails cleanly. | tests/test_offline_mode.py, docs/technical-notes.md |
 | 2026-10-07 | Fixed the intermittent "forcibly closed by the remote host" (WSAECONNRESET) error during local model streaming: local requests now use a fresh connection per turn and a drop after answer text is no longer treated as an error. | agent/qwen-inference.ps1, tests/test_stream_watchdog.py, tests/test_qwen_contracts.py, docs/technical-notes.md |

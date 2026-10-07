@@ -11,6 +11,8 @@ follow [Semantic Versioning](https://semver.org/).
   model (see `tests/test_offline_mode.py`).
 - Added an **`offline`** step to the smoke test: after installation, network access is cut
   temporarily to prove the web tool returns error JSON without crashing.
+- Added a **`network_switch`** step to the smoke test: across successive turns the network goes
+  online/offline (internet coming and going) and the local worker must not error in any turn.
 
 ### Fixes
 - Fixed the intermittent **"An existing connection was forcibly closed by the remote host."**
@@ -18,8 +20,9 @@ follow [Semantic Versioning](https://semver.org/).
   connection that sits idle while an agent tool runs (web search, OCR, document reading); when the
   client reused that stale connection the stream failed mid-answer. Local requests now open a fresh
   connection every turn (`Connection: close`; negligible on loopback, and the server-side KV cache
-  and prefill savings are preserved). When answer text has already been received, a drop is no
-  longer treated as an error, so a completed answer is not given a spurious "[Error]" line.
+  and prefill savings are preserved). When a **usable result** exists (finish_reason received,
+  answer text present, or a tool call present), a drop is no longer treated as an error, so a
+  completed answer is not given a spurious "[Error]" line.
   (`agent/qwen-inference.ps1`)
 
 ## [1.0.0] - 2026-09-27

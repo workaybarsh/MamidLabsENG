@@ -74,15 +74,19 @@ Invoke-ChatCompletion @{{ messages = @() }} $shared $false $turn | Out-Null
 
 
 class DropConnectionMidStreamHandler(BaseHTTPRequestHandler):
-    """Sends one content chunk and then closes the connection with an RST, without
-    [DONE]/finish_reason. The local server can close a keep-alive connection that sits
-    idle while a tool runs (web search, OCR, documents); when the client reused that
-    stale connection the stream failed mid-answer with "An existing connection was
-    forcibly closed by the remote host." (WSAECONNRESET). With answer text in hand this
-    must no longer count as an error, and the UI must not append "[Error]" under the
-    answer."""
+    """Sends one content chunk and then closes the connection with an RST, without [DONE].
+    The local server can close a keep-alive connection that sits idle while a tool runs
+    (web search, OCR, documents); when the client reused that stale connection the stream
+    failed mid-answer with "An existing connection was forcibly closed by the remote
+    host." (WSAECONNRESET). With answer text in hand this must no longer count as an
+    error, and the UI must not append "[Error]" under the answer.
+
+    With `send_finish=True` it first sends a finish_reason chunk (the answer is COMPLETE),
+    then closes with an RST. This is exactly what the user reported: the answer arrives,
+    then the connection drops and the error shows up BELOW the answer."""
 
     protocol_version = "HTTP/1.1"
+    send_finish = False
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -94,10 +98,16 @@ class DropConnectionMidStreamHandler(BaseHTTPRequestHandler):
             + json.dumps({"choices": [{"index": 0, "delta": {"content": "Hello"}}]}).encode()
             + b"\n\n"
         )
+        if self.send_finish:
+            self.wfile.write(
+                b"data: "
+                + json.dumps({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}).encode()
+                + b"\n\n"
+            )
         self.wfile.flush()
         # A short wait so the content chunk reaches and is processed by the client; then
-        # the connection is dropped with an RST, without [DONE]/finish_reason (as in the
-        # real scenario: tokens are read first, then the connection dies).
+        # the connection is dropped with an RST, without [DONE] (as in the real scenario:
+        # tokens are read first, then the connection dies).
         time.sleep(1.0)
         # SO_LINGER(1,0) makes close() send an RST: a realistic WSAECONNRESET stand-in.
         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
@@ -111,15 +121,15 @@ class DropConnectionMidStreamHandler(BaseHTTPRequestHandler):
         pass
 
 
-def test_dropped_stream_with_received_text_is_not_reported_as_error(tmp_path):
+def _run_drop_scenario(tmp_path, handler_cls, name):
     pwsh = shutil.which("pwsh")
     if not pwsh:
         pytest.skip("pwsh not found")
-    server = ThreadingHTTPServer(("127.0.0.1", 0), DropConnectionMidStreamHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        script = tmp_path / "drop.ps1"
+        script = tmp_path / name
         script.write_text(
             f"""
 $job = @{{ messages = @(@{{ role = 'user'; content = 'hello' }}); compactOnly = $true; provider = 'local'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $false; internet = $false; office = $false; documentCreate = $false }}
@@ -145,10 +155,33 @@ try {{
     finally:
         server.shutdown()
     assert result.returncode == 0, result.stderr or result.stdout
-    got = json.loads(result.stdout.strip().splitlines()[-1])
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_dropped_stream_with_received_text_is_not_reported_as_error(tmp_path):
+    got = _run_drop_scenario(tmp_path, DropConnectionMidStreamHandler, "drop.ps1")
     # The received text is kept, the stream counts as complete and no exception escapes,
     # so the UI does not append "[Error] ... forcibly closed" under the answer.
     assert got["content"] == "Hello"
     assert got["finish"] == "connection-closed"
     assert got["threw"] is False
+
+
+class FinishThenDropHandler(DropConnectionMidStreamHandler):
+    """Closes the connection with an RST AFTER the answer is completed with
+    finish_reason. This is exactly the user-reported case: the answer arrives and the
+    error is appended right below it. Since finish_reason already arrived, it is NOT an
+    error."""
+
+    send_finish = True
+
+
+def test_dropped_stream_after_finish_reason_is_not_an_error(tmp_path):
+    got = _run_drop_scenario(tmp_path, FinishThenDropHandler, "finish-drop.ps1")
+    # finish_reason arrived so the answer is COMPLETE; the drop must not be shown as an
+    # error (otherwise "[Error] ... forcibly closed" appears under the answer).
+    assert got["content"] == "Hello"
+    assert got["finish"] == "stop"
+    assert got["threw"] is False
+
 

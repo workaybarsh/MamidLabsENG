@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    End-to-end smoke test after installation: chat, document, offline tools, OCR, image, video.
+    End-to-end smoke test after installation: chat, document, offline tools, network switches, OCR, image, video.
 
 .DESCRIPTION
     install-mamidlabs.ps1 only prepares the infrastructure (binaries, environments);
@@ -42,6 +42,8 @@ param(
     [switch]$SkipEdit,
     # Skips the offline tools step (when applying a network block is not wanted).
     [switch]$SkipOffline,
+    # Skips the network-switch (online<->offline) step.
+    [switch]$SkipNetworkSwitch,
     # If the post-media chat speed drops below this ratio (relative to the first measurement) it counts as VRAM overflow.
     [double]$MinSpeedRatio = 0.7,
     [string]$ReportPath
@@ -194,6 +196,58 @@ if ($SkipOffline) {
         Report 'offline' $true 'Web tool returned valid error JSON while offline without crashing'
     } catch {
         Report 'offline' $false $_.Exception.Message
+    }
+}
+
+# ----------------------------------------------- network switches (online <-> offline)
+# User complaint: the network dropping while online, or going up and down mid-conversation;
+# even when the answer was produced, "[Error] ... forcibly closed" was appended below it.
+# The network state is changed across successive turns; the local worker must not emit an
+# 'error' event in any turn. Network access is cut with a black-hole proxy and restored
+# afterwards so the user's setting is not disturbed.
+Write-Section 'Network switches (online <-> offline)'
+if ($SkipNetworkSwitch) {
+    Write-Host '   [skip] -SkipNetworkSwitch given'
+} elseif (!(Wait-ForHealth 5)) {
+    Skip 'network_switch' 'the local model is not ready (the chat step may not have run)'
+} else {
+    $savedHttp = $env:HTTP_PROXY; $savedHttps = $env:HTTPS_PROXY
+    try {
+        $plan = @(
+            @{ label = 'online';  online = $true;  prompt = 'Introduce yourself in one sentence.' }
+            @{ label = 'offline'; online = $false; prompt = 'What is the capital of Turkey? Answer briefly.' }
+            @{ label = 'online';  online = $true;  prompt = 'What is the Einstein riddle? Explain briefly.' }
+        )
+        $turnErrors = 0; $seen = @()
+        foreach ($step in $plan) {
+            if ($step.online) { Remove-Item Env:HTTP_PROXY, Env:HTTPS_PROXY -ErrorAction SilentlyContinue }
+            else { $env:HTTP_PROXY = 'http://127.0.0.1:9'; $env:HTTPS_PROXY = 'http://127.0.0.1:9' }
+            $jobData = @{
+                root = $Root
+                messages = @(@{ role = 'user'; content = $step.prompt })
+                provider = 'local'; model = "smoke-$Profile"; profile = $Profile
+                maxTokens = 500; contextLimit = 32768; boundFolder = $null
+                consultProviders = @{}; attachedDocuments = @(); currentImagePaths = @()
+                hasCurrentImage = $false; multiImageOcr = $false; multiImageOcrMode = $false
+                internet = $true; agent = $false; office = $false; documentCreate = $false; effort = 'low'
+            }
+            $shared = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full'
+                AskTool = $null; AskDetail = $null; AskAnswer = $null; AskId = $null; AskDeadline = $null })
+            $job = Start-ThreadJob -FilePath (Join-Path $Root 'agent\qwen-inference.ps1') -ArgumentList $jobData, $shared
+            $items = @(Receive-Job -Job $job -Wait)
+            Remove-Job -Job $job -Force
+            $err = @($items | Where-Object { $_.kind -eq 'error' })
+            if ($err.Count) { $turnErrors += $err.Count; $seen += ($step.label + ':' + [string]$err[0].text) }
+        }
+        if ($turnErrors -gt 0) {
+            Report 'network_switch' $false ("$turnErrors errors -> " + ($seen -join ' | '))
+        } else {
+            Report 'network_switch' $true 'No turn errored while the network went online/offline'
+        }
+    } catch {
+        Report 'network_switch' $false $_.Exception.Message
+    } finally {
+        $env:HTTP_PROXY = $savedHttp; $env:HTTPS_PROXY = $savedHttps
     }
 }
 
