@@ -3,6 +3,15 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Offline operation tests: with the internet chip on but the network down, the web search,
+  page reading and reference image tools do not raise; they return valid error JSON to the
+  model (see `tests/test_offline_mode.py`).
+- Added an **`offline`** step to the smoke test: after installation, network access is cut
+  temporarily to prove the web tool returns error JSON without crashing.
+
 ## [1.0.1] - 2026-10-07
 
 ### Fixes

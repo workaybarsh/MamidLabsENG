@@ -13,7 +13,7 @@
       4. Models: the files of the chosen profile are downloaded (-DownloadModels)
       5. Own models / API preference are written to settings\api.json
       6. OCR (optional)
-      7. Smoke test: chat, document, image, photo editing, post-media switch
+      7. Smoke test: chat, document, offline tools, image, photo editing, post-media switch
       8. Summary: logs\setup-summary.txt (shown on the wizard's last page)
 
     Every step is reported independently; if a step fails the following ones are still
@@ -277,8 +277,8 @@ if (!$SmokeTest) {
     Add-Step 'Smoke test' 'skipped' 'the profile files are not ready' ([TimeSpan]::Zero)
 } else {
     [void](Invoke-Step 'Smoke test' {
-        # Video takes a few minutes; at the end of the installation chat, document, image, editing and
-        # the post-media model switch are verified. Video: run smoke-test.ps1 manually.
+        # Video takes a few minutes; at the end of the installation chat, document, offline tools,
+        # image, editing and the post-media model switch are verified. Video: run smoke-test.ps1 manually.
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\smoke-test.ps1'),
                        '-Profile', $Profile, '-Root', $Root, '-SkipVideo', '-ReportPath', $smokeReport)
         if (!$Ocr) { $arguments += '-SkipOcr' }

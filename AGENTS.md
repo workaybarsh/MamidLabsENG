@@ -305,7 +305,8 @@ python -m pytest -q          # ~250 tests, ~90 s; no extra setup needed (tests/c
   Many tests extract PowerShell functions via AST and run them in a real pwsh. Without PowerShell 7
   these tests are skipped; a skipped test does not count as a pass.
 - `test_uninstall.py` really deletes in a fake root; it uses Windows PowerShell 5.1.
-- **Smoke test steps:** `chat`, `document`, `ocr`, `image`, `edit`, `post_media_switch` (the speed
+- **Smoke test steps:** `chat`, `document`, `offline` (the web tool returns error JSON without
+  crashing while offline), `ocr`, `image`, `edit`, `post_media_switch` (the speed
   ratio after an image must be ≥ 0.7), `video`.
 - **CI:** `tests.yml` (windows-latest, Python 3.12) on every push/PR; `installer.yml` when
   package-related paths change. Merged into `master` via PR.
@@ -429,6 +430,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-07 | Added an `offline` step to the smoke test: after installation, network access is cut to prove the web tool returns error JSON without crashing (skippable with `-SkipOffline`). | scripts/smoke-test.ps1, scripts/setup-run.ps1, tests/test_offline_mode.py |
 | 2026-10-07 | Added offline behavior tests: web search, page reading and reference image tools return clean error JSON (no exception) when the network is down; the real tool subprocess behind a black-hole proxy fails cleanly. | tests/test_offline_mode.py, docs/technical-notes.md |
 | 2026-10-07 | Fixed the intermittent "forcibly closed by the remote host" (WSAECONNRESET) error during local model streaming: local requests now use a fresh connection per turn and a drop after answer text is no longer treated as an error. | agent/qwen-inference.ps1, tests/test_stream_watchdog.py, tests/test_qwen_contracts.py, docs/technical-notes.md |
 | 2026-09-27 | 1.0.0 first release. | all |

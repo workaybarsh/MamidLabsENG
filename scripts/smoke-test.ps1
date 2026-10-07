@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    End-to-end smoke test after installation: chat, document, image, video.
+    End-to-end smoke test after installation: chat, document, offline tools, OCR, image, video.
 
 .DESCRIPTION
     install-mamidlabs.ps1 only prepares the infrastructure (binaries, environments);
@@ -40,6 +40,8 @@ param(
     [switch]$SkipVideo,
     [switch]$SkipOcr,
     [switch]$SkipEdit,
+    # Skips the offline tools step (when applying a network block is not wanted).
+    [switch]$SkipOffline,
     # If the post-media chat speed drops below this ratio (relative to the first measurement) it counts as VRAM overflow.
     [double]$MinSpeedRatio = 0.7,
     [string]$ReportPath
@@ -161,6 +163,37 @@ if ($SkipDocument) {
         Report 'document' $false $_.Exception.Message
     } finally {
         Remove-Item -LiteralPath $docPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ------------------------------------------------------------- offline
+# Network drop while the internet chip is on (hotspot, DNS timeout): a web tool
+# must return valid error JSON instead of raising. This scenario fed the recurring
+# "An existing connection was forcibly closed by the remote host" error on a real
+# machine; the tool layer no longer crashes. Network access is cut with a black-hole
+# proxy (temporarily, so the user's setting is not disturbed).
+Write-Section 'Offline tools'
+if ($SkipOffline) {
+    Write-Host '   [skip] -SkipOffline given'
+} else {
+    $python = Join-Path $Root 'venv\app\Scripts\python.exe'
+    try {
+        if (!(Test-Path -LiteralPath $python -PathType Leaf)) { throw "app environment missing: $python" }
+        $savedHttp = $env:HTTP_PROXY; $savedHttps = $env:HTTPS_PROXY
+        $env:HTTP_PROXY = 'http://127.0.0.1:9'; $env:HTTPS_PROXY = 'http://127.0.0.1:9'
+        try {
+            $payload = @{ action = 'search_web'; query = 'offline smoke test'; count = 2 } | ConvertTo-Json -Compress
+            $out = $payload | & $python (Join-Path $Root 'agent\qwen-agent-tools.py') 2>&1 | Out-String
+            $code = $LASTEXITCODE
+        } finally {
+            $env:HTTP_PROXY = $savedHttp; $env:HTTPS_PROXY = $savedHttps
+        }
+        if ($code -ne 0) { throw "Tool crashed (exit code $code): $($out.Substring(0, [Math]::Min(200, $out.Length)))" }
+        $parsed = $out | ConvertFrom-Json
+        if (!$parsed.error) { throw "No error JSON while offline: $($out.Substring(0, [Math]::Min(200, $out.Length)))" }
+        Report 'offline' $true 'Web tool returned valid error JSON while offline without crashing'
+    } catch {
+        Report 'offline' $false $_.Exception.Message
     }
 }
 
