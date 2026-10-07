@@ -3,7 +3,7 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.1] - 2026-10-07
 
 ### Fixes
 - Fixed the intermittent **"An existing connection was forcibly closed by the remote host."**
@@ -52,4 +52,5 @@ First stable release.
   Windows DPAPI.
 - Web tools only reach public HTTP(S) addresses; DNS rebinding protection is in place.
 
+[1.0.1]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.1
 [1.0.0]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.0
