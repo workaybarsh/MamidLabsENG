@@ -47,6 +47,11 @@ def fetch(item, token, index, total):
                 f'{label}: the file size on disk does not match the expected size '
                 f'({target.stat().st_size} != {expected_bytes} bytes). It may be a partial/corrupt download; '
                 'delete the file and download it again.')
+        if mtp_cfg:
+            # Add MTP to an existing (MTP-less) model without re-downloading it.
+            ensure_mtp(str(target), mtp_cfg, token, lambda text: emit('status', f'{label}: {text}'))
+            emit('artifact', str(target))
+            return
         emit('status', f'[{index}/{total}] {label} already exists, skipped.')
         emit('artifact', str(target))
         return

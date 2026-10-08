@@ -36,6 +36,21 @@ function Format-ByteSize([long]$bytes) {
     return ('{0:N0} MB' -f ($bytes / 1048576))
 }
 
+# Does the GGUF header contain an MTP/nextn block? Used to detect that an existing
+# (MTP-less) model still needs the head added without re-downloading (see agent/mtp_inject.py).
+function Test-GgufHasNextn([string]$Path) {
+    try {
+        $fs = [IO.File]::OpenRead($Path)
+        try {
+            $buffer = [byte[]]::new(16777216)
+            $read = $fs.Read($buffer, 0, $buffer.Length)
+        }
+        finally { $fs.Dispose() }
+        return ([Text.Encoding]::ASCII.GetString($buffer, 0, $read)).Contains('nextn')
+    }
+    catch { return $false }
+}
+
 # Looks for a profile's files on disk; splits the missing ones into downloadable and
 # to-be-installed-manually. No size comparison is done: if a download was left half-done
 # the Hugging Face client resumes where it left off.
@@ -45,7 +60,11 @@ function Get-ProfileState([string]$id) {
     if (!$entry) { return $state }
     foreach ($file in @($entry.files)) {
         $full = Join-Path $root ([string]$file.target)
-        if (Test-Path -LiteralPath $full -PathType Leaf) { $state.present += $file }
+        if (Test-Path -LiteralPath $full -PathType Leaf) {
+            # An existing model whose MTP head is missing is reprocessed (added without re-downloading).
+            if ($file.mtp -and !(Test-GgufHasNextn $full)) { $state.missingDownloadable += $file }
+            else { $state.present += $file }
+        }
         elseif ([string]$file.repo) { $state.missingDownloadable += $file }
         else { $state.missingManual += $file }
     }

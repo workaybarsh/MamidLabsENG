@@ -318,7 +318,9 @@ python -m pytest -q          # ~250 tests, ~90 s; no extra setup needed (tests/c
 - `test_uninstall.py` really deletes in a fake root; it uses Windows PowerShell 5.1.
 - **Smoke test steps:** `chat`, `document`, `offline` (the web tool returns error JSON without
   crashing while offline), `network_switch` (no turn errors while the network goes online/offline),
-  `history_resume` (save chat → reload → continue; no errors), `ocr`, `image`, `edit`,
+  `history_resume` (save chat → reload → continue; no errors), `mtp` (when the server was started with
+  `draft-mtp`, the `/completion` response's `timings.draft_n_accepted` must be > 0; 0 means the head is
+  ineffective; skippable with `-SkipMtp`), `ocr`, `image`, `edit`,
   `post_media_switch` (the speed
   ratio after an image must be ≥ 0.7), `video`.
 - **CI:** `tests.yml` (windows-latest, Python 3.12) on every push/PR; `installer.yml` when

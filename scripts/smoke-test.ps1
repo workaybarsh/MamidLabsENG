@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    End-to-end smoke test after installation: chat, document, offline tools, network switches, history resume, OCR, image, video.
+    End-to-end smoke test after installation: chat, document, offline tools, network switches, history resume, MTP, OCR, image, video.
 
 .DESCRIPTION
     install-mamidlabs.ps1 only prepares the infrastructure (binaries, environments);
@@ -46,6 +46,8 @@ param(
     [switch]$SkipNetworkSwitch,
     # Skips the resume-from-history (close -> reopen -> load -> continue) step.
     [switch]$SkipHistoryResume,
+    # Skips the MTP (speculative decoding) verification step.
+    [switch]$SkipMtp,
     # If the post-media chat speed drops below this ratio (relative to the first measurement) it counts as VRAM overflow.
     [double]$MinSpeedRatio = 0.7,
     [string]$ReportPath
@@ -94,6 +96,21 @@ function Get-FreeVramMiB {
     try { return [int](((& $smi --query-gpu=memory.free --format=csv,noheader,nounits) | Select-Object -First 1) -replace '\D', '') } catch { return $null }
 }
 
+# Does the GGUF header contain an MTP/nextn block? (see scripts\manage-qwen.ps1 Test-GgufHasMtp
+# and agent\mtp_inject.py). Used by the MTP verification step.
+function Test-MtpInGguf([string]$Path) {
+    try {
+        $fs = [IO.File]::OpenRead($Path)
+        try {
+            $buffer = [byte[]]::new(16777216)
+            $read = $fs.Read($buffer, 0, $buffer.Length)
+        }
+        finally { $fs.Dispose() }
+        return ([Text.Encoding]::ASCII.GetString($buffer, 0, $read)).Contains('nextn')
+    }
+    catch { return $false }
+}
+
 function Test-ComfyRunning {
     return [bool](Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like '*ComfyUI\main.py*' } | Select-Object -First 1)
@@ -140,6 +157,58 @@ if ($SkipChat) {
         Report 'chat' $true ("$($probe.tokens) tokens, $($probe.seconds) s, $($probe.tps) tok/s, answer: " + $probe.content.Substring(0, [Math]::Min(60, $probe.content.Length)))
     } catch {
         Report 'chat' $false $_.Exception.Message
+    }
+}
+
+# ----------------------------------------------------------------------- MTP
+# Is MTP (speculative decoding) really active and working? If the server was started
+# with --spec-type draft-mtp, the /completion response's timings carry draft_n and
+# draft_n_accepted; these prove draft tokens were generated and accepted. Acceptance 0
+# means the head is ineffective (see the norm +1 note in agent/mtp_inject.py).
+Write-Section 'MTP (speculative decoding)'
+if ($SkipMtp) {
+    Write-Host '   [skip] -SkipMtp given'
+} elseif (!(Wait-ForHealth 5)) {
+    Skip 'mtp' 'the model is not ready (the chat step may not have run)'
+} else {
+    try {
+        $settingsPath = Join-Path $Root 'settings\api.json'
+        $mtpOn = $true
+        if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
+            $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $settings.mtp) { $mtpOn = [bool]$settings.mtp }
+        }
+        if (!$mtpOn) {
+            Skip 'mtp' 'settings/api.json -> mtp=false (disabled by the user)'
+        } else {
+            $props = Invoke-RestMethod 'http://127.0.0.1:8080/props' -TimeoutSec 10
+            $modelPath = [string]$props.model_path
+            if (!$modelPath -or !(Test-Path -LiteralPath $modelPath -PathType Leaf)) {
+                throw "Could not read the model path: $modelPath"
+            }
+            if (!(Test-MtpInGguf $modelPath)) {
+                Skip 'mtp' 'the model GGUF has no MTP/nextn layers (not supported on this profile)'
+            } else {
+                $body = @{
+                    prompt = "Write a numbered list from 1 to 30, one item per line.`n1."
+                    n_predict = 128; temperature = 0; seed = 1234; cache_prompt = $false; stream = $false
+                } | ConvertTo-Json
+                $resp = Invoke-RestMethod 'http://127.0.0.1:8080/completion' -Method Post `
+                    -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 180
+                $draftN = [int]$resp.timings.draft_n
+                $acc = [int]$resp.timings.draft_n_accepted
+                if ($draftN -le 0) {
+                    Report 'mtp' $false 'MTP is not active: no draft tokens were generated (--spec-type draft-mtp may be missing)'
+                } elseif ($acc -le 0) {
+                    Report 'mtp' $false "MTP is active but acceptance is 0/$draftN (the draft head may be ineffective)"
+                } else {
+                    $rate = [math]::Round($acc / $draftN, 3)
+                    Report 'mtp' $true "draft-mtp active: accepted $acc/$draftN (rate $rate)"
+                }
+            }
+        }
+    } catch {
+        Report 'mtp' $false $_.Exception.Message
     }
 }
 

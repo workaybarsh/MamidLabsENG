@@ -278,7 +278,8 @@ if (!$SmokeTest) {
 } else {
     [void](Invoke-Step 'Smoke test' {
         # Video takes a few minutes; at the end of the installation chat, document, offline tools,
-        # network switches, image, editing and the post-media model switch are verified. Video: run smoke-test.ps1 manually.
+        # network switches, history resume, MTP (speculative decoding), image, editing and the
+        # post-media model switch are verified. Video: run smoke-test.ps1 manually.
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\smoke-test.ps1'),
                        '-Profile', $Profile, '-Root', $Root, '-SkipVideo', '-ReportPath', $smokeReport)
         if (!$Ocr) { $arguments += '-SkipOcr' }
