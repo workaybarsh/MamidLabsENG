@@ -3,6 +3,19 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-10-08
+
+### Added
+- **MTP (Multi-Token Prediction) speculative decoding** enabled for MAX/FLASH
+  (`--spec-type draft-mtp`). The Qwen3.8 27B GGUF carries a built-in MTP/nextn draft head, so no
+  separate draft model is needed; output is **lossless** (accepted tokens are verified against the
+  target model) and ~1.2–1.5x speed is expected. The LITE (Qwen3.5 9B) model has no MTP layers, so
+  it is not used there. Disable with `settings/api.json` → `"mtp": false`.
+
+### Notes
+- Verified that MTP does not change the output: with greedy decoding (temperature 0) and a fixed
+  seed, the output with and without MTP is byte-identical.
+
 ## [1.0.1] - 2026-10-07
 
 ### Added
@@ -87,5 +100,6 @@ First stable release.
   Windows DPAPI.
 - Web tools only reach public HTTP(S) addresses; DNS rebinding protection is in place.
 
+[1.0.2]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.2
 [1.0.1]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.1
 [1.0.0]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.0
