@@ -59,6 +59,13 @@ the image projector (mmproj) on the CPU (`--no-mmproj-offload`; on the GPU it di
 card and spilled into shared memory). **If you do not change** the selector at the bottom right,
 **the model is not reloaded**.
 
+**MTP (Multi-Token Prediction).** MAX/FLASH start with `--spec-type draft-mtp` using the built-in
+MTP/nextn draft head of the Qwen3.8 27B GGUF (`qwen35.nextn_predict_layers = 1`, `blk.64.nextn.*`).
+No separate draft model is needed; output is lossless (accepted tokens are verified against the
+target model) and ~1.2–1.5x speed is expected (model card: acceptance 0.35–0.53, mean accepted
+length 2.05–2.58 on Q4_K_M). The LITE model has no MTP layers, so it is not added there. It can be
+disabled by putting `"mtp": false` in `%LOCALAPPDATA%\Programs\MamidLabs\settings\api.json`.
+
 ### 16 GB memory budget (MAX/FLASH)
 
 Measured on an RTX 5060 Ti 16 GB with llama.cpp's memory dump (32K context):

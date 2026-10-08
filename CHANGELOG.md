@@ -18,6 +18,11 @@ follow [Semantic Versioning](https://semver.org/).
   `$done.data` coming back as `$null` across the thread boundary when no tool was called
   (otherwise a blank message was appended and the server returned
   `400 All non-assistant messages must contain 'content'`).
+- **MTP (Multi-Token Prediction) speculative decoding** enabled for MAX/FLASH
+  (`--spec-type draft-mtp`). The Qwen3.8 27B GGUF carries a built-in MTP/nextn draft head, so no
+  separate draft model is needed; output is lossless and ~1.2–1.5x speed is expected. The LITE
+  (Qwen3.5 9B) model has no MTP layers, so it is not used there. Disable with `settings/api.json`
+  → `"mtp": false`.
 
 ### Fixes
 - Fixed the intermittent **"An existing connection was forcibly closed by the remote host."**

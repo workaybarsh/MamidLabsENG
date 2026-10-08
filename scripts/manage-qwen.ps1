@@ -230,6 +230,19 @@ try {
         $serverArgs=@('--model',$model,'--alias',$desiredAlias,'--host','127.0.0.1','--port','8080','--ctx-size','8192','--predict','4096','--parallel','1','--gpu-layers','99','--flash-attn','on','--cache-reuse','256','--jinja','--metrics')
         if($projector){$serverArgs+=@('--mmproj',$projector)}
     }
+    # MTP (Multi-Token Prediction) speculative decoding. The Qwen3.8 27B GGUF carries a BUILT-IN
+    # MTP/nextn draft head (blk.64.nextn.*, qwen35.nextn_predict_layers=1), so NO separate draft
+    # model is needed - the head inside the same file is used. Output is lossless (accepted tokens
+    # are verified against the target model) and it gives ~1.2-1.5x speed (accepted 0.35-0.53, mean
+    # accepted length 2.05-2.58 measured on Q4_K_M; also verified compatible with mmproj). The LITE
+    # (Qwen3.5 9B) model has NO MTP layers (llama.cpp: "model doesn't contain MTP layers"), so it is
+    # not added there. Custom models default to off. Disable with settings/api.json -> "mtp": false
+    # if a compatibility issue shows up.
+    $mtpEnabled = $true
+    if ($settings -and $null -ne $settings.mtp) { $mtpEnabled = [bool]$settings.mtp }
+    if (!$custom -and $Profile -ne 'lite' -and $mtpEnabled) {
+        $serverArgs += @('--spec-type', 'draft-mtp')
+    }
     # Start-Process joins ArgumentList on Windows; quote paths explicitly.
     $serverArgs=@($serverArgs | ForEach-Object {if($_ -match '\s'){'"'+$_+'"'}else{$_}})
     # Start without inheriting the caller's stdout pipe; otherwise "manage-qwen | ..." never finishes.

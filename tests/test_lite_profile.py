@@ -183,6 +183,24 @@ def test_lite_bounds_thinking_with_a_server_enforced_budget():
     assert "$settings.liteReasoningBudget" in manager
 
 
+def test_mtp_speculative_decoding_is_enabled_for_max_flash_but_not_lite():
+    """The Qwen3.8 27B GGUF carries a built-in MTP/nextn draft head (qwen35.
+    nextn_predict_layers=1, blk.64.nextn.*); --spec-type draft-mtp needs NO separate draft
+    model and is lossless. The LITE (Qwen3.5 9B) model has no MTP layers (llama.cpp returns
+    "model doesn't contain MTP layers"), so it must not be added there."""
+    manager = read_text("scripts/manage-qwen.ps1")
+
+    assert "'--spec-type', 'draft-mtp'" in manager
+    # Only max/flash (not lite and not custom).
+    assert "if (!$custom -and $Profile -ne 'lite' -and $mtpEnabled)" in manager
+    # Disable via settings.mtp.
+    assert "$settings.mtp" in manager
+    assert "$mtpEnabled = $true" in manager
+    # No MTP in the LITE branch.
+    lite_block = manager.split("if ($Profile -eq 'lite') {", 1)[1].split("else {", 1)[0]
+    assert "draft-mtp" not in lite_block
+
+
 def test_thinking_is_never_switched_off_in_requests():
     """Thinking is a product decision: the budget limits its length, it does not turn the feature off."""
     inference = read_text("agent/qwen-inference.ps1")
