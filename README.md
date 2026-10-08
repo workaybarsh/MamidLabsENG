@@ -10,13 +10,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/workaybarsh/MamidLabsENG/releases/latest"><img src="https://img.shields.io/github/v/release/workaybarsh/MamidLabsENG?label=release" alt="Latest release"></a>
-  <a href="https://github.com/workaybarsh/MamidLabsENG/actions/workflows/tests.yml"><img src="https://github.com/workaybarsh/MamidLabsENG/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
-  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6" alt="Platform: Windows 10 and 11">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Proprietary-red" alt="License: Proprietary"></a>
-</p>
-
-<p align="center">
   <img src="docs/media/screen-interface.png" alt="A watercolor Istanbul image generated in the MamidLabs interface" width="760">
 </p>
 
