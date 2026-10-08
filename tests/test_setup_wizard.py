@@ -222,10 +222,11 @@ def test_installer_workflow_builds_the_setup():
     assert "MamidLabs_Setup.exe" in workflow
 
 
-def test_repository_is_mit_licensed():
+def test_repository_is_proprietary_licensed():
     license_text = read_text(ROOT / "LICENSE")
-    assert license_text.startswith("MIT License")
-    assert "Permission is hereby granted, free of charge" in license_text
+    assert "All Rights Reserved" in license_text
+    assert "Aybars Haydar Altuntaş" in license_text
+    assert "Permission is hereby granted, free of charge" not in license_text
 
 
 def test_new_scripts_carry_a_bom_for_windows_powershell():

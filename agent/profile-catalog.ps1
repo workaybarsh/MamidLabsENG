@@ -157,6 +157,7 @@ function Start-ProfileDownload([string]$id) {
             target = (Join-Path $root ([string]$file.target))
             label = [string]$file.label
             bytes = [long]$file.bytes
+            mtp = $file.mtp
         }
     }
     $total = ($missing | Measure-Object -Property bytes -Sum).Sum

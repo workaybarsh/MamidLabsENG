@@ -183,22 +183,23 @@ def test_lite_bounds_thinking_with_a_server_enforced_budget():
     assert "$settings.liteReasoningBudget" in manager
 
 
-def test_mtp_speculative_decoding_is_enabled_for_max_flash_but_not_lite():
-    """The Qwen3.8 27B GGUF carries a built-in MTP/nextn draft head (qwen35.
-    nextn_predict_layers=1, blk.64.nextn.*); --spec-type draft-mtp needs NO separate draft
-    model and is lossless. The LITE (Qwen3.5 9B) model has no MTP layers (llama.cpp returns
-    "model doesn't contain MTP layers"), so it must not be added there."""
+def test_mtp_speculative_decoding_is_enabled_when_model_has_mtp_layers():
+    """The Qwen3.8 27B GGUF carries a built-in MTP/nextn draft head (nextn_predict_layers=1,
+    blk.64.nextn.*); the LITE 9B GGUF gets the same head added on download
+    (agent/mtp_inject.py). --spec-type draft-mtp needs NO separate draft model and is
+    lossless. The flag is added only if the model really carries MTP layers; otherwise
+    llama.cpp fails with "model doesn't contain MTP layers"."""
     manager = read_text("scripts/manage-qwen.ps1")
 
     assert "'--spec-type', 'draft-mtp'" in manager
-    # Only max/flash (not lite and not custom).
-    assert "if (!$custom -and $Profile -ne 'lite' -and $mtpEnabled)" in manager
+    # For every profile that has MTP layers (max/flash/lite); not custom, guarded by the GGUF check.
+    assert "if (!$custom -and $mtpEnabled -and (Test-GgufHasMtp $model))" in manager
     # Disable via settings.mtp.
     assert "$settings.mtp" in manager
     assert "$mtpEnabled = $true" in manager
-    # No MTP in the LITE branch.
-    lite_block = manager.split("if ($Profile -eq 'lite') {", 1)[1].split("else {", 1)[0]
-    assert "draft-mtp" not in lite_block
+    # Safety check that looks for MTP tensors in the GGUF header.
+    assert "function Test-GgufHasMtp" in manager
+    assert "nextn" in manager
 
 
 def test_thinking_is_never_switched_off_in_requests():

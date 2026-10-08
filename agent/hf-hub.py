@@ -9,6 +9,7 @@ import sys
 # it is deleted together with the root on uninstall. Must be set before the import.
 os.environ.setdefault('HF_HOME', str(pathlib.Path(__file__).resolve().parent.parent / 'tools' / 'hf-home'))
 from huggingface_hub import HfApi, hf_hub_download
+from mtp_inject import ensure_mtp, has_mtp
 
 def emit(kind, text):
     print(json.dumps(dict(kind=kind, text=text), ensure_ascii=False), flush=True)
@@ -33,8 +34,14 @@ def fetch(item, token, index, total):
     label = item.get('label') or pathlib.PurePosixPath(name).name
     target = pathlib.Path(item['target']).resolve()
     expected_bytes = int(item.get('bytes') or 0)
+    mtp_cfg = item.get('mtp')
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and not item.get('force'):
+        # MTP injection grows the file, so the size check is skipped for an MTP-ready file.
+        if mtp_cfg and has_mtp(str(target)):
+            emit('status', f'[{index}/{total}] {label} already exists (MTP included), skipped.')
+            emit('artifact', str(target))
+            return
         if expected_bytes and target.stat().st_size != expected_bytes:
             raise ValueError(
                 f'{label}: the file size on disk does not match the expected size '
@@ -58,6 +65,9 @@ def fetch(item, token, index, total):
         raise ValueError(
             f'{label}: the downloaded file size does not match the expected size ({actual} != {expected_bytes} bytes). '
             'The file was considered corrupt and deleted; download it again.')
+    if mtp_cfg:
+        # For models whose MTP head was dropped by the converter, it is added after download.
+        ensure_mtp(str(target), mtp_cfg, token, lambda text: emit('status', f'{label}: {text}'))
     emit('artifact', str(target))
 
 def run(job):

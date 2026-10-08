@@ -116,16 +116,18 @@ setup-source\                    the source package extracted by the setup wizar
 |---|---|---|---|
 | MAX | `qwen3.8-27b-max` | Qwen3.8 27B IQ4_XS + mmproj F16 | `--no-mmproj-offload` (projector on the CPU), ctx 32768, predict 8192, `--reasoning-effort xhigh`, q4_0 KV, batch 512/256, `--spec-type draft-mtp` |
 | FLASH | `qwen3.8-27b-flash` | same files | predict 4096, `--reasoning-effort low`, `--spec-type draft-mtp` |
-| LITE | `qwen3.5-9b-lite` | Huihui-Qwen3.5 9B Q5_K_M + mmproj Q8_0 | ctx 32768, predict 3072, `--reasoning-budget 300`, batch 256/128, projector on the GPU (no MTP) |
+| LITE | `qwen3.5-9b-lite` | Huihui-Qwen3.5 9B Q5_K_M + mmproj Q8_0 | ctx 32768, predict 3072, `--reasoning-budget 300`, batch 256/128, projector on the GPU, `--spec-type draft-mtp` (added on download) |
 
 **MTP (Multi-Token Prediction).** The Qwen3.8 27B GGUF carries a built-in MTP/nextn draft head
-(`qwen35.nextn_predict_layers = 1`, `blk.64.nextn.*`); so `--spec-type draft-mtp` needs **no separate
-draft model** and is lossless (accepted tokens are verified against the target model). The model card
-measures acceptance 0.35–0.53 and mean accepted length 2.05–2.58 on Q4_K_M, verified compatible with
-mmproj. It is added automatically for MAX/FLASH; the LITE model has **no** MTP layers (llama.cpp
-returns "model doesn't contain MTP layers"), so it is not added there. Disable with
-`settings/api.json` → `"mtp": false`. When running without MTP the server logs `unused tensor
-blk.64.*` warnings (expected).
+(`qwen35.nextn_predict_layers = 1`, `blk.64.nextn.*`); the LITE 9B GGUF loses that head in the
+conversion, so `agent/mtp_inject.py` adds it back on download (source: the `huihui-ai/
+Huihui-Qwen3.5-9B-abliterated` MTP tensors; only `blk.<N>.nextn.*` plus a `w+1` on the main model's
+norms). So `--spec-type draft-mtp` needs **no separate draft model** and is lossless (accepted tokens
+are verified against the target model). Measured: acceptance ~0.93 on LITE, ~2x speed (36 → ~75
+tok/s); the model card reports 0.35–0.53 on Q4_K_M for the 27B. The flag is added only if the GGUF
+really carries MTP layers (`Test-GgufHasMtp`); passing it to one that does not makes llama.cpp fail
+with "model doesn't contain MTP layers". Disable with `settings/api.json` → `"mtp": false`. When
+running without MTP the server logs `unused tensor blk.64.*` warnings (expected).
 
 Since MAX and FLASH use the same files, the setup wizard and the Profiles window show them as a
 single "Qwen3.8 27B" entry (`Get-ProfileCatalogForDisplay`); switching happens in the model bar.
@@ -448,7 +450,9 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
-| 2026-10-08 | Enabled MTP (Multi-Token Prediction) speculative decoding for MAX/FLASH (`--spec-type draft-mtp`); the Qwen3.8 27B GGUF has a built-in MTP head so no separate draft model is needed; LITE has no MTP layers. Disable with `settings.mtp=false`. | scripts/manage-qwen.ps1, tests/test_lite_profile.py |
+| 2026-10-08 | License changed from MIT to a proprietary (all rights reserved; copyright: Aybars Haydar Altuntaş) license. | LICENSE, README.md, docs/installation.md, tests/test_setup_wizard.py, CHANGELOG.md |
+| 2026-10-08 | Enabled MTP on LITE: the MTP/nextn head dropped in conversion is added to the 9B GGUF during download by `mtp_inject.py` (only the MTP tensors from the source HF safetensors via HTTP range; `w+1` on norms). `manage-qwen.ps1` now enables MTP whenever the GGUF has `nextn` layers (max/flash/lite) via `Test-GgufHasMtp`. Measured acceptance ~0.93, ~2x speed; output is lossless. | agent/mtp_inject.py, agent/hf-hub.py, agent/profiles.json, agent/profile-catalog.ps1, scripts/download-profile.ps1, scripts/manage-qwen.ps1, tests/test_lite_profile.py, tests/test_mtp_inject.py |
+| 2026-10-08 | Enabled MTP (Multi-Token Prediction) speculative decoding (`--spec-type draft-mtp`); no separate draft model is needed and the output is lossless. Disable with `settings.mtp=false`. | scripts/manage-qwen.ps1, tests/test_lite_profile.py |
 | 2026-10-07 | `run_command` is now offered only when the user explicitly asks for a command/terminal (`Test-CommandIntent`); the model can no longer work around a web failure with commands. Added a LITE deep-reasoning line; after a web failure web tools are not offered and network-probe commands are refused. | agent/qwen-inference.ps1, qwen-desktop.ps1, tests/test_qwen_contracts.py, tests/test_lite_profile.py, tests/test_approval_flow.py |
 | 2026-10-07 | Added a `history_resume` step to the smoke test: save chat with DPAPI → reload → continue; no turn errors (skippable with `-SkipHistoryResume`). The step guards with `if ($done.data)` because $done.data comes back as $null on a tool-less turn. `test_chat_storage.py` verifies the save/load serialization. | scripts/smoke-test.ps1, tests/test_chat_storage.py, tests/test_smoke_test_script.py |
 | 2026-10-07 | Added a `network_switch` step to the smoke test: across successive turns the network goes online/offline and the local worker must not error in any turn (skippable with `-SkipNetworkSwitch`). | scripts/smoke-test.ps1, scripts/setup-run.ps1, agent/qwen-inference.ps1 |

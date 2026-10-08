@@ -205,7 +205,8 @@
           "repo": "mradermacher/Huihui-Qwen3.5-9B-abliterated-i1-GGUF",
           "revision": "4cc15cd6f643e668e18902550f80e2274a212473",
           "filename": "Huihui-Qwen3.5-9B-abliterated.i1-Q5_K_M.gguf",
-          "bytes": 6522005152
+          "bytes": 6522005152,
+          "mtp": { "repo": "huihui-ai/Huihui-Qwen3.5-9B-abliterated" }
         },
         {
           "label": "Image projector (mmproj Q8_0)",

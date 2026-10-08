@@ -3,6 +3,18 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] - 2026-10-08
+
+### Added
+- **MTP (Multi-Token Prediction) speculative decoding for LITE.** The MTP/nextn head dropped in the
+  conversion of the Huihui-Qwen3.5 9B GGUF is added automatically on download
+  (`agent/mtp_inject.py`); no separate draft model is needed and the output is lossless. Measured
+  acceptance ~0.93, ~2x speed (36 → ~75 tok/s). Disable with `settings/api.json` → `"mtp": false`.
+
+### Changed
+- License changed from MIT to a proprietary (all rights reserved) license; copyright is held by
+  Aybars Haydar Altuntaş.
+
 ## [1.0.2] - 2026-10-08
 
 ### Added
@@ -100,6 +112,7 @@ First stable release.
   Windows DPAPI.
 - Web tools only reach public HTTP(S) addresses; DNS rebinding protection is in place.
 
+[1.0.3]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.3
 [1.0.2]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.2
 [1.0.1]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.1
 [1.0.0]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.0

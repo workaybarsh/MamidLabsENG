@@ -230,17 +230,34 @@ try {
         $serverArgs=@('--model',$model,'--alias',$desiredAlias,'--host','127.0.0.1','--port','8080','--ctx-size','8192','--predict','4096','--parallel','1','--gpu-layers','99','--flash-attn','on','--cache-reuse','256','--jinja','--metrics')
         if($projector){$serverArgs+=@('--mmproj',$projector)}
     }
-    # MTP (Multi-Token Prediction) speculative decoding. The Qwen3.8 27B GGUF carries a BUILT-IN
-    # MTP/nextn draft head (blk.64.nextn.*, qwen35.nextn_predict_layers=1), so NO separate draft
-    # model is needed - the head inside the same file is used. Output is lossless (accepted tokens
-    # are verified against the target model) and it gives ~1.2-1.5x speed (accepted 0.35-0.53, mean
-    # accepted length 2.05-2.58 measured on Q4_K_M; also verified compatible with mmproj). The LITE
-    # (Qwen3.5 9B) model has NO MTP layers (llama.cpp: "model doesn't contain MTP layers"), so it is
-    # not added there. Custom models default to off. Disable with settings/api.json -> "mtp": false
-    # if a compatibility issue shows up.
+    # Does the GGUF header contain an MTP/nextn block? llama.cpp's `--spec-type draft-mtp`
+    # only works on models that carry MTP layers; passing the flag to one that does not
+    # makes the server fail ("model doesn't contain MTP layers"). Metadata and tensor names
+    # sit as plain text in the header; the MTP block is named "nextn" (e.g.
+    # blk.32.nextn.eh_proj.weight).
+    function Test-GgufHasMtp([string]$Path) {
+        try {
+            $fs = [IO.File]::OpenRead($Path)
+            try {
+                $buf = [byte[]]::new(16777216)
+                $n = $fs.Read($buf, 0, $buf.Length)
+            }
+            finally { $fs.Dispose() }
+            return ([Text.Encoding]::ASCII.GetString($buf, 0, $n)).Contains('nextn')
+        }
+        catch { return $false }
+    }
+    # MTP (Multi-Token Prediction) speculative decoding. The MAX/FLASH 27B GGUF and the LITE
+    # 9B GGUF (added automatically on download; see agent/mtp_inject.py) carry a BUILT-IN
+    # MTP/nextn draft head (blk.<N>.nextn.*, nextn_predict_layers=1), so NO separate draft
+    # model is needed - the head inside the same file is used. Output is lossless (accepted
+    # tokens are verified against the target model) and it gives ~2x speed (acceptance ~0.93
+    # measured on LITE; 0.35-0.53 on Q4_K_M per the 27B model card). The flag is added only
+    # if the model really carries MTP layers. The same check applies to custom models.
+    # Disable with settings/api.json -> "mtp": false if a compatibility issue shows up.
     $mtpEnabled = $true
     if ($settings -and $null -ne $settings.mtp) { $mtpEnabled = [bool]$settings.mtp }
-    if (!$custom -and $Profile -ne 'lite' -and $mtpEnabled) {
+    if (!$custom -and $mtpEnabled -and (Test-GgufHasMtp $model)) {
         $serverArgs += @('--spec-type', 'draft-mtp')
     }
     # Start-Process joins ArgumentList on Windows; quote paths explicitly.

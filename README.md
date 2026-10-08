@@ -13,7 +13,7 @@
   <a href="https://github.com/workaybarsh/MamidLabsENG/releases/latest"><img src="https://img.shields.io/github/v/release/workaybarsh/MamidLabsENG?label=release" alt="Latest release"></a>
   <a href="https://github.com/workaybarsh/MamidLabsENG/actions/workflows/tests.yml"><img src="https://github.com/workaybarsh/MamidLabsENG/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6" alt="Platform: Windows 10 and 11">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Proprietary-red" alt="License: Proprietary"></a>
 </p>
 
 <p align="center">
@@ -189,7 +189,8 @@ The images and videos below were generated locally with MamidLabs.
 
 ## License
 
-The MamidLabs source code is distributed under the [MIT license](LICENSE). The models used (Qwen,
-Krea 2, the Krea 2 Identity Edit LoRA, Wan 2.2 etc.) and third-party components (llama.cpp, ComfyUI,
-ComfyUI-GGUF, comfyui-krea2edit etc.) are subject to their own licenses; the MIT license does not
-cover them.
+The MamidLabs source code is proprietary and **All Rights Reserved**; copyright is held by
+Aybars Haydar Altuntaş. It may not be used, copied, modified or distributed without prior written
+permission. See the [LICENSE](LICENSE) file for details. The models used (Qwen, Krea 2, the Krea 2
+Identity Edit LoRA, Wan 2.2 etc.) and third-party components (llama.cpp, ComfyUI, ComfyUI-GGUF,
+comfyui-krea2edit etc.) are subject to their own licenses; this license does not cover them.

@@ -50,7 +50,7 @@ foreach ($file in @($entry.files)) {
     }
     $files.Add([ordered]@{
         repo = [string]$file.repo; filename = [string]$file.filename; revision = [string]$file.revision
-        target = $target; label = [string]$file.label; bytes = [long]$file.bytes
+        target = $target; label = [string]$file.label; bytes = [long]$file.bytes; mtp = $file.mtp
     })
 }
 
