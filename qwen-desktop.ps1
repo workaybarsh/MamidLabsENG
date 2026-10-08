@@ -80,6 +80,7 @@ $root = $PSScriptRoot
 . (Join-Path $root 'agent\media-paths.ps1')
 . (Join-Path $root 'agent\media-settings.ps1')
 . (Join-Path $root 'agent\hf-settings.ps1')
+. (Join-Path $root 'agent\web-settings.ps1')
 $script:apiSettings = Read-ApiSettings
 $script:providerId = if ($script:apiSettings.selected) { [string]$script:apiSettings.selected } else { 'local' }
 $scripts = Join-Path $root 'scripts'
@@ -465,13 +466,16 @@ function Update-Bubble($b) {
         $hasFiles = $b.artifacts.Count -gt 0
         $b.copyText.Visible = $hasText
         $b.copyFile.Visible = $hasFiles
+        $b.openFile.Visible = $hasFiles
         if ($hasText -or $hasFiles) {
             $y += 8
             $b.copyText.Location = New-Object System.Drawing.Point($pad, $y)
             $fileX = if ($hasText) { $pad + 34 } else { $pad }
-            $b.copyFile.Location = New-Object System.Drawing.Point($fileX, $y)
+            $b.openFile.Location = New-Object System.Drawing.Point($fileX, $y)
+            $copyX = $fileX + $b.openFile.Width + 6
+            $b.copyFile.Location = New-Object System.Drawing.Point($copyX, $y)
             $b.copyFile.Text = if ($b.artifacts.Count -gt 1) { "Copy files ($($b.artifacts.Count))" } else { 'Copy file' }
-            if ($hasFiles) { $used = [math]::Max($used, $fileX - $pad + $b.copyFile.Width) }
+            if ($hasFiles) { $used = [math]::Max($used, $copyX - $pad + $b.copyFile.Width) }
             $y += 28
         }
     }
@@ -575,6 +579,18 @@ function Copy-BubbleContent($bubble, [bool]$files) {
     }
 }
 
+function Open-BubbleArtifact($bubble) {
+    # Opens the generated file (image/video/document) with the default application. If there
+    # are several files, all are opened.
+    if (!$bubble) { return }
+    $opened = 0
+    foreach ($path in $bubble.artifacts) {
+        if (!(Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        try { Start-Process -FilePath $path; $opened++ } catch { }
+    }
+    if ($opened -eq 0) { $metric.Text = 'The file is no longer at this location.' }
+}
+
 function New-Bubble([string]$role) {
     $welcome.Visible = $false
     $panel = New-Object System.Windows.Forms.Panel
@@ -601,7 +617,7 @@ function New-Bubble([string]$role) {
     $b = @{ role = $role; panel = $panel; body = $body; thinkToggle = $null; thinkBox = $null; pic = $null
             thinkOpen = $false; seconds = $null; contentHeight = 18; hasRich = $false; rawText = ''; ocrText = ''
             answerStarted = $false; answerStartLength = 0; deniedNote = ''
-            artifacts = [Collections.ArrayList]::new(); copyText = $null; copyFile = $null }
+            artifacts = [Collections.ArrayList]::new(); copyText = $null; copyFile = $null; openFile = $null }
     $body.Tag = $b
     $body.Add_ContentsResized({ if ($this.Tag) { $this.Tag.contentHeight = $_.NewRectangle.Height } })
 
@@ -622,7 +638,16 @@ function New-Bubble([string]$role) {
     $copyFile.Tag = $b
     $copyFile.Add_Click({ Copy-BubbleContent $this.Tag $true })
     $bubbleTip.SetToolTip($copyFile, 'Copy the image, video or document as a file')
-    foreach ($button in @($copyText, $copyFile)) {
+    # Open the generated file (image/video/document) directly with the default application.
+    $openFile = New-Object System.Windows.Forms.Button
+    $openFile.Size = New-Object System.Drawing.Size(48, 28)
+    $openFile.Text = 'Open'
+    $openFile.AccessibleName = 'Open file'
+    $openFile.Font = $fontMeta
+    $openFile.Tag = $b
+    $openFile.Add_Click({ Open-BubbleArtifact $this.Tag })
+    $bubbleTip.SetToolTip($openFile, 'Open the generated file with the default application')
+    foreach ($button in @($copyText, $copyFile, $openFile)) {
         $button.FlatStyle = 'Flat'
         $button.FlatAppearance.BorderSize = 0
         $button.ForeColor = $colMuted
@@ -632,6 +657,7 @@ function New-Bubble([string]$role) {
     }
     $b.copyText = $copyText
     $b.copyFile = $copyFile
+    $b.openFile = $openFile
 
     if ($role -ne 'user') {
         $toggle = New-Object System.Windows.Forms.Label
@@ -1238,8 +1264,11 @@ $apiChatItem = New-Object System.Windows.Forms.ToolStripMenuItem('Chat connectio
 $apiChatItem.Add_Click({ Show-ApiSettings })
 $apiMediaItem = New-Object System.Windows.Forms.ToolStripMenuItem('Image and video API…')
 $apiMediaItem.Add_Click({ Show-MediaSettings })
+$apiWebItem = New-Object System.Windows.Forms.ToolStripMenuItem('Web management…')
+$apiWebItem.Add_Click({ Show-WebSettings })
 [void]$apiSettingsMenu.Items.Add($apiChatItem)
 [void]$apiSettingsMenu.Items.Add($apiMediaItem)
+[void]$apiSettingsMenu.Items.Add($apiWebItem)
 $apiSettingsBtn.Add_Click({ $apiSettingsMenu.Show($apiSettingsBtn, [System.Drawing.Point]::new(0, $apiSettingsBtn.Height)) })
 
 $statusCtrl = New-Object System.Windows.Forms.Label

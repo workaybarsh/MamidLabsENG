@@ -3,6 +3,24 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.4] - 2026-10-08
+
+### Added
+- **Local web management:** the app UI can be managed from a browser (chat, model switching,
+  generated files). It is reachable only from this computer (127.0.0.1) by default, is
+  password protected (DPAPI, bound to the Windows account) and issues a single-use connect
+  link that expires in 5 minutes. Exposing it to the local network needs an explicit setting;
+  sessions last 30 days and are invalidated when the password changes. File access is confined
+  to `outputs\`.
+- Generated files (image/video/document) can be **opened in one click** from the chat bubble ("Open").
+
+### Fixed
+- **Model load failure ("Model işlemi başarısız"):** the MTP head grew the LITE model by
+  ~464 MiB and the VRAM check refused to start it on an 8 GB card. The check now tolerates a
+  small overflow (llama.cpp keeps the big embedding tensor on the CPU) and stops only on a clear one.
+- **Private repository update check:** "Check for updates" returned 404; it now uses a GitHub
+  token (GITHUB_TOKEN/GH_TOKEN or the "Update token" field in the Profiles window).
+
 ## [1.0.3] - 2026-10-08
 
 ### Added
@@ -112,6 +130,7 @@ First stable release.
   Windows DPAPI.
 - Web tools only reach public HTTP(S) addresses; DNS rebinding protection is in place.
 
+[1.0.4]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.4
 [1.0.3]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.3
 [1.0.2]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.2
 [1.0.1]: https://github.com/workaybarsh/MamidLabsENG/releases/tag/v1.0.1

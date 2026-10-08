@@ -77,3 +77,15 @@ def test_max_projector_runs_on_cpu_and_stays_out_of_vram_budget():
     manager = read_text("scripts/manage-qwen.ps1")
     assert "'--mmproj', $projector, '--no-mmproj-offload'" in manager
     assert "$profileName -eq 'lite' -and $projectorPath" in manager
+
+
+def test_memory_budget_tolerates_small_overflow_for_mtp_grown_lite():
+    """The MTP head grows the LITE model by ~464 MiB; on an 8 GB card the check used to say
+    "does not fit" and never start the model. In practice llama.cpp keeps the big embedding
+    tensor on the CPU and tolerates a small overflow (measured: loaded at ~165 MiB over,
+    ~41 tok/s). A small overflow must not block; only a clear overflow (~1 GB over the margin)
+    stops it."""
+    manager = read_text("scripts/manage-qwen.ps1")
+    assert "$toleranceMiB = 1024" in manager
+    assert "if ($freeMiB -lt ($neededMiB - $toleranceMiB))" in manager
+    assert "Write-Warning" in manager

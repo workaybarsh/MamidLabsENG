@@ -409,3 +409,23 @@ def test_multi_image_ocr_is_an_explicit_one_turn_mode():
     assert "function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = $true)" in inference
     assert "The local model is loading; the image/chat will continue when it is ready" in inference
     assert "if (!$script:multiImageOcrMode -and $script:selectedImages.Count -ge 1)" in desktop
+
+
+def test_generated_artifacts_can_be_opened_directly():
+    """A generated file (image/video/document) must be openable from the chat bubble in one click."""
+    desktop = read_text("qwen-desktop.ps1")
+    assert "function Open-BubbleArtifact" in desktop
+    assert "Open-BubbleArtifact $this.Tag" in desktop
+    assert "Start-Process -FilePath $path" in desktop
+    assert "openFile = $null" in desktop
+    assert "$openFile.Text" in desktop
+
+
+def test_update_check_uses_a_github_token_for_the_private_repo():
+    """On a private repo releases/latest returns 404; the update check/download must use a
+    GitHub token (GITHUB_TOKEN/GH_TOKEN environment variable or the stored 'github' key)."""
+    catalog = read_text("agent/profile-catalog.ps1")
+    assert "function Get-UpdateToken" in catalog
+    assert "GITHUB_TOKEN" in catalog and "GH_TOKEN" in catalog
+    assert "Authorization" in catalog
+    assert "Bearer $token" in catalog

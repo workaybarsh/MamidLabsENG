@@ -36,6 +36,7 @@ Repository: `github.com/workaybarsh/MamidLabsENG`. Default install root:
 | `agent/api-settings.ps1` | API connections window, key verification, DPAPI key storage |
 | `agent/media-settings.ps1` | Image and video models window, "Choose model file (file path)" |
 | `agent/hf-settings.ps1`, `agent/hf-hub.py` | Hugging Face token and download worker (size-verified) |
+| `agent/web-server.ps1`, `agent/web-settings.ps1`, `scripts/web-serve.ps1` | Local web management (browser access): HTTP server, settings window, launcher. Localhost only by default, password protected; based on OpenCode's server model |
 | `agent/imagegen-run.ps1` | Local image generation / editing worker (ComfyUI API) |
 | `agent/videogen-run.ps1` | Local video generation worker (Wan 2.2) |
 | `agent/api-media-run.ps1`, `agent/api-media.py` | Image/video generation via API, profile download job |
@@ -452,6 +453,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-08 | Added local web management: browser access to chat/model switching/generated files. The server (`agent/web-server.ps1`) binds to localhost only by default, has a fixed password + HttpOnly/SameSite=Strict session cookie (30 days), a single-use 5-minute connect link (OpenCode 'pair' style), locks out after 5 failed logins, and confines file access to `outputs\`. Also: the VRAM check now tolerates a small overflow after MTP (fixes the model-does-not-start error); the private-repo update check uses a GitHub token; generated files open in one click via "Open". | agent/web-server.ps1, agent/web-settings.ps1, scripts/web-serve.ps1, scripts/manage-qwen.ps1, agent/profile-catalog.ps1, qwen-desktop.ps1, tests/test_web_server.py, tests/test_memory_admission.py, tests/test_qwen_contracts.py |
 | 2026-10-08 | License changed from MIT to a proprietary (all rights reserved; copyright: Aybars Haydar Altuntaş) license. | LICENSE, README.md, docs/installation.md, tests/test_setup_wizard.py, CHANGELOG.md |
 | 2026-10-08 | Enabled MTP on LITE: the MTP/nextn head dropped in conversion is added to the 9B GGUF during download by `mtp_inject.py` (only the MTP tensors from the source HF safetensors via HTTP range; `w+1` on norms). `manage-qwen.ps1` now enables MTP whenever the GGUF has `nextn` layers (max/flash/lite) via `Test-GgufHasMtp`. Measured acceptance ~0.93, ~2x speed; output is lossless. | agent/mtp_inject.py, agent/hf-hub.py, agent/profiles.json, agent/profile-catalog.ps1, scripts/download-profile.ps1, scripts/manage-qwen.ps1, tests/test_lite_profile.py, tests/test_mtp_inject.py |
 | 2026-10-08 | Enabled MTP (Multi-Token Prediction) speculative decoding (`--spec-type draft-mtp`); no separate draft model is needed and the output is lossless. Disable with `settings.mtp=false`. | scripts/manage-qwen.ps1, tests/test_lite_profile.py |
