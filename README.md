@@ -189,8 +189,10 @@ The images and videos below were generated locally with MamidLabs.
 
 ## License
 
-The MamidLabs source code is proprietary and **All Rights Reserved**; copyright is held by
-Aybars Haydar Altuntaş. It may not be used, copied, modified or distributed without prior written
-permission. See the [LICENSE](LICENSE) file for details. The models used (Qwen, Krea 2, the Krea 2
-Identity Edit LoRA, Wan 2.2 etc.) and third-party components (llama.cpp, ComfyUI, ComfyUI-GGUF,
-comfyui-krea2edit etc.) are subject to their own licenses; this license does not cover them.
+The MamidLabs source code is proprietary and closed (private repository) and **All Rights Reserved**;
+copyright is held by Aybars Haydar Altuntaş. It may not be used, copied, modified or distributed
+without prior written permission. See the [LICENSE](LICENSE) file for details. Releases up to and
+including 1.0.2 were published under the MIT license; from 1.0.3 onward the proprietary license
+applies. The models used (Qwen, Krea 2, the Krea 2 Identity Edit LoRA, Wan 2.2 etc.) and third-party
+components (llama.cpp, ComfyUI, ComfyUI-GGUF, comfyui-krea2edit etc.) are subject to their own
+licenses; this license does not cover them.
