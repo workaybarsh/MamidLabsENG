@@ -270,7 +270,7 @@ if ($SkipHistoryResume) {
         $prefix = 'MAMIDLABS-CHAT-DPAPI-V2'
         $chatFile = Join-Path $env:TEMP 'mamidlabs-smoke-reload.json'
         $turns = @(
-            @{ role = 'user'; content = 'What is the Einstein riddle? Explain briefly.' }
+            @{ role = 'user'; content = 'What is the USD/TRY exchange rate today? I need current info.' }
         )
         # 1) First turn: a real request that may also trigger a tool call.
         $jobData = @{
@@ -290,7 +290,13 @@ if ($SkipHistoryResume) {
         $done = @($items | Where-Object { $_.kind -eq 'done' }) | Select-Object -Last 1
         if (!$done) { throw 'The first turn produced no done event.' }
         # Persistent message list: the user message plus the tool exchange from done.
-        $chatMessages = @($turns) + @($done.data)
+        # CAREFUL: if no tool was called, $done.data is an EMPTY array that comes back as $null
+        # across the Start-ThreadJob boundary; @($done.data) then wraps it into @($null), adding a
+        # blank message and making the server return 400 "All non-assistant messages must contain
+        # 'content'" (caught in the smoke test). The real UI already guards with
+        # `if ($jobEvent.data)` (see Render-JobEvent); the same guard is required here.
+        $chatMessages = @($turns)
+        if ($done.data) { $chatMessages += @($done.data) }
         # 2) Save like Save-Chat (DPAPI).
         $payload = @{ id = 'smoketest000000000000000000000000'; title = 'smoke-reload'; messages = @($chatMessages); transcript = @() }
         $json = $payload | ConvertTo-Json -Depth 30
@@ -301,7 +307,9 @@ if ($SkipHistoryResume) {
         $plain = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect(
             [Convert]::FromBase64String($raw.Substring($prefix.Length + 1).Trim()), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))
         $reloaded = @(($plain | ConvertFrom-Json).messages)
-        if ($reloaded.Count -lt 2) { throw "The reloaded history is incomplete ($($reloaded.Count) messages)." }
+        # The model may have answered without calling a tool; then only the user message is saved.
+        # Having at least the user message is enough (otherwise the chat would be empty).
+        if ($reloaded.Count -lt 1) { throw "The reloaded history is empty ($($reloaded.Count) messages)." }
         # 4) Continuation turn: add a new user message to the reloaded history.
         $jobData2 = $jobData.Clone(); $jobData2.messages = @($reloaded) + @(@{ role = 'user'; content = 'Now summarize that in one sentence.' })
         $shared2 = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full'

@@ -194,6 +194,21 @@ def test_thinking_is_never_switched_off_in_requests():
     assert "$body.reasoning_effort = 'low'" in inference
 
 
+def test_lite_system_prompt_encourages_deep_reasoning():
+    """The LITE system prompt gets a deep, step-by-step reasoning instruction; the line
+    is only present for the lite profile (the prefix is fixed per profile, so the KV
+    cache is not broken) and steers toward a more accurate result within the thinking
+    budget."""
+    desktop = read_text("qwen-desktop.ps1")
+
+    assert "Think deeply and carefully" in desktop
+    idx = desktop.index("Think deeply and carefully")
+    block = desktop[max(0, idx - 700):idx]
+    assert "$script:apiSettings.localProfile -eq 'lite'" in block
+    # It does not switch thinking off; it only steers it.
+    assert "enable_thinking" not in desktop
+
+
 # ------------------------------------------------------------------ media path
 
 def test_lite_image_uses_krea2_gguf_via_shared_workflow():

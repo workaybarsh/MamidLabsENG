@@ -139,3 +139,13 @@ def test_smoke_test_writes_a_machine_readable_report():
     assert "ConvertTo-Json -Depth 6" in script
     # A skipped step does not count as a failure but shows up in the summary.
     assert "skipped = $true" in script
+
+
+def test_history_resume_step_guards_empty_tool_exchange():
+    """When no tool is called, $done.data is an EMPTY array that comes back as $null across the
+    Start-ThreadJob boundary; @($done.data) then wraps it into @($null), adding a blank message
+    and making the server return 400 ("All non-assistant messages must contain 'content'"). The
+    step must guard with `if ($done.data)` (like the real UI) and require >=1 reloaded message."""
+    script = read_text("scripts/smoke-test.ps1")
+    assert "if ($done.data) { $chatMessages += @($done.data) }" in script
+    assert "$reloaded.Count -lt 1" in script

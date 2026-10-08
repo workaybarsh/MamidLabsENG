@@ -143,9 +143,10 @@ def test_denied_note_is_shown_but_not_sent_back_to_the_model():
 
 def test_denial_note_is_added_to_the_request_copy_only():
     """After a denial an explicit note is added to the model call; it is not written to the persistent
-    history ($messages), so the KV cache prefix is not broken."""
+    history ($messages), so the KV cache prefix is not broken. Because the note can be merged with
+    the web-failure note it goes into $systemNotes and is written to the request copy ([System note])."""
     inference = read_text("agent/qwen-inference.ps1")
-    block = inference.split("if ($script:deniedTools -and $script:deniedTools.Count -gt 0) {", 1)[1].split("\n        }\n", 1)[0]
-    assert "$body.messages = @($sendMessages) +" in block
-    assert "DENIED" in block and "do not guess the reason" in block
-    assert "$messages.Add" not in block
+    assert "$systemNotes += (" in inference
+    assert "DENIED" in inference and "do not guess the reason" in inference
+    assert "$body.messages = @($sendMessages) + @(@{ role = 'user'; content = ('[System note] '" in inference
+    assert "foreach ($m in @($systemNotes)) { [void]$messages.Add($m) }" not in inference

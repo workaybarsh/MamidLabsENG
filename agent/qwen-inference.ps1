@@ -89,6 +89,11 @@ $script:lastPdfText = $null
 $script:ApprovalTimeout = [TimeSpan]::FromMinutes(10)
 # The note shown in the UI for a denied operation (Invoke-Tool cannot use Emit).
 $script:deniedNote = $null
+# How many times a web tool failed because of the network in this request. After the 1st
+# failure the model may retry once (warned by a note); after the 2nd it is clearly offline:
+# web tools are not offered, network-probe commands are refused, and the model answers from
+# what it knows. Never written to the persistent history.
+$script:webToolFailCount = 0
 
 function Emit([string]$kind, [string]$text, $usage = $null, $data = $null) {
     [pscustomobject]@{ kind = $kind; text = $text; usage = $usage; data = $data }
@@ -365,6 +370,42 @@ function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = 
     return $ocrResponse
 }
 
+# Did a web tool fail? The tool layer returns {"error": "..."} JSON on failure (no network,
+# DNS resolution failed, download failed, etc.). So the model is not tempted to work around it
+# (run_command with curl/ping, trying another page, inventing a result), a system note is added
+# to the request copy.
+function Test-WebToolFailure([string]$name, $result) {
+    if ($name -notin @('search_web', 'fetch_page', 'find_reference_image')) { return $false }
+    if ($null -eq $result) { return $true }
+    $text = [string]$result
+    if ([string]::IsNullOrWhiteSpace($text)) { return $true }
+    try {
+        $parsed = $text | ConvertFrom-Json -ErrorAction Stop
+        if ($parsed -and $parsed.PSObject.Properties.Name -contains 'error' -and $parsed.error) { return $true }
+    } catch { }
+    if ($text -match '(?i)DNSError|no connections available|resolv|ConnectError|failed|download|timed out') { return $true }
+    return $false
+}
+
+# Command-intent detection. The run_command tool is offered ONLY when the user explicitly
+# asks for a command/terminal. Otherwise the model (especially the small LITE one) diverted to
+# absurd command attempts on a web/search failure; if the tool is not offered it cannot call it.
+# System/terminal commands and "run/execute" verbs count as intent; general chat does not.
+function Test-CommandIntent([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+    $normalized = $text.ToLowerInvariant()
+    return $normalized -match '(\bcommand\b|\bterminal\b|\bconsole\b|command ?line|\bcmd\b|powershell|power ?shell|\bbash\b|\bshell\b|\bscript\b|\bbatch\b|\.bat\b|\.cmd\b|\.ps1\b|\.exe\b|\brun\b|execute|\bipconfig\b|\bping\b|\bcurl\b|\bwget\b|nslookup|netstat|\bcls\b|\bdir\b)'
+}
+
+# File/folder/document intent. When a web search fails and the user did NOT ask about files,
+# this is used to stop the model from rummaging in the bound folder / local files for an answer
+# (another form of working around).
+function Test-FileIntent([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+    $normalized = $text.ToLowerInvariant()
+    return $normalized -match '(file|folder|document|\bpdf\b|word|excel|powerpoint|\.docx|\.xlsx|\.pptx|\bzip\b|\brar\b|\bcsv\b|notes|text file|bound folder)'
+}
+
 function Invoke-Tool([string]$name, $arguments, [string]$folder) {
     if ($name -eq 'read_images_ocr') {
         if (!$JobData.multiImageOcr) { return 'This tool can only be used in multi-image OCR mode.' }
@@ -434,6 +475,17 @@ function Invoke-Tool([string]$name, $arguments, [string]$folder) {
     if ($name -eq 'run_command') {
         $command = [string]$arguments.command
         if (!$command) { return 'command is required.' }
+        # Hard guard: if a web tool failed because of the network in this request, the model
+        # tends to try network commands (ping/curl/wget/nslookup) to "work around" it (observed
+        # on a real machine: after a search_web DNS failure it diverted to run_command 3 times).
+        # A small model does not reliably follow the prompt note, so network-probe commands are
+        # refused without running; the model then tells the user web access could not be
+        # established. It does not affect a user's explicit command request because it only
+        # triggers AFTER a web failure and only for network-probe commands.
+        if ($script:webToolFailCount -gt 0 -and
+            $command -match '(?i)(^|[^a-z])(ping|tracert|traceroute|pathping|nslookup|resolve-dnsname|test-netconnection|test-connection|curl|wget|invoke-webrequest|invoke-restmethod|\biwr\b|\birm\b|telnet|ftp|ssh|ipconfig|netstat|\barp\b|\broute\b)([^a-z]|$)') {
+            return 'No network command was run because the web tool failed. Do not work around it; tell the user web access could not be established right now and do not invent the result.'
+        }
         $workingDirectory = [string]$arguments.working_directory
         if (!$workingDirectory) { $workingDirectory = if ($folder) { $folder } else { Get-InstallRoot } }
         try { $workingDirectory = [IO.Path]::GetFullPath($workingDirectory) } catch { return 'Invalid working folder.' }
@@ -650,11 +702,16 @@ function Get-ToolDefinitions([hashtable]$job) {
         $defs += @{ type = 'function'; function = @{ name = 'list_bound_files'; description = 'Lists the files and subfolders in the folder the user bound.'; parameters = @{ type = 'object'; properties = @{ relative_path = @{ type = 'string' } } } } }
         $defs += @{ type = 'function'; function = @{ name = 'read_bound_file'; description = 'Reads a text file inside the bound folder.'; parameters = @{ type = 'object'; required = @('relative_path'); properties = @{ relative_path = @{ type = 'string' } } } } }
         $defs += @{ type = 'function'; function = @{ name = 'write_bound_file'; description = 'Writes a text file inside the bound folder or changes an existing one. Use it only if the user explicitly asks.'; parameters = @{ type = 'object'; required = @('relative_path', 'content'); properties = @{ relative_path = @{ type = 'string' }; content = @{ type = 'string' } } } } }
+        # run_command is offered ONLY when the user explicitly asks for a command/terminal
+        # (see Test-CommandIntent). Otherwise the small model diverted to absurd command
+        # attempts on a web/search failure; if the tool is not offered it cannot call it.
+        if (Test-CommandIntent $userText) {
         $defs += @{ type = 'function'; function = @{ name = 'run_command'; description = 'Runs a command the user explicitly asked for in the Windows command prompt. Returns the command, working folder and exit code. Commands that make changes or are risky need the user''s permission first; with Full access on it runs without asking.'; parameters = @{ type = 'object'; required = @('command'); properties = @{
             command = @{ type = 'string'; description = 'The Windows command to run. Write only the command the user explicitly asked for.' }
             working_directory = @{ type = 'string'; description = "Optional working folder; defaults to the bound folder or $(Get-InstallRoot)." }
             timeout_seconds = @{ type = 'integer'; description = 'Optional timeout (1-600 seconds, default 120).' }
         } } } }
+        }
     }
     if ($job.office) {
         $defs += @{ type = 'function'; function = @{ name = 'read_document'; description = 'Reads a PDF, Word (docx), Excel (xlsx), PowerPoint (pptx), ZIP or RAR file. For ZIP/RAR, if no entry is given it returns the list of files in the archive; if entry is given it reads the content of that file.'; parameters = @{ type = 'object'; required = @('path'); properties = @{
@@ -1232,17 +1289,48 @@ try {
             top_p = 0.95
             top_k = 20
         }
-        if ($toolDefinitions.Count -gt 0) { $body.tools = $toolDefinitions }
+        # After 2 consecutive web failures it is clearly offline. To stop the model from calling the
+        # same web tools again (search loop) AND from looking for the answer elsewhere (rummaging in
+        # the bound folder's files), web tools are always dropped and, if the user did not ask about
+        # files, the file tools too. After the first failure all are still offered (one retry).
+        $offeredTools = if ($script:webToolFailCount -ge 2) {
+            $blocked = @('search_web', 'fetch_page', 'find_reference_image')
+            if (!(Test-FileIntent $userText)) { $blocked += @('list_bound_files', 'read_bound_file') }
+            @($toolDefinitions | Where-Object { $_.function.name -notin $blocked })
+        } else { $toolDefinitions }
+        if (@($offeredTools).Count -gt 0) { $body.tools = @($offeredTools) }
         # In a UI test the FLASH model skipped the "denied" instruction in the tool result and
         # interpreted the denial as "Python may not be installed". If there was a denial an explicit
         # note is appended to the end of the request (without writing it to the persistent history);
         # the prefix does not change so the KV cache is preserved.
+        # Likewise, if a web tool fails because of the network, a note prevents the model from
+        # working around it with commands/pages. Both notes are merged into one message.
+        $systemNotes = @()
         if ($script:deniedTools -and $script:deniedTools.Count -gt 0) {
-            $body.messages = @($sendMessages) + @(@{ role = 'user'; content = (
-                '[System note] In this request the user DENIED the following operations in the approval window: ' + (@($script:deniedTools) -join ', ') +
+            $systemNotes += (
+                'In this request the user DENIED the following operations in the approval window: ' + (@($script:deniedTools) -join ', ') +
                 '. These operations were not run. This is not an error, a missing installation or a pending permission; do not guess the reason, ' +
                 'do not offer a diagnosis or alternative commands, and do not guess and present the result. In your answer only say briefly that the operation ' +
-                'was not done because the user did not grant permission; mention that they can ask again if they want.') })
+                'was not done because the user did not grant permission; mention that they can ask again if they want.')
+        }
+        if ($script:webToolFailCount -gt 0) {
+            if ($script:webToolFailCount -ge 2) {
+                $systemNotes += (
+                    'Web access is now CLEARLY UNAVAILABLE (repeated failures). STOP web searching / page downloading ' +
+                    'and do not try again. Do not run commands via run_command (ping/curl/wget/Invoke-WebRequest/ipconfig, ' +
+                    'etc.) and do NOT go looking for the answer in the bound folder / local files (unless the user ' +
+                    'explicitly asked about files). Answer clearly and correctly from what you know; if current data is ' +
+                    'essential, say in one sentence that the internet connection could not be established and do not make ' +
+                    'up the result.')
+            } else {
+                $systemNotes += (
+                    'Web search / page download failed (possibly no internet). You may retry once; but do not work around ' +
+                    'it: do not run commands via run_command (ping/curl/wget/Invoke-WebRequest, etc.) and do not invent a ' +
+                    'tool result. If the second attempt also fails, stop trying web entirely and answer from what you know.')
+            }
+        }
+        if ($systemNotes.Count -gt 0) {
+            $body.messages = @($sendMessages) + @(@{ role = 'user'; content = ('[System note] ' + ($systemNotes -join ' ')) })
         }
         if ($JobData.multiImageOcr -and $round -eq 0) {
             $body.tool_choice = @{ type = 'function'; function = @{ name = 'read_images_ocr' } }
@@ -1374,6 +1462,7 @@ try {
                     # Accepted image calls are handed over to the UI above; anything arriving here was rejected.
                     'No image was generated: the user did not ask for an image in this request. Answer the request in text, do not generate an image.'
                 } else { Invoke-Tool $name $arguments ([string]$JobData.boundFolder) }
+                if (Test-WebToolFailure $name $result) { $script:webToolFailCount++ }
                 $approval = if ($script:lastApprovalOutcome) { $script:lastApprovalOutcome } else { 'not_required' }
                 $auditResult = if ($approval -in @('asked_no', 'cancelled', 'timeout')) { 'denied' } else { 'ok' }
                 Write-AuditLog $name $approval $auditResult $auditDetail ([string]$script:createdArtifact)

@@ -105,6 +105,123 @@ def test_stream_watchdog_uses_fresh_connection_and_survives_dropped_stream():
     assert "$result.finishReason = 'connection-closed'" in inference
 
 
+def test_web_tool_failure_is_detected_and_discourages_workarounds():
+    """When web search / page download fails because of the network, a system note
+    stops the model from working around it with run_command (ping/curl...); the tool
+    failure is detected reliably."""
+    inference = read_text("agent/qwen-inference.ps1")
+    desktop = read_text("qwen-desktop.ps1")
+
+    assert "function Test-WebToolFailure" in inference
+    assert "$script:webToolFailCount" in inference
+    assert "Test-WebToolFailure $name $result" in inference
+    # The note appended to the request copy (never written to persistent history); two-tier.
+    assert "work around it" in inference
+    assert "run_command (ping/curl" in inference
+    assert "CLEARLY UNAVAILABLE" in inference
+    # Hard guard against network-probe commands (a small model may ignore the note).
+    assert "$script:webToolFailCount -gt 0 -and" in inference
+    assert "No network command was run" in inference
+    # After the 2nd web failure web tools are no longer offered (prevents a search loop).
+    assert "$offeredTools = if ($script:webToolFailCount -ge 2)" in inference
+    # If the user did not ask about files, the file tools are dropped too (no rummaging).
+    assert "function Test-FileIntent" in inference
+    assert "$blocked += @('list_bound_files', 'read_bound_file')" in inference
+    assert "Test-FileIntent $userText" in inference
+    # A preventive rule in the system prompt too.
+    assert "do NOT try to work around it" in desktop
+
+
+def test_run_command_is_only_offered_on_explicit_command_intent():
+    """Unless the user explicitly asks for a command/terminal, run_command is NOT offered to
+    the model; so the small model cannot divert to absurd command attempts on a web failure."""
+    inference = read_text("agent/qwen-inference.ps1")
+
+    assert "function Test-CommandIntent" in inference
+    assert "if (Test-CommandIntent $userText) {" in inference
+    idx = inference.index("name = 'run_command'")
+    block = inference[idx - 400:idx]
+    assert "Test-CommandIntent $userText" in block
+
+
+def test_command_intent_detection_matrix():
+    """Test-CommandIntent: true only on an explicit command/terminal intent."""
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 is unavailable")
+    script = r"""
+$job = @{ messages = @(@{ role = 'user'; content = 'x' }); compactOnly = $true; provider = 'local'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $false; internet = $false; office = $false; documentCreate = $false }
+$shared = @{ Cancel = $false }
+. '__ROOT__\agent\qwen-inference.ps1' $job $shared | Out-Null
+$cases = @(
+  @{ t = 'run this command: ipconfig'; e = $true }
+  @{ t = 'open the terminal and type dir'; e = $true }
+  @{ t = 'run a powershell script'; e = $true }
+  @{ t = 'ping google.com'; e = $true }
+  @{ t = 'what is the einstein riddle'; e = $false }
+  @{ t = "what's the weather in istanbul"; e = $false }
+  @{ t = 'summarize that in one sentence'; e = $false }
+  @{ t = 'edit the photo'; e = $false }
+)
+$fail = 0
+foreach ($c in $cases) {
+  $got = [bool](Test-CommandIntent $c.t)
+  if ($got -ne [bool]$c.e) { $fail++; Write-Output ("FAIL: '{0}' got={1} expected={2}" -f $c.t, $got, $c.e) }
+}
+Write-Output ("FAILCOUNT=" + $fail)
+""".replace("__ROOT__", str(ROOT))
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ps1", encoding="utf-8-sig", delete=False) as handle:
+        handle.write(script)
+        script_path = Path(handle.name)
+    try:
+        result = subprocess.run(
+            [str(pwsh), "-NoProfile", "-NonInteractive", "-File", str(script_path)],
+            capture_output=True, encoding="utf-8", errors="replace", check=False,
+        )
+    finally:
+        script_path.unlink(missing_ok=True)
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "FAILCOUNT=0" in result.stdout, result.stdout
+
+
+def test_web_tool_failure_detection_matrix():
+    """Test-WebToolFailure: true only for web tools and only on failure."""
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 is unavailable")
+    script = r"""
+$job = @{ messages = @(@{ role = 'user'; content = 'x' }); compactOnly = $true; provider = 'local'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $false; internet = $false; office = $false; documentCreate = $false }
+$shared = @{ Cancel = $false }
+. '__ROOT__\agent\qwen-inference.ps1' $job $shared | Out-Null
+$cases = @(
+  @{ n = 'search_web'; r = '{"error":"Web search failed"}'; e = $true }
+  @{ n = 'search_web'; r = '[{"title":"x","href":"u"}]'; e = $false }
+  @{ n = 'fetch_page'; r = '{"error":"URL host could not be resolved."}'; e = $true }
+  @{ n = 'find_reference_image'; r = '{"error":"image search failed"}'; e = $true }
+  @{ n = 'list_bound_files'; r = '{"error":"unrelated"}'; e = $false }
+  @{ n = 'search_web'; r = ''; e = $true }
+)
+$fail = 0
+foreach ($c in $cases) {
+  $got = [bool](Test-WebToolFailure $c.n $c.r)
+  if ($got -ne [bool]$c.e) { $fail++; Write-Output ("FAIL: $($c.n) got=$got expected=$($c.e)") }
+}
+Write-Output ("FAILCOUNT=" + $fail)
+""".replace("__ROOT__", str(ROOT))
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ps1", encoding="utf-8-sig", delete=False) as handle:
+        handle.write(script)
+        script_path = Path(handle.name)
+    try:
+        result = subprocess.run(
+            [str(pwsh), "-NoProfile", "-NonInteractive", "-File", str(script_path)],
+            capture_output=True, encoding="utf-8", errors="replace", check=False,
+        )
+    finally:
+        script_path.unlink(missing_ok=True)
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "FAILCOUNT=0" in result.stdout, result.stdout
+
+
 def test_ocr_model_swap_keeps_json_response_separate_from_status_events():
     inference = read_text("agent/qwen-inference.ps1")
     start = inference.index("function Invoke-ImageOcrWithModelSwap")

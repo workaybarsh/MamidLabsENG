@@ -1680,6 +1680,13 @@ function Get-SystemPrompt {
     $lines = @()
     $lines += 'You are the MamidLabs assistant. Reply in the language the user writes in (English by default), directly and clearly. The chat model may be local or an API; tools run on the user''s computer.'
     $lines += "Today's date: $(Get-Date -Format 'yyyy-MM-dd')."
+    # LITE (small 9B model): thinking is on but budget-limited. This encourages deep,
+    # step-by-step reasoning instead of a fast/short answer, to reach a more accurate
+    # result within the same budget. The line is fixed per profile, so the prompt prefix
+    # (and thus the KV cache) is not broken (added only for the LITE profile).
+    if ([string]$script:apiSettings.localProfile -eq 'lite') {
+        $lines += 'Think deeply and carefully: before answering, break the problem down, reason step by step, bound your assumptions and aim for the most correct conclusion. For math, logic, planning, code and multi-step problems, target the CORRECT answer instead of a fast one; when needed, try more than one approach and verify the result. Lay out your reasoning briefly, then give a clear and complete answer.'
+    }
     if ($netChip.Checked) { $lines += 'You have internet access: use the search_web and fetch_page tools when up-to-date information is needed.' }
     else { $lines += 'Your internet access is OFF; you cannot search the web.' }
     $consultIds = @($script:apiSettings.providers.Keys | Where-Object { $_ -in (Get-ChatProviderIds) -and $script:apiSettings.providers[$_].model -and (Get-ProviderKey $_) })
@@ -1690,6 +1697,7 @@ function Get-SystemPrompt {
     } else { $lines += 'Agent mode is off; you have no file tools.' }
     $lines += 'Image, video and document tools are used automatically based on the intent of the message; no separate generate button or chip is needed for them.'
     $lines += 'If the user explicitly asks you to run a command and Agent is on, use the run_command tool; do not invent commands on your own or run them without the user asking.'
+    $lines += 'If a tool (especially web search or page download) fails, do NOT try to work around it: do not attempt the same task with other tools or via run_command (ping, curl, wget, Invoke-WebRequest, nslookup, etc.). Report the failure to the user briefly and accurately; if you already have enough information, give a clear answer, otherwise do not make up the result.'
     $lines += 'If the user explicitly asks to generate an image, create a picture or makes a similar request, call generate_image. Do not call generate_image for requests that only describe, analyze or ask questions about an image.'
     if ([string]$script:apiSettings.localProfile -eq 'lite') {
         $lines += 'If the user wants to edit an attached photo (change clothes/hair/background, add/remove an object, put the person in another scene) call the generate_image tool with mode=regenerate; the identity_edit mode is NOT available on this profile (extremely slow on an 8 GB VRAM card, takes minutes).'

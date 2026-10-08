@@ -284,6 +284,25 @@ When the internet chip is on but the network drops (hotspot, DNS timeout), the w
 reading and reference image tools do not raise; they return valid error JSON so the agent loop
 completes its answer without breaking. This behavior is verified by `tests/test_offline_mode.py`.
 
+When a web tool fails this way, the model is stopped from "working around it" (retrying the same
+result via `run_command` with ping/curl/wget/Invoke-WebRequest, or another page/search, or inventing
+the result): the failure is detected by `Test-WebToolFailure` and a "[System note]" is appended to
+the request copy — **without** writing to the persistent history — so the model answers clearly from
+existing knowledge, or states that web access could not be established without inventing the result.
+There is also a preventive rule in the system prompt. Because the small model (LITE) does not
+always follow a prompt note, there are two **hard guards**: (1) once a web tool has failed in the
+same request, **web tools are no longer offered** to the model in later rounds (this stops the search
+loop); (2) `run_command` refuses **network-probe commands** (`ping`, `curl`, `wget`, `nslookup`,
+`ipconfig`, …) without running them. These guards only trigger **after** a web failure; they do not
+affect a user's unrelated, explicit command request. Contract tests: `tests/test_qwen_contracts.py`.
+
+Moreover, **`run_command` is offered to the model only when the user explicitly asks for a command
+or a terminal** (`Test-CommandIntent`): patterns such as command, terminal, console, cmd,
+powershell, bash, script/batch, .bat/.cmd/.ps1/.exe, run, execute, ipconfig, ping, curl, wget,
+nslookup, netstat count as intent. On general questions the tool is not offered, so the model cannot
+attempt to work around anything with commands. When the user explicitly asks, it still needs
+permission (approval) as before.
+
 ## Image reading and OCR
 
 When an image is attached, the user text is checked deterministically. "What is in the image?" and

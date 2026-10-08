@@ -14,7 +14,10 @@ follow [Semantic Versioning](https://semver.org/).
 - Added a **`network_switch`** step to the smoke test: across successive turns the network goes
   online/offline (internet coming and going) and the local worker must not error in any turn.
 - Added a **`history_resume`** step to the smoke test: closing the program mid-conversation and
-  reopening it, the chat is saved, reloaded and continued; no turn errors.
+  reopening it, the chat is saved, reloaded and continued; no turn errors. The step guards against
+  `$done.data` coming back as `$null` across the thread boundary when no tool was called
+  (otherwise a blank message was appended and the server returned
+  `400 All non-assistant messages must contain 'content'`).
 
 ### Fixes
 - Fixed the intermittent **"An existing connection was forcibly closed by the remote host."**
@@ -26,6 +29,21 @@ follow [Semantic Versioning](https://semver.org/).
   answer text present, or a tool call present), a drop is no longer treated as an error, so a
   completed answer is not given a spurious "[Error]" line.
   (`agent/qwen-inference.ps1`)
+- **Stopped the model from "working around" a failed web tool.** When the network is down and web
+  search / page download fails, the model used to try to get the result another way with
+  `run_command` (ping/curl/wget) or to make it up. Such a failure is now detected and a system note
+  is appended to the request copy (never written to the persistent history): it forbids workarounds,
+  asks for a clear answer from existing knowledge, and to otherwise state that web access could not
+  be established without inventing the result. A preventive rule was added to the system prompt too.
+  Two hard guards: after a web failure (1) web tools are no longer offered to the model, and (2)
+  `run_command` refuses network-probe commands (ping/curl/wget/nslookup/ipconfig…) **without running
+  them** (a small model may skip the note).
+- **`run_command` is now offered to the model only when the user explicitly asks for a command or a
+  terminal** (`Test-CommandIntent`). So the model cannot even attempt to "work around" a web failure
+  with commands; on general questions the command tool is not offered and cannot be called. Explicit
+  intent patterns: command, terminal, console, cmd, powershell, bash, script/batch,
+  .bat/.cmd/.ps1/.exe, run, execute, ipconfig, ping, curl, wget, nslookup, netstat.
+  (`agent/qwen-inference.ps1`, `qwen-desktop.ps1`)
 
 ## [1.0.0] - 2026-09-27
 
