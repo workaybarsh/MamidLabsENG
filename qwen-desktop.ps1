@@ -36,6 +36,7 @@ using System;
 using System.Runtime.InteropServices;
 public static class QwenWindow {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int maxCount);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
@@ -62,6 +63,16 @@ $appTitle = 'MamidLabs'
 # CAUTION: when $null is bound to a string parameter PowerShell turns it into "" and
 # FindWindow finds nothing; [NullString]::Value is required to really pass a null class name.
 $existingWindow = [QwenWindow]::FindWindow([NullString]::Value, $appTitle)
+# Only treat a real application window (WinForms class) as the single instance.
+# Explorer's "TabProxyWindow"s can also carry this title, so matching by title alone
+# made a leftover window after a force-kill look "already open" and prevented the
+# app from EVER starting (seen on a real machine). The class check distinguishes
+# them: a real form class starts with WindowsForms10.*.
+if ($existingWindow -ne [IntPtr]::Zero) {
+    $className = New-Object System.Text.StringBuilder 256
+    [void][QwenWindow]::GetClassName($existingWindow, $className, 256)
+    if ($className.ToString() -notlike 'WindowsForms10.*') { $existingWindow = [IntPtr]::Zero }
+}
 if ($existingWindow -ne [IntPtr]::Zero) {
     if ([QwenWindow]::IsIconic($existingWindow)) { [QwenWindow]::ShowWindow($existingWindow, 9) | Out-Null }
     else { [QwenWindow]::ShowWindow($existingWindow, 5) | Out-Null }

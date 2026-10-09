@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/).
 ## [1.0.8] - 2026-10-09
 
 ### Fixed
+- **The app sometimes never opened ("window closed before opening"):** the single-instance
+  check looked only at the window title (`MamidLabs`). When another window carried the same
+  title (e.g. Windows Explorer's `TabProxyWindow`, or a video/media window) the app thought it
+  was "already open" and exited without starting. The check now also verifies the window
+  **class** (only a `WindowsForms10.*` window counts as the real app window).
 - **"Model operation failed" and memory spill (structural root cause):** the only big CUDA
   context the app creates was an idle ComfyUI. With that context open the driver keeps VRAM
   fragmented; even when the free figure looks sufficient the 27B model spills into shared

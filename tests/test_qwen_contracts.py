@@ -272,6 +272,21 @@ def test_chat_history_remains_account_encrypted():
     assert "$loadedChatId -match '^[0-9a-fA-F]{32}$'" in desktop
 
 
+def test_single_instance_check_verifies_the_window_class():
+    """Another window carrying the 'MamidLabs' title (e.g. Explorer's TabProxyWindow
+    or a video/media window) made the app think it was 'already open' and prevented
+    it from EVER starting (seen on a real machine; the UI smoke step reported
+    'window closed before opening'). The single-instance check now accepts only a
+    real WinForms window (class name WindowsForms10.*)."""
+    desktop = read_text("qwen-desktop.ps1")
+    assert "GetClassName" in desktop
+    assert "WindowsForms10.*" in desktop
+    idx_find = desktop.index("[QwenWindow]::FindWindow([NullString]::Value, $appTitle)")
+    idx_class = desktop.index("WindowsForms10.*", idx_find)
+    idx_return = desktop.index("return", idx_find)
+    assert idx_find < idx_class < idx_return
+
+
 def test_remote_url_validation_blocks_local_and_non_http_targets():
     path = ROOT / "agent" / "qwen-agent-tools.py"
     spec = importlib.util.spec_from_file_location("qwen_agent_tools", path)

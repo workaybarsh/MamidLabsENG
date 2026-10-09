@@ -178,7 +178,6 @@ The images and videos below were generated locally with MamidLabs.
 |---|---|
 | [docs/installation.md](docs/installation.md) | Installation, updating, verification, uninstalling and troubleshooting |
 | [docs/technical-notes.md](docs/technical-notes.md) | Profiles, memory budget, media pipeline, tools and known notes |
-| [docs/session-report-2026-10-09.md](docs/session-report-2026-10-09.md) | 1.0.8 session report: spill fix, profile delete, measurements (MTP, tok/s) |
 | [AGENTS.md](AGENTS.md) | Infrastructure guide for developers and AI agents |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 
