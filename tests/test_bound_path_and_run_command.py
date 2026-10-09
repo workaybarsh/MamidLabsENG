@@ -19,6 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PRELUDE = r"""
 $ErrorActionPreference = 'Stop'
+# Python decodes the output as UTF-8; if the console code page differs (e.g. cp1254
+# on Turkish Windows) non-ASCII characters get corrupted and the test becomes
+# environment-dependent. Pin the output encoding to make the test deterministic.
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 function Get-Functions([string]$path) {
     $tokens=$null; $errs=$null
     $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errs)
