@@ -177,6 +177,7 @@ The images and videos below were generated locally with MamidLabs.
 |---|---|
 | [docs/installation.md](docs/installation.md) | Installation, updating, verification, uninstalling and troubleshooting |
 | [docs/technical-notes.md](docs/technical-notes.md) | Profiles, memory budget, media pipeline, tools and known notes |
+| [docs/presentation/](docs/presentation/) | Technical presentation: source, HTML and PDF (32 slides) |
 | [AGENTS.md](AGENTS.md) | Infrastructure guide for developers and AI agents |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 

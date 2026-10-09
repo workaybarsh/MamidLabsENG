@@ -61,7 +61,7 @@ Repository: `github.com/workaybarsh/MamidLabsENG`. Default install root:
 | `requirements/app.txt`, `requirements/imagegen.txt` | Python packages (pinned versions) |
 | `tests/` | pytest; also runs PowerShell functions with a real `pwsh` |
 | `tests/ui-automation/` | Helpers that drive the app and the wizard with UI Automation/Win32 |
-| `docs/` | `installation.md`, `technical-notes.md`, `media/` |
+| `docs/` | `installation.md`, `technical-notes.md`, `media/`, `presentation/` (deck source + PDF) |
 | `.github/workflows/` | `tests.yml` (pytest), `installer.yml` (Inno build and release publishing) |
 | `AGENTS.md`, `CLAUDE.md` | This guide; `CLAUDE.md` points here for Claude Code. Not copied into the install root. |
 
@@ -482,6 +482,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-09 | Added the technical presentation (`docs/presentation/`): source script (`make-presentation.py`), HTML and a 32-slide 16:9 PDF. The original structure/theme is preserved and 1.0.8 features are included (spill fix, delete profile, PRO label, LITE+MAX measurements). | docs/presentation/, README.md |
 | 2026-10-09 | Fixed the structural root cause of the spill / "Model operation failed" (1.0.8): the app's only big CUDA context, ComfyUI, is now ALWAYS closed before the language model loads (with the context open the driver fragments VRAM; 15,290 MiB "free" + context → 6 tok/s). The MAX/FLASH margin was lowered 800→600 MiB (threshold 15200); a 27B model that runs fine at 15244 MiB free on a clean GPU is no longer rejected. LITE+MAX verified together (97 / 58 tok/s). Added "Delete profile" to the Profile manager (only profile-unique files; LITE's shared media is kept). The 27B wizard label is now "PRO". Applied to the Turkish edition too. | scripts/manage-qwen.ps1, agent/profile-catalog.ps1, packaging/windows/mamidlabs.iss, tests/test_memory_admission.py, tests/test_profile_delete.py |
 | 2026-10-09 | Fixed a VRAM threshold regression (1.0.7): the 1.0.6 margin of 1000 MiB made the threshold 15600 MiB and wrongly rejected the machine's normal free value (15442–15558). The margin is now 800 MiB (threshold 15400); ComfyUI is closed when open, the model loads when it is closed / on a cold boot. Applied to the Turkish edition too. | scripts/manage-qwen.ps1, tests/test_memory_admission.py |
 | 2026-10-09 | Fixed the root cause of the post-media drop to ~6 tok/s: the VRAM budget under-counted the real load (margin 300→1000 MiB, MAX/FLASH tolerance 256→0). The 27B model needs ~15378-15442 MiB on the GPU; with an idle ComfyUI the MTP draft context moved to the CPU and production dropped 44→6-7 tok/s. LITE is unchanged (margin 300, tolerance 1024). `Release-Comfy` now verifies real free VRAM. Added a `ui` smoke step that drives the real app (MTP + "connection dropped" check). | scripts/manage-qwen.ps1, agent/media-model-swap.ps1, agent/imagegen-run.ps1, agent/videogen-run.ps1, scripts/smoke-test.ps1, tests/test_memory_admission.py, tests/test_media_release.py, tests/test_smoke_test_script.py |
