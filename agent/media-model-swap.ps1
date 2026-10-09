@@ -74,10 +74,26 @@ function Start-OrReuseComfy([string]$python, [string]$comfyDir, [string]$comfyOu
     throw "ComfyUI was not ready in $timeoutSec seconds."
 }
 
+# Instant free VRAM (MiB) via nvidia-smi. Returns $null if unavailable/unreadable; the
+# caller then skips the extra check (llama-server gives the real error anyway).
+function Get-MediaFreeVramMiB {
+    $smi = (Get-Command nvidia-smi -ErrorAction SilentlyContinue).Source
+    if (!$smi) { return $null }
+    try { return [int](((& $smi --query-gpu=memory.free --format=csv,noheader,nounits) | Select-Object -First 1) -replace '\D', '') }
+    catch { return $null }
+}
+
 # Unloads the models and the cache; before the language model is reloaded it waits until VRAM
 # is really freed (the /free flag is handled in ComfyUI's job loop).
 # If it does not free up, the process is closed - so the language model is not left without VRAM.
-function Release-Comfy($process, [string]$comfyUrl) {
+#
+# $minFreeMiB: the minimum free VRAM needed for the language model to fit fully. Even when
+# ComfyUI /free unloads its model cache (torch_vram_total < 512 MB), the CUDA context and the
+# driver-side reservation may hold VRAM for a while; looking only at the torch counter could
+# let the language model spill into shared memory and drop to ~6 tok/s (measured after media).
+# So when $minFreeMiB > 0 the real free VRAM is also verified; if it is not enough, ComfyUI is
+# closed and releases VRAM together with its context.
+function Release-Comfy($process, [string]$comfyUrl, [int]$minFreeMiB = 0) {
     try {
         Invoke-RestMethod "$comfyUrl/free" -Method Post -ContentType 'application/json' `
             -Body '{"unload_models":true,"free_memory":true}' -TimeoutSec 10 | Out-Null
@@ -85,7 +101,11 @@ function Release-Comfy($process, [string]$comfyUrl) {
         while ([DateTime]::UtcNow -lt $deadline) {
             Start-Sleep -Milliseconds 500
             $device = @((Invoke-RestMethod "$comfyUrl/system_stats" -TimeoutSec 5).devices)[0]
-            if ($device -and [double]$device.torch_vram_total -lt 512MB) { return }
+            if ($device -and [double]$device.torch_vram_total -lt 512MB) {
+                if ($minFreeMiB -le 0) { return }
+                $free = Get-MediaFreeVramMiB
+                if ($null -eq $free -or $free -ge $minFreeMiB) { return }
+            }
         }
     } catch { }
     if ($process -and !$process.HasExited) {

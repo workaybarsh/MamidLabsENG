@@ -13,10 +13,40 @@ def read_text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_every_component_can_be_skipped_independently():
+def test_smoke_skip_flags_include_ui():
     script = read_text("scripts/smoke-test.ps1")
-    for flag in ("SkipChat", "SkipDocument", "SkipImage", "SkipVideo"):
+    for flag in ("SkipChat", "SkipDocument", "SkipImage", "SkipVideo", "SkipUi"):
         assert f"[switch]${flag}" in script
+
+
+def test_ui_step_launches_real_app_and_checks_mtp_and_no_connection_error():
+    """UI step: launches the real app, verifies the window + model are ready, runs one turn
+    with the real worker the UI uses, and proves there is no 'connection dropped' / watchdog
+    text and that MTP works."""
+    script = read_text("scripts/smoke-test.ps1")
+
+    assert "Join-Path $Root 'qwen-desktop.ps1'" in script
+    assert "'-STA'" in script
+    assert "agent\\qwen-inference.ps1" in script
+    assert "--spec-type\\s+draft-mtp" in script
+    assert "draft_n_accepted" in script
+    # Unwanted drop/close text is searched LITERALLY (.Contains); -like "*[Error]*" is a
+    # character class in PowerShell and gives false positives.
+    assert "$joined.Contains($marker)" in script
+    assert '-like "*$marker*"' not in script
+    for marker in ("forcibly closed", "connection dropped", "WSAECONNRESET", "[Error]"):
+        assert marker in script
+    assert "Report 'ui'" in script
+
+
+def test_ui_step_restores_settings_and_stops_the_server():
+    """The app overwrites the settings on exit and stops its own server; the step must back
+    up and restore the settings and stop the server."""
+    script = read_text("scripts/smoke-test.ps1")
+    assert "mamidlabs-smoke-settings-backup" in script
+    assert "Copy-Item -LiteralPath $settingsDir -Destination $settingsBackup" in script
+    assert "Copy-Item -LiteralPath $settingsBackup -Destination $settingsDir" in script
+    assert "& $manage -Action stop" in script
 
 
 def test_each_component_reports_pass_or_fail_independently():

@@ -293,7 +293,8 @@ try {
     Remove-Item -LiteralPath $sourcePath -Force -ErrorAction SilentlyContinue
 
     Emit 'status' 'Unloading the video model from memory...'
-    Release-Comfy $comfy $comfyUrl
+    # Minimum free VRAM for the language model to fit fully.
+    Release-Comfy $comfy $comfyUrl $(if ($lite) { 6000 } else { 14000 })
     $comfy = $null
     $Shared.Process=$null
 

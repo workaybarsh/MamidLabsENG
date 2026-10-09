@@ -98,21 +98,37 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     # conditions (browser + desktop holding ~1.5 GB VRAM), silently reject the default
     # profile and deprive the user of a working installation.
     #
-    # MAX/FLASH real measurement (RTX 5060 Ti 16 GB, 32K context, llama.cpp --verbose
-    # memory dump): 644 MiB (token_embd) of the 14600 MiB file stays on the CPU;
-    # on the GPU 13729 weights + 576 KV + 150 recurrent + 184 compute = ~14640 MiB, i.e.
-    # file size + ~40 MiB. The margin was kept at 300 MiB. The previous +2560 MiB margin asked
-    # for 17160+ MiB; since that is larger than the free space of a 16 GB card (~15000-15700 MiB)
-    # MAX could never start on its target hardware.
-    $overheadMiB = 300
+    # MAX/FLASH real measurement (RTX 5060 Ti 16 GB, 32K context, llama.cpp): the 14600 MiB
+    # file takes ~15378-15442 MiB on the GPU. The ~780-840 MiB difference is the q4_0 KV
+    # cache of the 32K context + the compute buffer + the MTP draft context. The old 300 MiB
+    # margin did not count that extra load, so the check said "it fits", but with an idle
+    # ComfyUI (~300-460 MiB) the model did not fully fit and one component (the MTP draft
+    # context) silently moved to the CPU: measured, production dropped from 44 tok/s to
+    # ~6-7 tok/s (llamaVRAM 15378/15442 -> 15193).
+    #
+    # So the margin is 800 MiB for the 16 GB profiles; that lands in the card's real free
+    # range. Measured (RTX 5060 Ti): the model needs ~15422-15442 MiB on the GPU; an idle
+    # ComfyUI pulls free VRAM down to ~15020 MiB (the 27B no longer fits, ~6 tok/s); with
+    # ComfyUI closed / on a cold boot free VRAM is ~15442-15670 MiB. The threshold is
+    # model+800=15400 MiB; so with ComfyUI open (15020 < 15400) it is closed, and cold/at
+    # boot (>=15442) the model loads. A larger margin (e.g. 1000 -> threshold 15600) even
+    # rejected the machine's normal free value (seen on a real machine).
+    #
+    # On LITE the margin is deliberately small (300 MiB) and the tolerance is wide: on an
+    # 8 GB card the model already runs at the limit; llama.cpp keeps the big embedding tensor
+    # on the CPU and absorbs a small overflow, still running at ~41 tok/s. Enlarging the
+    # margin here would reject a working LITE install for nothing.
+    $overheadMiB = if ($profileName -eq 'lite') { 300 } else { 800 }
     $neededMiB = $modelMiB + $overheadMiB
     # llama.cpp keeps the big embedding (token_embd) tensor on the CPU when VRAM is short
     # and tolerates a small overflow. On LITE the MTP head grows the file by ~464 MiB; on
-    # an 8 GB card the model still loaded at ~165 MiB over and ran at ~41 tok/s (only 32 MiB
-    # free). So a small overflow is not blocked; only a clear overflow (margin plus ~1 GB)
-    # stops it, so layers do not spill into shared memory and slow chat down badly. MAX (27B,
-    # 16 GB) keeps the margin as before.
-    $toleranceMiB = 1024
+    # an 8 GB card the model still loaded at ~165 MiB over and ran at ~41 tok/s. So a small
+    # overflow is not blocked on LITE; the tolerance there is wide. For MAX/FLASH (16 GB) the
+    # tolerance is ZERO: the 27B model already runs at the card's limit and even a ~185 MiB
+    # overflow pushed the MTP draft context to the CPU, dropping production to ~6-7 tok/s.
+    # With tolerance 0, when free VRAM is short an idle ComfyUI is closed first (see below)
+    # and the model fits fully, so loading is consistent every time.
+    $toleranceMiB = if ($profileName -eq 'lite') { 1024 } else { 0 }
     if ($freeMiB -lt ($neededMiB - $toleranceMiB)) {
         throw ("Not enough free VRAM: $freeMiB MiB free, the `"$profileName`" profile " +
             "needs an estimated $neededMiB MiB at least (model ~$modelMiB MiB, cache/compute " +

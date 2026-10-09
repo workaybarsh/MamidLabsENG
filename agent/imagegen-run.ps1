@@ -372,7 +372,9 @@ try {
         Remove-Item -Force -ErrorAction SilentlyContinue
 
     Emit 'status' 'Unloading the image model from memory...'
-    Release-Comfy $comfy $comfyUrl
+    # Minimum free VRAM for the language model to fit fully (MAX/FLASH ~14.6 GB; LITE ~6.2 GB
+    # + projector). If it is not enough, ComfyUI is closed.
+    Release-Comfy $comfy $comfyUrl $(if ($lite) { 6000 } else { 14000 })
     $comfy = $null
     $Shared.Process = $null
 

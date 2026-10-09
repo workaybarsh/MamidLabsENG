@@ -3,6 +3,43 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.7] - 2026-10-09
+
+### Fixed
+- **The VRAM threshold could wrongly reject the machine (a 1.0.6 regression):** in 1.0.6 the
+  MAX/FLASH margin was raised to 1000 MiB, making the threshold 15600 MiB, which even the
+  machine's normal free value (15442–15558 MiB) fell below, raising "Not enough free VRAM"
+  (the chat and UI smoke steps failed). Measured: the model needs ~15422–15442 MiB on the GPU;
+  with ComfyUI open free VRAM drops to ~15020 MiB. The margin is now **800 MiB** (threshold
+  15400): ComfyUI is closed when open, and the model loads with ComfyUI closed / on a cold
+  boot. The same fix is applied to the Turkish edition.
+
+## [1.0.6] - 2026-10-09
+
+### Added
+- **UI smoke step (`ui`):** the smoke test now launches the real desktop app (`qwen-desktop.ps1`)
+  and verifies the window and the language model are ready; it then runs one turn with the real
+  worker the UI uses (`agent/qwen-inference.ps1`) and proves there is **no "connection
+  dropped"/watchdog text** and that **MTP really works** (`--spec-type draft-mtp` + draft
+  acceptance). Because the app overwrites the settings on exit, the settings are backed up and
+  restored (skippable with `-SkipUi`).
+
+### Fixed
+- **Root cause of the post-media drop to ~6 tok/s:** the VRAM budget under-counted the real load
+  (model + 300 MiB). The 27B model takes ~**15,378–15,442 MiB** on a 16 GB card (32K context, q4_0
+  KV, MTP draft context); with an idle ComfyUI (~300–460 MiB) it no longer fit fully and the MTP
+  draft context (~185 MiB) silently moved to the CPU, dropping production from 44 tok/s to ~6–7
+  tok/s (measured: llamaVRAM 15378 → 15193). The margin is now **1000 MiB** and the MAX/FLASH
+  tolerance is **0**, so when free VRAM is short an idle ComfyUI is closed and the model fits
+  fully every time. LITE is unchanged (margin 300, tolerance 1024).
+- **`Release-Comfy` hardening:** even when ComfyUI `/free` unloads its torch cache, the CUDA context
+  and driver-side reservation may still hold VRAM; the real free VRAM (`nvidia-smi`) is now
+  verified and ComfyUI is closed when it is not enough (image/video workers pass the MAX/FLASH
+  14000 MiB / LITE 6000 MiB threshold).
+- **Missing update package:** script-based updating (`install-mamidlabs.ps1 -Stage layout`) did not
+  refresh the wizard source package (`setup-source`); on a wizard-installed root it stayed at the
+  previous version. It is now refreshed when present.
+
 ## [1.0.4] - 2026-10-08
 
 ### Added

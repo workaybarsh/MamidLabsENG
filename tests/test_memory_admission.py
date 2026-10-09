@@ -57,17 +57,40 @@ def test_start_action_accepts_skip_memory_check_switch():
 
 
 def test_max_budget_fits_a_16_gb_card():
-    """Measured on an RTX 5060 Ti 16 GB: ~15008 MiB free before loading, the MAX language
-    model file 14600 MiB, real use on the GPU ~14640 MiB. The old +2560 MiB margin
-    asked for 17160+ MiB and never started MAX on its target hardware."""
+    """Measured on an RTX 5060 Ti 16 GB: the model needs ~15422-15442 MiB on the GPU; an idle
+    ComfyUI pulls free VRAM down to ~15020 MiB (the model no longer fits, ~6 tok/s). The
+    MAX/FLASH budget must be model + 800 MiB (needed 15400 MiB): it fits with ComfyUI closed
+    (~15442-15670 free) but not with ComfyUI open (~15020 free), so ComfyUI is closed."""
     import re
 
     manager = read_text("scripts/manage-qwen.ps1")
-    match = re.search(r"\$overheadMiB = (-?\d+)\s*$", manager, re.MULTILINE)
-    assert match, "overheadMiB line not found"
-    measured_free_mib = 15008
+    match = re.search(r"\$overheadMiB = if \(\$profileName -eq 'lite'\) \{ (\d+) \} else \{ (\d+) \}", manager)
+    assert match, "profile-aware overheadMiB line not found"
+    overhead = int(match.group(2))  # else branch = MAX/FLASH
+    assert overhead == 800
     max_model_mib = 14600
-    assert max_model_mib + int(match.group(1)) <= measured_free_mib
+    measured_free_with_comfy_open = 15020
+    measured_free_with_comfy_closed = 15442
+    needed = max_model_mib + overhead  # 15400
+    assert needed <= measured_free_with_comfy_closed
+    assert needed > measured_free_with_comfy_open
+    # A 1000 MiB margin (threshold 15600) even rejected the machine's normal free value.
+    assert needed < max_model_mib + 1000
+
+
+def test_lite_budget_is_not_tightened_by_the_max_fix():
+    """The root-cause fix (larger margin, tolerance 0) applies only to the 16 GB profiles.
+    LITE runs at the limit on an 8 GB card and llama.cpp absorbs a small overflow; enlarging
+    the margin there would reject a working LITE install. So the LITE margin stays 300 MiB
+    and its tolerance stays 1024."""
+    import re
+
+    manager = read_text("scripts/manage-qwen.ps1")
+    match = re.search(r"\$overheadMiB = if \(\$profileName -eq 'lite'\) \{ (\d+) \} else \{ (\d+) \}", manager)
+    assert match, "profile-aware overheadMiB line not found"
+    assert int(match.group(1)) == 300, "LITE margin was enlarged (breaks the LITE install)"
+    tol = next((l for l in manager.splitlines() if "$toleranceMiB = if" in l), "")
+    assert "{ 1024 } else { 0 }" in tol
 
 
 def test_max_projector_runs_on_cpu_and_stays_out_of_vram_budget():
@@ -86,6 +109,6 @@ def test_memory_budget_tolerates_small_overflow_for_mtp_grown_lite():
     ~41 tok/s). A small overflow must not block; only a clear overflow (~1 GB over the margin)
     stops it."""
     manager = read_text("scripts/manage-qwen.ps1")
-    assert "$toleranceMiB = 1024" in manager
+    assert "$toleranceMiB = if ($profileName -eq 'lite') { 1024 } else { 0 }" in manager
     assert "if ($freeMiB -lt ($neededMiB - $toleranceMiB))" in manager
     assert "Write-Warning" in manager

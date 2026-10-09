@@ -135,10 +135,23 @@ single "Qwen3.8 27B" entry (`Get-ProfileCatalogForDisplay`); switching happens i
 Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFilesPresent`) must use
 the full catalog (`Get-ProfileCatalog`).
 
-**VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + 300 MiB. If free
-VRAM is not enough, an idle ComfyUI is closed first and memory is measured again; if it is still not
-enough a "Not enough free VRAM" error is raised. The goal is to keep the model from spilling into
-shared system memory and slowing chat down. On a 16 GB card the 27B model uses ~14,640 MiB.
+**VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + **800 MiB**.
+If free VRAM is not enough, an idle ComfyUI is closed first and memory is measured again; if it is
+still not enough a "Not enough free VRAM" error is raised. The goal is to keep the model from
+spilling into shared system memory and slowing chat down. The 800 MiB margin comes from
+measurement: the 27B file is 14,600 MiB but takes ~**15,422–15,442 MiB** on the GPU; the ~822-842
+MiB difference is the q4_0 KV cache of the 32K context + the compute buffer + the MTP draft
+context. The old 300 MiB margin was too small, so with an idle ComfyUI (~300–460 MiB) the model did
+not fully fit and the MTP draft context (~185 MiB) silently moved to the CPU: measured, production
+dropped 44 → ~6–7 tok/s (llamaVRAM 15378 → 15193). The 800 MiB threshold (model+800 = 15400) lands
+in the machine's real free range: with ComfyUI open free is ~15020 (< 15400) → the idle ComfyUI is
+closed; with ComfyUI closed / on a cold boot free is ~15442–15670 (≥ 15400) → the model loads. A
+1000 MiB margin (threshold 15600) even wrongly rejected this machine's normal free value
+(15442–15558; seen on a real machine). The tolerance is profile-based: **LITE 1024 MiB** (9B MTP
+model's small overflow on an 8 GB card; llama.cpp keeps the big embedding tensor on the CPU),
+**MAX/FLASH 0** (27B runs at the card's limit; even a small overflow is a disaster). With
+tolerance 0 an idle ComfyUI is closed and the model fits fully every time. Measured: 27B ~44 tok/s
+when it fits fully.
 
 ## 6. Flow of a chat request
 
@@ -175,6 +188,10 @@ shared system memory and slowing chat down. On a 16 GB card the 27B model uses ~
   `agent\imagegen-run.ps1` with `Start-ImageGeneration`. The language model only writes the prompt.
 - `media-model-swap.ps1`: `Stop-LocalModelForMedia` → `Start-OrReuseComfy` → generation → reload the
   language model with `restoreProfile`. On LITE ComfyUI uses `--lowvram` and Krea-2 GGUF.
+  - After a job `Release-Comfy` unloads the models via `/free`; **even when the torch counter resets
+    it verifies the real free VRAM (`nvidia-smi`)** and closes ComfyUI when it is not enough for the
+    model to reload (MAX/FLASH 14000 MiB, LITE 6000 MiB). Otherwise the CUDA context holds VRAM while
+    the language model starts, it spills into shared memory and chat drops to ~6 tok/s.
 - **Modes** (`generate_image.mode`):
   - `new`: generates from text. Krea-2 Turbo, 8 steps, cfg 1.
   - `regenerate` / `style_reference`: start from the attached image.
@@ -242,6 +259,9 @@ shared system memory and slowing chat down. On a 16 GB card the 27B model uses ~
   `runtime`, `llama`, `python`, `comfyui` (brings the pinned commits, backs up local changes to
   `tools\backup\*.patch`), `verify`. If the app is open, `layout` stops because the files are
   locked. Package sizes are verified. The `-Root` default is `%LOCALAPPDATA%\Programs\MamidLabs`.
+  In a wizard-installed root, `layout` also refreshes `setup-source` if present (the source package
+  the wizard extracts, used for cancel/rollback and reinstall); it does not create it for a
+  script-based install.
 - Pinned versions: PowerShell 7.6.6, llama.cpp b10998 (CUDA 13.4), ComfyUI `b0f4b7b`, ComfyUI-GGUF
   `6ea2651`, comfyui-krea2edit `86f886d`, torch cu130.
 - Disk thresholds (`profile-report.ps1` and `install-mamidlabs.ps1`, identical): LITE 58 GB,
@@ -323,7 +343,10 @@ python -m pytest -q          # ~250 tests, ~90 s; no extra setup needed (tests/c
   `draft-mtp`, the `/completion` response's `timings.draft_n_accepted` must be > 0; 0 means the head is
   ineffective; skippable with `-SkipMtp`), `ocr`, `image`, `edit`,
   `post_media_switch` (the speed
-  ratio after an image must be ≥ 0.7), `video`.
+  ratio after an image must be ≥ 0.7), `video`, `ui` (launches the real desktop app; the window +
+  model must be ready, one turn with the real worker the UI uses must answer with no
+  "connection dropped"/watchdog text, and MTP must work; skippable with `-SkipUi`). `ui` runs last
+  because the app stops the server on exit.
 - **CI:** `tests.yml` (windows-latest, Python 3.12) on every push/PR; `installer.yml` when
   package-related paths change. Merged into `master` via PR.
 
@@ -369,8 +392,11 @@ has no LoRA.
    Put per-turn text into the last user message.
 6. **Use `Start-DetachedProcess`.** `Start-Process -Redirect…` inherits the caller's stdout pipe and
    `manage-qwen | …` hangs.
-7. **The VRAM margin is kept small** (300 MiB). A large margin keeps MAX from ever starting on a 16 GB
-   card. On MAX/FLASH the mmproj runs on the CPU (`--no-mmproj-offload`). On the GPU it spills
+7. **The VRAM margin is profile-based** (LITE 300 MiB, MAX/FLASH 1000 MiB) and the tolerance is
+   LITE 1024 / MAX/FLASH 0. On a 16 GB card a margin that is too large keeps MAX from
+   ever starting, while too small lets the 27B model spill into shared memory and drop to ~6 tok/s.
+   That is why the margin is 1000 MiB for the 27B and an idle ComfyUI is closed to make room. On
+   MAX/FLASH the mmproj runs on the CPU (`--no-mmproj-offload`). On the GPU it spills
    ~420 MiB into shared memory and speed drops from 25 to 19 tok/s.
 8. **Single image rule:** only one image at a time goes to chat (multiple images only in the
    "multi-image reading mode", via OCR).
@@ -453,6 +479,9 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-09 | Fixed a VRAM threshold regression (1.0.7): the 1.0.6 margin of 1000 MiB made the threshold 15600 MiB and wrongly rejected the machine's normal free value (15442–15558). The margin is now 800 MiB (threshold 15400); ComfyUI is closed when open, the model loads when it is closed / on a cold boot. Applied to the Turkish edition too. | scripts/manage-qwen.ps1, tests/test_memory_admission.py |
+| 2026-10-09 | Fixed the root cause of the post-media drop to ~6 tok/s: the VRAM budget under-counted the real load (margin 300→1000 MiB, MAX/FLASH tolerance 256→0). The 27B model needs ~15378-15442 MiB on the GPU; with an idle ComfyUI the MTP draft context moved to the CPU and production dropped 44→6-7 tok/s. LITE is unchanged (margin 300, tolerance 1024). `Release-Comfy` now verifies real free VRAM. Added a `ui` smoke step that drives the real app (MTP + "connection dropped" check). | scripts/manage-qwen.ps1, agent/media-model-swap.ps1, agent/imagegen-run.ps1, agent/videogen-run.ps1, scripts/smoke-test.ps1, tests/test_memory_admission.py, tests/test_media_release.py, tests/test_smoke_test_script.py |
+| 2026-10-09 | Script-based updating (`install-mamidlabs.ps1 -Stage layout`) now refreshes the wizard source package (`setup-source`) if present, so it no longer stays at the previous version. | scripts/install-mamidlabs.ps1, tests/test_install_layout_source.py |
 | 2026-10-08 | Added local web management: browser access to chat/model switching/generated files. The server (`agent/web-server.ps1`) binds to localhost only by default, has a fixed password + HttpOnly/SameSite=Strict session cookie (30 days), a single-use 5-minute connect link (OpenCode 'pair' style), locks out after 5 failed logins, and confines file access to `outputs\`. Also: the VRAM check now tolerates a small overflow after MTP (fixes the model-does-not-start error); the private-repo update check uses a GitHub token; generated files open in one click via "Open". | agent/web-server.ps1, agent/web-settings.ps1, scripts/web-serve.ps1, scripts/manage-qwen.ps1, agent/profile-catalog.ps1, qwen-desktop.ps1, tests/test_web_server.py, tests/test_memory_admission.py, tests/test_qwen_contracts.py |
 | 2026-10-08 | License changed from MIT to a proprietary (all rights reserved; copyright: Aybars Haydar Altuntaş) license. | LICENSE, README.md, docs/installation.md, tests/test_setup_wizard.py, CHANGELOG.md |
 | 2026-10-08 | Enabled MTP on LITE: the MTP/nextn head dropped in conversion is added to the 9B GGUF during download by `mtp_inject.py` (only the MTP tensors from the source HF safetensors via HTTP range; `w+1` on norms). `manage-qwen.ps1` now enables MTP whenever the GGUF has `nextn` layers (max/flash/lite) via `Test-GgufHasMtp`. Measured acceptance ~0.93, ~2x speed; output is lossless. | agent/mtp_inject.py, agent/hf-hub.py, agent/profiles.json, agent/profile-catalog.ps1, scripts/download-profile.ps1, scripts/manage-qwen.ps1, tests/test_lite_profile.py, tests/test_mtp_inject.py |

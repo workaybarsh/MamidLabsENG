@@ -278,6 +278,36 @@ function Invoke-Layout {
     }
     Write-Ok ('Program files copied -> ' + $Root)
 
+    # A wizard-installed root also keeps the program source under {root}\setup-source; Inno's
+    # cancel/rollback and reinstall use it. Script-based updating (this stage) did not refresh
+    # that folder, so it stayed at the previous version; if present it is refreshed with the
+    # same [Files] set. It is not created for a script-based install (folder absent).
+    $setupSource = Join-Path $Root 'setup-source'
+    if (Test-Path -LiteralPath $setupSource -PathType Container) {
+        foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE')) {
+            $from = Join-Path $Source $file
+            if (Test-Path -LiteralPath $from -PathType Leaf) { Copy-Item -LiteralPath $from -Destination $setupSource -Force }
+        }
+        foreach ($folder in @('agent', 'scripts', 'requirements')) {
+            $from = Join-Path $Source $folder
+            if (Test-Path -LiteralPath $from) { Copy-Item -LiteralPath $from -Destination $setupSource -Recurse -Force }
+        }
+        $assets = Join-Path $Source 'assets'
+        if (Test-Path -LiteralPath $assets) {
+            # assets\installer is only used to build the wizard; the .iss excludes it too.
+            New-Item -ItemType Directory -Path (Join-Path $setupSource 'assets') -Force | Out-Null
+            Get-ChildItem -LiteralPath $assets -Force | Where-Object { $_.Name -ne 'installer' } | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $setupSource 'assets') -Recurse -Force
+            }
+        }
+        $doc = Join-Path $Source 'docs\installation.md'
+        if (Test-Path -LiteralPath $doc -PathType Leaf) {
+            New-Item -ItemType Directory -Path (Join-Path $setupSource 'docs') -Force | Out-Null
+            Copy-Item -LiteralPath $doc -Destination (Join-Path $setupSource 'docs\installation.md') -Force
+        }
+        Write-Ok ('Setup source package refreshed -> ' + $setupSource)
+    }
+
     # Desktop shortcut: double-click to open, runs without opening a console window. If MamidLabs.lnk
     # points to an installation in another folder it is not touched; for this installation
     # "MamidLabs (<folder>).lnk" is created. The uninstaller deletes only the ones pointing to this root.

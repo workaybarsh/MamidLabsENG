@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    End-to-end smoke test after installation: chat, document, offline tools, network switches, history resume, MTP, OCR, image, video.
+    End-to-end smoke test after installation: chat, document, offline tools, network switches, history resume, MTP, OCR, image, edit, video and the real UI (MTP + connection-error check).
 
 .DESCRIPTION
     install-mamidlabs.ps1 only prepares the infrastructure (binaries, environments);
@@ -48,6 +48,8 @@ param(
     [switch]$SkipHistoryResume,
     # Skips the MTP (speculative decoding) verification step.
     [switch]$SkipMtp,
+    # Skips launching the real desktop app to verify MTP and the connection-error check.
+    [switch]$SkipUi,
     # If the post-media chat speed drops below this ratio (relative to the first measurement) it counts as VRAM overflow.
     [double]$MinSpeedRatio = 0.7,
     [string]$ReportPath
@@ -576,6 +578,103 @@ if ($SkipVideo) {
         Report 'video' $true ("$([int]$sw.Elapsed.TotalSeconds) s, " + [IO.Path]::GetFileName($videoEvent.text) + " ($([math]::Round($size/1KB)) KB)")
     } catch {
         Report 'video' $false $_.Exception.Message
+    }
+}
+
+# -------------------------------------------------------------------- UI
+# Launches the real desktop app (qwen-desktop.ps1); verifies the window and the language model
+# are ready. Then runs one turn with the real inference worker the UI uses
+# (agent\qwen-inference.ps1) to prove there is no "connection dropped / could not start"
+# turn and that MTP (--spec-type draft-mtp) really works. The app stops the server on exit,
+# so this step runs last (after video).
+Write-Section 'UI (real app) + MTP'
+if ($SkipUi) {
+    Write-Host '   [skip] -SkipUi given'
+} else {
+    $settingsDir = Join-Path $Root 'settings'
+    $settingsBackup = Join-Path $env:TEMP 'mamidlabs-smoke-settings-backup'
+    $appProcess = $null
+    try {
+        # The app overwrites the settings on exit (see AGENTS.md pitfall 10); back them up.
+        Remove-Item -LiteralPath $settingsBackup -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $settingsDir) { Copy-Item -LiteralPath $settingsDir -Destination $settingsBackup -Recurse -Force }
+
+        # Close a UI left open by previous tests (no file locks).
+        Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" -ErrorAction SilentlyContinue | Where-Object {
+            $_.CommandLine -and $_.CommandLine -like '*qwen-desktop.ps1*' } | ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        & $manage -Action stop | Out-Null
+
+        $appScript = Join-Path $Root 'qwen-desktop.ps1'
+        $appPwsh = Join-Path $Root 'runtime\pwsh\pwsh.exe'
+        if (!(Test-Path -LiteralPath $appScript -PathType Leaf)) { throw "App not found: $appScript" }
+        if (!(Test-Path -LiteralPath $appPwsh -PathType Leaf)) { throw "Bundled pwsh not found: $appPwsh" }
+
+        # Start it the way the shortcut does (-STA; visible window).
+        $appProcess = Start-Process -FilePath $appPwsh -PassThru -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', $appScript)
+        $deadline = [DateTime]::UtcNow.AddSeconds(240)
+        $windowReady = $false
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if ($appProcess.HasExited) { throw "The app closed before its window appeared (exit code $($appProcess.ExitCode))." }
+            $appProcess.Refresh()
+            if ($appProcess.MainWindowHandle -ne 0) { $windowReady = $true; break }
+            Start-Sleep -Milliseconds 800
+        }
+        if (!$windowReady) { throw 'The app window did not appear within 240 seconds.' }
+        if (!(Wait-ForHealth 240)) { throw 'The UI opened but the language model was not ready (server did not start).' }
+
+        # Is the MTP flag really on the server?
+        $serverProc = @(Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if (!$serverProc -or $serverProc.CommandLine -notmatch '--spec-type\s+draft-mtp') {
+            throw 'The server was not started with --spec-type draft-mtp.'
+        }
+
+        # One turn with the real worker the UI uses: no error and no watchdog text.
+        $jobData = @{
+            root = $Root; messages = @(@{ role = 'user'; content = 'Hello, introduce yourself in one sentence.' })
+            provider = 'local'; model = "smoke-ui-$Profile"; profile = $Profile
+            maxTokens = 300; contextLimit = 32768; boundFolder = $null
+            consultProviders = @{}; attachedDocuments = @(); currentImagePaths = @()
+            hasCurrentImage = $false; multiImageOcr = $false; multiImageOcrMode = $false
+            internet = $false; agent = $false; office = $false; documentCreate = $false; effort = 'low'
+        }
+        $shared = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full'
+            AskTool = $null; AskDetail = $null; AskAnswer = $null; AskId = $null; AskDeadline = $null })
+        $job = Start-ThreadJob -FilePath (Join-Path $Root 'agent\qwen-inference.ps1') -ArgumentList $jobData, $shared
+        $items = @(Receive-Job -Job $job -Wait); Remove-Job -Job $job -Force
+        $errEvent = @($items | Where-Object { $_.kind -eq 'error' })
+        if ($errEvent.Count) { throw "UI turn errored: $($errEvent[0].text)" }
+        $done = @($items | Where-Object { $_.kind -eq 'done' }) | Select-Object -Last 1
+        if (!$done) { throw 'The UI turn produced no done event.' }
+        $joined = ($items | ForEach-Object { [string]$_.text }) -join "`n"
+        # .Contains() is a LITERAL search. Do NOT use -like "*[Error]*": in PowerShell that is a
+        # character class (E/r/o) and matches almost any text (caught as a false positive on a
+        # real machine); the UI only adds "[Error]" when an error event arrives, checked above.
+        foreach ($marker in @('forcibly closed', 'connection dropped', 'connection closed', '[Error]', 'could not start', 'WSAECONNRESET')) {
+            if ($joined.Contains($marker)) { throw "Unwanted text in the UI turn: '$marker'" }
+        }
+
+        # Is MTP really producing and accepting draft tokens?
+        $body = @{ prompt = "1`n2`n3`n"; n_predict = 32; temperature = 0; seed = 7; stream = $false; cache_prompt = $false } | ConvertTo-Json
+        $resp = Invoke-RestMethod 'http://127.0.0.1:8080/completion' -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 120
+        $draftN = [int]$resp.timings.draft_n; $acc = [int]$resp.timings.draft_n_accepted
+        if ($draftN -le 0) { throw 'MTP produced no draft tokens (is --spec-type enabled?).' }
+        if ($acc -le 0) { throw "MTP is on but accepted 0/$draftN (the head may be ineffective)." }
+
+        Report 'ui' $true "window opened, model ready, UI turn clean; MTP draft accepted $acc/$draftN"
+    } catch {
+        Report 'ui' $false $_.Exception.Message
+    } finally {
+        if ($appProcess -and !$appProcess.HasExited) {
+            try { Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue } catch { }
+        }
+        & $manage -Action stop | Out-Null
+        if (Test-Path -LiteralPath $settingsBackup) {
+            Remove-Item -LiteralPath $settingsDir -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item -LiteralPath $settingsBackup -Destination $settingsDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $settingsBackup -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
