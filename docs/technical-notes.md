@@ -50,9 +50,9 @@ Launch: the **MamidLabs** shortcut on the desktop → `launch-qwen-desktop.vbs`
 
 | Profile | Model | Context | Reasoning | max_tokens | Measured speed |
 |---|---|---|---|---|---|
-| MAX (deep) | Qwen3.8 27B IQ4_XS | 32K | `xhigh` | 8192 | ~25 token/s |
-| FLASH (fast) | Qwen3.8 27B IQ4_XS | 32K | `low` | 4096 | ~22–24 token/s |
-| LITE (8 GB) | Huihui-Qwen3.5 9B Q5_K_M | 32K | `low` | 3072 | ~35 token/s |
+| MAX (deep) | Qwen3.8 27B IQ4_XS | 32K | `xhigh` | 8192 | ~42–58 token/s |
+| FLASH (fast) | Qwen3.8 27B IQ4_XS | 32K | `low` | 4096 | ~42–58 token/s |
+| LITE (8 GB) | Huihui-Qwen3.5 9B Q5_K_M | 32K | `low` | 3072 | ~97 token/s (on 16 GB) |
 
 MAX and FLASH share the same 27B file: 32K context, `--gpu-layers 99`, flash-attn on, KV cache q4_0,
 the image projector (mmproj) on the CPU (`--no-mmproj-offload`; on the GPU it did not fit on a 16 GB

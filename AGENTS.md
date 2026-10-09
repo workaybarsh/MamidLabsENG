@@ -356,7 +356,7 @@ python -m pytest -q          # ~250 tests, ~90 s; no extra setup needed (tests/c
 
 | | 16 GB (RTX 5060 Ti) FLASH | 8 GB (RTX 4060 Laptop) LITE |
 |---|---|---|
-| Chat | ~24–25 tok/s | ~36 tok/s (on AC), 17–24 on battery |
+| Chat | ~42–58 tok/s (MTP on) | ~97 tok/s (on 16 GB with MTP) |
 | Image (`new`), end to end | 60–95 s | 68–139 s |
 | Regenerate from an image (`regenerate`) | not measured | ~110–140 s |
 | Photo editing (`identity_edit`) | 74–160 s (one/two images) | **not supported** |

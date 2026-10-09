@@ -61,11 +61,12 @@ web search and optional API providers.
 | Thinking | Deep | Short | Short, 300-token budget |
 | Image model | Krea-2 Turbo fp8 | Krea-2 Turbo fp8 | Krea-2 Turbo GGUF Q4_K_M |
 | Model download | ~52 GB (shared with FLASH) | ~52 GB | ~36 GB |
-| Measured chat speed | ~25 tok/s | ~22–24 tok/s | ~35–38 tok/s |
+| Measured chat speed | ~42–58 tok/s | ~42–58 tok/s | ~97 tok/s (on 16 GB) |
 
 MAX and FLASH use the same files; setup offers them as a single **Qwen3.8 27B** option and you switch
-between them from the app's model bar. Measurement hardware: RTX 5060 Ti 16 GB for MAX and FLASH,
-RTX 4060 Laptop 8 GB for LITE (on AC power). Details: [docs/technical-notes.md](docs/technical-notes.md).
+between them from the app's model bar. Measurement hardware: RTX 5060 Ti 16 GB (MTP on). LITE reaches
+~97 tok/s on 16 GB; on an 8 GB card the same media pipeline is scaled down. Details:
+[docs/technical-notes.md](docs/technical-notes.md).
 
 ## System requirements
 
