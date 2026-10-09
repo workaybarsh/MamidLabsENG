@@ -11,7 +11,7 @@
 
 ; The single source of the version. CI compares the tag (v1.0.0) with this value;
 ; CHANGELOG.md must have a section with the same number.
-#define MyAppVersion "1.0.7"
+#define MyAppVersion "1.0.8"
 #define MyAppName "MamidLabs"
 #define MyAppPublisher "workaybarsh"
 #define MyAppURL "https://github.com/workaybarsh/MamidLabsENG"
@@ -138,7 +138,7 @@ const
   OptLite = 0;
   { FLASH and MAX use exactly the same files (identical "target" paths in agent/profiles.json);
     only their runtime settings (reasoning effort/predict) differ. Setup offers a single
-    "Qwen3.8 27B" option and downloads with the 'flash' catalog entry. Switching between FLASH
+    "PRO" (Qwen3.8 27B) option and downloads with the 'flash' catalog entry. Switching between FLASH
     and MAX is done from the app's model bar (agent/model-registry.ps1). }
   OptQwen38 = 1;
   OptLater = 2;
@@ -208,8 +208,8 @@ begin
     'The profile files are downloaded at the end of setup and their sizes are verified. If you like, skip the download now; ' +
     'you can install them any time in the app with Profiles → Profile manager → Download missing.',
     True, False);
-  ProfilePage.Add('LITE — 8 GB graphics card (Qwen3.5 9B, ~36 GB download)');
-  ProfilePage.Add('Qwen3.8 27B — 16 GB graphics card (~52 GB download)');
+  ProfilePage.Add('LITE - 8 GB graphics card (Qwen3.5 9B, ~36 GB download)');
+  ProfilePage.Add('PRO - 16 GB graphics card (Qwen3.8 27B, ~52 GB download)');
   ProfilePage.Add('Do not download models now — I will install the profile later');
   ProfilePage.Add('I will use my own model or my API account');
   ProfilePage.SelectedValueIndex := OptLite;

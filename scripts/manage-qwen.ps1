@@ -98,36 +98,32 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     # conditions (browser + desktop holding ~1.5 GB VRAM), silently reject the default
     # profile and deprive the user of a working installation.
     #
-    # MAX/FLASH real measurement (RTX 5060 Ti 16 GB, 32K context, llama.cpp): the 14600 MiB
-    # file takes ~15378-15442 MiB on the GPU. The ~780-840 MiB difference is the q4_0 KV
-    # cache of the 32K context + the compute buffer + the MTP draft context. The old 300 MiB
-    # margin did not count that extra load, so the check said "it fits", but with an idle
-    # ComfyUI (~300-460 MiB) the model did not fully fit and one component (the MTP draft
-    # context) silently moved to the CPU: measured, production dropped from 44 tok/s to
-    # ~6-7 tok/s (llamaVRAM 15378/15442 -> 15193).
-    #
-    # So the margin is 800 MiB for the 16 GB profiles; that lands in the card's real free
-    # range. Measured (RTX 5060 Ti): the model needs ~15422-15442 MiB on the GPU; an idle
-    # ComfyUI pulls free VRAM down to ~15020 MiB (the 27B no longer fits, ~6 tok/s); with
-    # ComfyUI closed / on a cold boot free VRAM is ~15442-15670 MiB. The threshold is
-    # model+800=15400 MiB; so with ComfyUI open (15020 < 15400) it is closed, and cold/at
-    # boot (>=15442) the model loads. A larger margin (e.g. 1000 -> threshold 15600) even
-    # rejected the machine's normal free value (seen on a real machine).
+    # MAX/FLASH real measurement (RTX 5060 Ti 16 GB, 32K context, MTP on, llama.cpp):
+    # on a clean GPU (ComfyUI closed) the 14600 MiB file takes ~15170-15650 MiB on the
+    # GPU; llama.cpp keeps the big embedding tensor on the CPU when memory is short and
+    # absorbs small differences that way. With 15244 MiB free the model loaded and ran at
+    # ~45 tok/s (measured). A 1000 MiB margin (threshold 15600) and an 800 MiB margin
+    # (threshold 15400) wrongly rejected that state on a real machine: the
+    # "Model operation failed" error. So the margin is 600 MiB for the 16 GB profiles
+    # (threshold 15200); a clean GPU plus reasonable desktop usage lets the model load.
+    # The REAL protection is not the free-VRAM number but closing ComfyUI every time
+    # (see below): with another CUDA context present, even at 15290 MiB "free" the driver
+    # fragments memory and the model spills into shared memory, dropping to ~6 tok/s.
     #
     # On LITE the margin is deliberately small (300 MiB) and the tolerance is wide: on an
     # 8 GB card the model already runs at the limit; llama.cpp keeps the big embedding tensor
     # on the CPU and absorbs a small overflow, still running at ~41 tok/s. Enlarging the
     # margin here would reject a working LITE install for nothing.
-    $overheadMiB = if ($profileName -eq 'lite') { 300 } else { 800 }
+    $overheadMiB = if ($profileName -eq 'lite') { 300 } else { 600 }
     $neededMiB = $modelMiB + $overheadMiB
     # llama.cpp keeps the big embedding (token_embd) tensor on the CPU when VRAM is short
     # and tolerates a small overflow. On LITE the MTP head grows the file by ~464 MiB; on
     # an 8 GB card the model still loaded at ~165 MiB over and ran at ~41 tok/s. So a small
-    # overflow is not blocked on LITE; the tolerance there is wide. For MAX/FLASH (16 GB) the
-    # tolerance is ZERO: the 27B model already runs at the card's limit and even a ~185 MiB
-    # overflow pushed the MTP draft context to the CPU, dropping production to ~6-7 tok/s.
-    # With tolerance 0, when free VRAM is short an idle ComfyUI is closed first (see below)
-    # and the model fits fully, so loading is consistent every time.
+    # overflow is not blocked on LITE; the tolerance there is wide.
+    # For MAX/FLASH (16 GB) the tolerance is ZERO: the 27B model already runs at the card's
+    # limit and, with a CUDA context (ComfyUI) open, even a small overflow pushes a component
+    # into shared memory and drops production to ~6 tok/s. That is why ComfyUI is always
+    # closed before measuring (see below); an overflow is not accepted on tolerance.
     $toleranceMiB = if ($profileName -eq 'lite') { 1024 } else { 0 }
     if ($freeMiB -lt ($neededMiB - $toleranceMiB)) {
         throw ("Not enough free VRAM: $freeMiB MiB free, the `"$profileName`" profile " +
@@ -142,10 +138,11 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     }
 }
 
-# A ComfyUI left open between jobs (see agent\media-model-swap.ps1) holds ~300 MiB VRAM for
-# its CUDA context even with the models unloaded (measured on an RTX 5060 Ti).
-# On the 8 GB Lite card this margin may keep the language model from fitting. If memory is
-# short and ComfyUI's queue is empty it is closed; the next image/video reopens it (~15-20 s).
+# The only big CUDA context we create is ComfyUI's. Even with the models unloaded the
+# context (plus driver-side reservation) holds ~300 MiB and, more importantly, leaves VRAM
+# fragmented (measured on an RTX 5060 Ti). Before the language model loads, ComfyUI is
+# ALWAYS closed if its queue is empty, so the free-VRAM reading is trustworthy and the 27B
+# model does not spill into shared memory. The next image/video reopens it (~15-20 s).
 # If a job is running it is not touched.
 function Stop-IdleComfy {
     $comfy = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
@@ -201,15 +198,17 @@ try {
     if (!(Test-Path -LiteralPath $model -PathType Leaf)) { throw "Model not found: $model" }
     # The Lite profile also runs without an image projector; on the others mmproj is mandatory.
     if (!$custom -and $Profile -ne 'lite' -and !(Test-Path -LiteralPath $projector -PathType Leaf)) { throw "Image projector not found: $projector" }
+    # Single GPU owner: the only big CUDA context we create is ComfyUI's. If its queue is
+    # empty it is ALWAYS closed; with the context open the driver keeps VRAM fragmented and
+    # the 27B model spills into shared memory even when free VRAM looks sufficient,
+    # dropping to ~6 tok/s (measured: 15,290 MiB free + another context -> 6 tok/s; the same
+    # model on a clean GPU -> 45+ tok/s). Free VRAM is only trustworthy with ComfyUI closed;
+    # the next image/video reopens it.
+    [void](Stop-IdleComfy)
     # The previous process was already stopped above; free VRAM is measured here so the
     # memory freed by the old process is counted too.
     if (!$SkipMemoryCheck) {
-        try { Test-MemoryBudget $model $Profile $projector }
-        catch {
-            # If no room can be made, the first (explanatory) error is passed on as is.
-            if (!(Stop-IdleComfy)) { throw }
-            Test-MemoryBudget $model $Profile $projector
-        }
+        Test-MemoryBudget $model $Profile $projector
     }
     New-Item -ItemType Directory -Path $logs -Force | Out-Null
 

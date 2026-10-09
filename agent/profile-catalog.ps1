@@ -71,6 +71,58 @@ function Get-ProfileState([string]$id) {
     return $state
 }
 
+# From a profile's TARGETS removes the ones shared with other profiles; deletion removes
+# only these unique files so another profile's installation is not broken. Example: MAX
+# and FLASH use exactly the same file set (treated as aliases, not sharing); LITE shares
+# part of its media files with MAX/FLASH.
+function Get-ProfileUniqueTargets([string]$id) {
+    $catalog = @(Get-ProfileCatalog)
+    $entry = @($catalog | Where-Object { $_.id -eq $id })[0]
+    if (!$entry) { return @() }
+    $myTargets = @($entry.files | ForEach-Object { [string]$_.target })
+    $mySignature = ($myTargets | Sort-Object -Unique) -join '|'
+    $shared = @{}
+    foreach ($profile in $catalog) {
+        if ($profile.id -eq $id) { continue }
+        $otherTargets = @($profile.files | ForEach-Object { [string]$_.target })
+        # Same file set = an alias of the same profile (MAX/FLASH); not counted as sharing.
+        if ((($otherTargets | Sort-Object -Unique) -join '|') -eq $mySignature) { continue }
+        foreach ($target in $otherTargets) { $shared[$target] = $true }
+    }
+    $unique = [Collections.Generic.List[string]]::new()
+    $seen = @{}
+    foreach ($target in $myTargets) {
+        if ($seen.ContainsKey($target)) { continue }
+        $seen[$target] = $true
+        if (!$shared.ContainsKey($target)) { [void]$unique.Add($target) }
+    }
+    return $unique.ToArray()
+}
+
+# Delete a profile: removes only its unique files, cleans up emptied folders and returns
+# the removed/failed counts. The caller (Profile manager) takes confirmation.
+function Remove-ProfileFiles([string]$id) {
+    $result = @{ removed = 0; failed = 0; totalBytes = 0L }
+    foreach ($target in (Get-ProfileUniqueTargets $id)) {
+        $full = Join-Path $root $target
+        if (!(Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+        try { $result.totalBytes += [long](Get-Item -LiteralPath $full).Length } catch { }
+        try { Remove-Item -LiteralPath $full -Force -ErrorAction Stop; $result.removed++ }
+        catch { $result.failed++ }
+    }
+    # Remove folders left empty (only the folders of this profile's targets).
+    foreach ($target in (Get-ProfileUniqueTargets $id)) {
+        $dir = Split-Path -Parent (Join-Path $root $target)
+        try {
+            if ((Test-Path -LiteralPath $dir -PathType Container) -and
+                !(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
+                Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
+    return $result
+}
+
 # Checks whether a profile's CHAT-required files (language model + mmproj) are on disk.
 # ComfyUI media (image/video) models are deliberately excluded: the install may have used
 # -SkipMedia and they are not needed for chat to work. Used so the model bar at the bottom
@@ -257,17 +309,20 @@ function Show-ProfileManager([string]$focusId) {
 
     $downloadBtn = [Windows.Forms.Button]::new()
     $downloadBtn.Text = 'Download missing'
-    $downloadBtn.SetBounds(16, 376, 210, 34)
+    $downloadBtn.SetBounds(16, 376, 180, 34)
     $switchBtn = [Windows.Forms.Button]::new()
     $switchBtn.Text = 'Switch to this profile'
-    $switchBtn.SetBounds(240, 376, 170, 34)
+    $switchBtn.SetBounds(202, 376, 150, 34)
+    $deleteBtn = [Windows.Forms.Button]::new()
+    $deleteBtn.Text = 'Delete profile'
+    $deleteBtn.SetBounds(358, 376, 120, 34)
     $updateBtn = [Windows.Forms.Button]::new()
     $updateBtn.Text = 'Check for updates'
-    $updateBtn.SetBounds(416, 376, 214, 34)
+    $updateBtn.SetBounds(484, 376, 180, 34)
     $updateBtn.Tag = @{ state = 'idle' }
     $closeBtn = [Windows.Forms.Button]::new()
     $closeBtn.Text = 'Close'
-    $closeBtn.SetBounds(642, 376, 120, 34)
+    $closeBtn.SetBounds(670, 376, 104, 34)
 
     # A private repository needs a token for the update check/download (see Get-UpdateToken).
     $tokenLabel = [Windows.Forms.Label]::new()
@@ -352,6 +407,38 @@ function Show-ProfileManager([string]$focusId) {
     }.GetNewClosure())
 
     $closeBtn.Add_Click({ $dlg.Close() }.GetNewClosure())
+
+    # Delete profile: removes only files UNIQUE to this profile; files shared with other
+    # profiles (e.g. LITE's media files also used by MAX/FLASH) are kept. If the active
+    # profile is deleted, the model is stopped first.
+    $deleteBtn.Add_Click({
+        $index = $list.SelectedIndex
+        if ($index -lt 0) { return }
+        if ($script:busy -or $script:imageBusy) { $status.Text = 'Wait for the current job to finish first.'; return }
+        $profile = $catalog[$index]
+        $present = @((Get-ProfileUniqueTargets $profile.id) | Where-Object {
+            Test-Path -LiteralPath (Join-Path $root $_) -PathType Leaf })
+        if (!$present.Count) {
+            $status.Text = 'Nothing to delete: the profile is not installed or all its files are shared with another profile.'
+            return
+        }
+        $bytes = 0L
+        foreach ($rel in $present) { try { $bytes += [long](Get-Item -LiteralPath (Join-Path $root $rel)).Length } catch { } }
+        $isActive = ([string]$script:apiSettings.selectedModel -eq "builtin-$($profile.id)")
+        $warn = if ($isActive) { "`r`n`r`nWARNING: This profile is currently selected. The model is stopped first." } else { '' }
+        $answer = [Windows.Forms.MessageBox]::Show(
+            ($profile.label + ': ' + $present.Count + ' file(s) (' + (Format-ByteSize $bytes) + ') will be deleted.' +
+             "`r`nFiles shared with other profiles are kept." + $warn + "`r`n`r`nDelete?"),
+            'Delete profile', 'YesNo', 'Warning')
+        if ($answer -ne 'Yes') { return }
+        if ($isActive) { try { Stop-LocalQwen } catch { } }
+        $result = Remove-ProfileFiles $profile.id
+        $list.Items[$index] = "$($profile.label) — $(Get-ProfileStatusLabel $profile.id)"
+        & $refresh
+        $status.Text = if ($result.failed) { "$($result.failed) file(s) could not be deleted (possibly in use)." }
+            else { "Profile files deleted ($($result.removed) file(s), $(Format-ByteSize $result.totalBytes)); shared files kept." }
+        try { Update-ProviderSelection } catch { }
+    }.GetNewClosure())
 
     $tokenSave.Add_Click({
         if (!$script:apiSettings.providers) { $script:apiSettings.providers = @{} }
@@ -445,7 +532,7 @@ function Show-ProfileManager([string]$focusId) {
         }
     }.GetNewClosure())
 
-    $dlg.Controls.AddRange(@($list, $detail, $status, $downloadBtn, $switchBtn, $updateBtn, $closeBtn, $tokenLabel, $tokenBox, $tokenSave, $tokenClear))
+    $dlg.Controls.AddRange(@($list, $detail, $status, $downloadBtn, $switchBtn, $deleteBtn, $updateBtn, $closeBtn, $tokenLabel, $tokenBox, $tokenSave, $tokenClear))
     $wanted = 0
     if ($focusId) {
         for ($i = 0; $i -lt $catalog.Count; $i++) { if ($catalog[$i].id -eq $focusId) { $wanted = $i; break } }

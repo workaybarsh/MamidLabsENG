@@ -135,23 +135,19 @@ single "Qwen3.8 27B" entry (`Get-ProfileCatalogForDisplay`); switching happens i
 Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFilesPresent`) must use
 the full catalog (`Get-ProfileCatalog`).
 
-**VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + **800 MiB**.
-If free VRAM is not enough, an idle ComfyUI is closed first and memory is measured again; if it is
-still not enough a "Not enough free VRAM" error is raised. The goal is to keep the model from
-spilling into shared system memory and slowing chat down. The 800 MiB margin comes from
-measurement: the 27B file is 14,600 MiB but takes ~**15,422–15,442 MiB** on the GPU; the ~822-842
-MiB difference is the q4_0 KV cache of the 32K context + the compute buffer + the MTP draft
-context. The old 300 MiB margin was too small, so with an idle ComfyUI (~300–460 MiB) the model did
-not fully fit and the MTP draft context (~185 MiB) silently moved to the CPU: measured, production
-dropped 44 → ~6–7 tok/s (llamaVRAM 15378 → 15193). The 800 MiB threshold (model+800 = 15400) lands
-in the machine's real free range: with ComfyUI open free is ~15020 (< 15400) → the idle ComfyUI is
-closed; with ComfyUI closed / on a cold boot free is ~15442–15670 (≥ 15400) → the model loads. A
-1000 MiB margin (threshold 15600) even wrongly rejected this machine's normal free value
-(15442–15558; seen on a real machine). The tolerance is profile-based: **LITE 1024 MiB** (9B MTP
-model's small overflow on an 8 GB card; llama.cpp keeps the big embedding tensor on the CPU),
-**MAX/FLASH 0** (27B runs at the card's limit; even a small overflow is a disaster). With
-tolerance 0 an idle ComfyUI is closed and the model fits fully every time. Measured: 27B ~44 tok/s
-when it fits fully.
+**VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + **600 MiB**
+(300 MiB on LITE). **The real protection:** before the language model loads, the only big CUDA
+context the app creates — ComfyUI — is **always** closed (when its queue is empty). With that
+context open the driver keeps VRAM fragmented; even when the free figure looks sufficient the
+27B model spills into shared memory and drops to ~6 tok/s (measured: 15,290 MiB "free" + another
+context → 6 tok/s; the same model on a clean GPU → 45+ tok/s). So the free-VRAM reading is only
+trustworthy with ComfyUI closed; the next image/video reopens it. Measured: on a clean GPU with
+15244 MiB free the 27B model loaded and ran at ~45 tok/s (file 14,600 MiB → real margin ~600 MiB).
+The 800/1000 MiB margins of 1.0.4–1.0.7 (threshold 15400/15600) wrongly rejected that working
+state, raising the generic "Model operation failed" error. The tolerance is profile-based:
+**LITE 1024 MiB** (9B MTP model's small overflow on an 8 GB card; llama.cpp keeps the big embedding
+tensor on the CPU), **MAX/FLASH 0** (27B runs at the card's limit; even a small overflow is a
+disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 
 ## 6. Flow of a chat request
 
@@ -251,6 +247,12 @@ when it fits fully.
 - `hf-hub.py` downloads and verifies the size against `bytes`; an incomplete file resumes where it
   stopped. `HF_HOME` is under the root.
 - The profile status only checks whether the file exists; it does not compare sizes.
+- **Deleting a profile** (Profile manager → "Delete profile"): only files UNIQUE to that profile
+  are removed (`Get-ProfileUniqueTargets`); files shared with other profiles are kept. LITE's
+  media files other than the Krea-2 GGUF are shared with MAX/FLASH. MAX and FLASH use the same
+  file set, so they are treated as aliases; deleting one removes both. If the active profile is
+  deleted, `Stop-LocalQwen` runs first, then `Update-ProviderSelection` refreshes the list.
+  Measured: LITE ~14 GB, MAX/FLASH ~29 GB.
 
 ## 10. Installation, wizard, updates and uninstall
 
@@ -392,10 +394,11 @@ has no LoRA.
    Put per-turn text into the last user message.
 6. **Use `Start-DetachedProcess`.** `Start-Process -Redirect…` inherits the caller's stdout pipe and
    `manage-qwen | …` hangs.
-7. **The VRAM margin is profile-based** (LITE 300 MiB, MAX/FLASH 1000 MiB) and the tolerance is
+7. **The VRAM margin is profile-based** (MAX/FLASH 600 MiB, LITE 300 MiB) and the tolerance is
    LITE 1024 / MAX/FLASH 0. On a 16 GB card a margin that is too large keeps MAX from
    ever starting, while too small lets the 27B model spill into shared memory and drop to ~6 tok/s.
-   That is why the margin is 1000 MiB for the 27B and an idle ComfyUI is closed to make room. On
+   **More importantly: ComfyUI is ALWAYS closed before the language model loads** (sections 5/7);
+   with that context open `memory.free` is misleading and the model spills to ~6 tok/s. On
    MAX/FLASH the mmproj runs on the CPU (`--no-mmproj-offload`). On the GPU it spills
    ~420 MiB into shared memory and speed drops from 25 to 19 tok/s.
 8. **Single image rule:** only one image at a time goes to chat (multiple images only in the
@@ -479,6 +482,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-09 | Fixed the structural root cause of the spill / "Model operation failed" (1.0.8): the app's only big CUDA context, ComfyUI, is now ALWAYS closed before the language model loads (with the context open the driver fragments VRAM; 15,290 MiB "free" + context → 6 tok/s). The MAX/FLASH margin was lowered 800→600 MiB (threshold 15200); a 27B model that runs fine at 15244 MiB free on a clean GPU is no longer rejected. LITE+MAX verified together (97 / 58 tok/s). Added "Delete profile" to the Profile manager (only profile-unique files; LITE's shared media is kept). The 27B wizard label is now "PRO". Applied to the Turkish edition too. | scripts/manage-qwen.ps1, agent/profile-catalog.ps1, packaging/windows/mamidlabs.iss, tests/test_memory_admission.py, tests/test_profile_delete.py |
 | 2026-10-09 | Fixed a VRAM threshold regression (1.0.7): the 1.0.6 margin of 1000 MiB made the threshold 15600 MiB and wrongly rejected the machine's normal free value (15442–15558). The margin is now 800 MiB (threshold 15400); ComfyUI is closed when open, the model loads when it is closed / on a cold boot. Applied to the Turkish edition too. | scripts/manage-qwen.ps1, tests/test_memory_admission.py |
 | 2026-10-09 | Fixed the root cause of the post-media drop to ~6 tok/s: the VRAM budget under-counted the real load (margin 300→1000 MiB, MAX/FLASH tolerance 256→0). The 27B model needs ~15378-15442 MiB on the GPU; with an idle ComfyUI the MTP draft context moved to the CPU and production dropped 44→6-7 tok/s. LITE is unchanged (margin 300, tolerance 1024). `Release-Comfy` now verifies real free VRAM. Added a `ui` smoke step that drives the real app (MTP + "connection dropped" check). | scripts/manage-qwen.ps1, agent/media-model-swap.ps1, agent/imagegen-run.ps1, agent/videogen-run.ps1, scripts/smoke-test.ps1, tests/test_memory_admission.py, tests/test_media_release.py, tests/test_smoke_test_script.py |
 | 2026-10-09 | Script-based updating (`install-mamidlabs.ps1 -Stage layout`) now refreshes the wizard source package (`setup-source`) if present, so it no longer stays at the previous version. | scripts/install-mamidlabs.ps1, tests/test_install_layout_source.py |

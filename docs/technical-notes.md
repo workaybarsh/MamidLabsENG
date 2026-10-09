@@ -81,8 +81,10 @@ Measured on an RTX 5060 Ti 16 GB with llama.cpp's memory dump (32K context):
 On the GPU the image projector asked for another 1,133 MiB with weights and compute buffer; it
 exceeded the total free space and spilled ~420 MiB into shared memory. With the projector moved to
 the CPU, chat went from 19.6 to 25.0 tok/s and reading a single image from 56–58 s to 29 s. The
-memory check in `scripts/manage-qwen.ps1` asks for the model file + 300 MiB; if that is not enough
-and its queue is empty, an idle ComfyUI is closed and memory is measured again.
+memory check in `scripts/manage-qwen.ps1` asks for the model file + 600 MiB. **The real protection:**
+before the language model loads, the app's only big CUDA context, ComfyUI, is always closed; with
+that context open `memory.free` is misleading (the driver fragments VRAM) and the 27B model spills
+into shared memory, dropping to ~6 tok/s. The next image/video reopens ComfyUI.
 
 ### Lite profile (8 GB VRAM / 16 GB RAM)
 

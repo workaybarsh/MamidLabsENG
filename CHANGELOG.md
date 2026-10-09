@@ -3,6 +3,29 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.8] - 2026-10-09
+
+### Fixed
+- **"Model operation failed" and memory spill (structural root cause):** the only big CUDA
+  context the app creates was an idle ComfyUI. With that context open the driver keeps VRAM
+  fragmented; even when the free figure looks sufficient the 27B model spills into shared
+  memory and production drops to ~6 tok/s (measured: 15,290 MiB "free" + another context →
+  6 tok/s; the same model on a clean GPU → 45+ tok/s). ComfyUI is now **always** closed before
+  the language model loads (when its queue is empty); the free-VRAM reading is only
+  trustworthy then. Also, the MAX/FLASH margin was lowered 800→600 MiB: the 800/1000 MiB
+  thresholds in 1.0.4–1.0.7 wrongly rejected a model that runs fine at 15244 MiB free on a
+  clean GPU (45 tok/s), raising the generic "Model operation failed" error. The next
+  image/video reopens ComfyUI.
+- LITE and MAX/FLASH profiles now run together on the same machine without issues (measured:
+  LITE ~97 tok/s, MAX ~58 tok/s, MTP enabled on both).
+
+### Added
+- **Delete profile:** a "Delete profile" button in the Profile manager. Only files UNIQUE to
+  that profile are removed; files shared with other profiles are kept (LITE's media files are
+  also used by MAX/FLASH). If the active profile is deleted, the model is stopped first. MAX
+  and FLASH use the same file set, so they are treated as aliases; deleting one removes both.
+- **The 27B profile now appears as "PRO" in the setup wizard** (user-facing name).
+
 ## [1.0.7] - 2026-10-09
 
 ### Fixed

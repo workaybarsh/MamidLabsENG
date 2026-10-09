@@ -1,9 +1,10 @@
 """VRAM-based admission (manage-qwen.ps1 Test-MemoryBudget).
 
-Required memory = model file (+ projector on LITE) + a safety margin. If free VRAM is
-not enough, an idle ComfyUI is closed and memory is measured again; if it is still not
-enough, llama-server is not started and a clear error is shown. Otherwise layers spill
-into Windows shared memory and chat slows down dramatically.
+Required memory = model file (+ projector on LITE) + a safety margin. Before measuring,
+our own big CUDA context (ComfyUI) is ALWAYS closed if its queue is empty, so the free
+figure is trustworthy and the model does not spill into shared memory; if free VRAM is
+still not enough a clear error is shown. Otherwise layers spill into Windows shared
+memory and chat slows down dramatically.
 """
 from pathlib import Path
 
@@ -18,15 +19,17 @@ def test_memory_budget_function_exists_and_is_called_before_start():
     manager = read_text("scripts/manage-qwen.ps1")
     assert "function Test-MemoryBudget" in manager
     # The image projector is included in the budget since it is also loaded into VRAM.
-    assert "try { Test-MemoryBudget $model $Profile $projector }" in manager
-    # If there is no room, an idle ComfyUI is closed first, then it is measured once more;
-    # if it is still not enough the first error is passed on as is.
-    assert "if (!(Stop-IdleComfy)) { throw }" in manager
+    assert "Test-MemoryBudget $model $Profile $projector" in manager
+    # Single GPU owner: our CUDA context (ComfyUI) is ALWAYS closed before measuring.
+    # With the context open the driver fragments VRAM; even when the free figure looks
+    # sufficient the 27B model spills into shared memory and drops to ~6 tok/s.
+    assert "[void](Stop-IdleComfy)" in manager
     # The check must run AFTER the file existence checks (when the model path is known) but
-    # BEFORE the model process is started.
+    # BEFORE the model process is started; closing ComfyUI must come before the measurement.
+    idx_comfy = manager.index("[void](Stop-IdleComfy)")
     idx_check = manager.index("Test-MemoryBudget $model $Profile $projector")
     idx_start = manager.index("$child = Start-DetachedProcess $server")
-    assert idx_check < idx_start
+    assert idx_comfy < idx_check < idx_start
 
 
 def test_idle_comfy_is_only_stopped_when_its_queue_is_empty():
@@ -57,25 +60,26 @@ def test_start_action_accepts_skip_memory_check_switch():
 
 
 def test_max_budget_fits_a_16_gb_card():
-    """Measured on an RTX 5060 Ti 16 GB: the model needs ~15422-15442 MiB on the GPU; an idle
-    ComfyUI pulls free VRAM down to ~15020 MiB (the model no longer fits, ~6 tok/s). The
-    MAX/FLASH budget must be model + 800 MiB (needed 15400 MiB): it fits with ComfyUI closed
-    (~15442-15670 free) but not with ComfyUI open (~15020 free), so ComfyUI is closed."""
+    """Measured on an RTX 5060 Ti 16 GB: on a clean GPU (ComfyUI closed) the 27B model
+    loaded with 15244 MiB free and ran at ~45 tok/s; the file is 14600 MiB, so the real
+    margin is ~600 MiB. The old 800/1000 MiB margins (threshold 15400/15600) wrongly
+    rejected that state: the "Model operation failed" error. The real protection is less
+    the margin than always closing ComfyUI: with another CUDA context present even
+    15290 MiB "free" spilled and dropped to ~6 tok/s."""
     import re
 
     manager = read_text("scripts/manage-qwen.ps1")
     match = re.search(r"\$overheadMiB = if \(\$profileName -eq 'lite'\) \{ (\d+) \} else \{ (\d+) \}", manager)
     assert match, "profile-aware overheadMiB line not found"
     overhead = int(match.group(2))  # else branch = MAX/FLASH
-    assert overhead == 800
+    assert overhead == 600
     max_model_mib = 14600
-    measured_free_with_comfy_open = 15020
-    measured_free_with_comfy_closed = 15442
-    needed = max_model_mib + overhead  # 15400
-    assert needed <= measured_free_with_comfy_closed
-    assert needed > measured_free_with_comfy_open
-    # A 1000 MiB margin (threshold 15600) even rejected the machine's normal free value.
-    assert needed < max_model_mib + 1000
+    measured_free_ok = 15244  # loaded and ran at 45 tok/s on a clean GPU
+    needed = max_model_mib + overhead  # 15200
+    # The model must load at this free value...
+    assert needed <= measured_free_ok
+    # ...but the old 800 MiB margin (threshold 15400) wrongly rejected the machine.
+    assert needed < max_model_mib + 800
 
 
 def test_lite_budget_is_not_tightened_by_the_max_fix():
