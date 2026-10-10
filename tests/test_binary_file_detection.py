@@ -84,11 +84,12 @@ def test_binary_detection_on_real_repository_files(filename, expect_binary, tmp_
 
 def test_binary_detection_handles_empty_file(tmp_path):
     function_text = _extract_function("Test-BinaryFile")
+    # Benzersiz yol (tmp_path) kullan: sabit paylasilan $env:TEMP adi, suite icinde
+    # baska bir islem/dosyayla cakisip testi aralikli (flaky) bozabiliyordu.
+    empty = (tmp_path / "empty.txt").as_posix()
     output = _run_function_isolated(
         function_text,
-        "$p = Join-Path $env:TEMP 'mamidlabs-empty-test.txt'; "
-        "New-Item -ItemType File -Path $p -Force | Out-Null; "
-        "try { Test-BinaryFile $p } finally { Remove-Item -LiteralPath $p -Force }",
+        f"New-Item -ItemType File -Path '{empty}' -Force | Out-Null; Test-BinaryFile '{empty}'",
         tmp_path,
     )
     assert output.strip() == "False"

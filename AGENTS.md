@@ -136,13 +136,14 @@ Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFil
 the full catalog (`Get-ProfileCatalog`).
 
 **VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + **600 MiB**
-(300 MiB on LITE). **The real protection:** before the language model loads, the only big CUDA
-context the app creates — ComfyUI — is **always** closed (when its queue is empty). With that
-context open the driver keeps VRAM fragmented; even when the free figure looks sufficient the
-27B model spills into shared memory and drops to ~6 tok/s (measured: 15,290 MiB "free" + another
-context → 6 tok/s; the same model on a clean GPU → 45+ tok/s). So the free-VRAM reading is only
-trustworthy with ComfyUI closed; the next image/video reopens it. Measured: on a clean GPU with
-15244 MiB free the 27B model loaded and ran at ~45 tok/s (file 14,600 MiB → real margin ~600 MiB).
+(300 MiB on LITE). **ComfyUI lifecycle** (`settings/api.json` → `comfyKeepAlive`): the default
+**true** keeps ComfyUI open (no ~15–20 s reopen between media jobs). This does **not** spill:
+measured, the GPU buffer layout is identical in both cases (CPU_Mapped 644 MiB, CUDA0 model
+13945 MiB, KV 576 MiB, graph splits 2) and MTP acceptance is the same (82/131); only a general
+GPU effect slows chat by ~11% (49.7 → 44.2 tok/s). With `comfyKeepAlive=false` ComfyUI is closed
+before loading and chat stays at full speed. In either case, if memory is short (empty queue)
+ComfyUI is closed and measured again. Measured: on a clean GPU with 15244 MiB free the 27B model
+loaded and ran at ~45 tok/s (file 14,600 MiB → real margin ~600 MiB).
 The 800/1000 MiB margins of 1.0.4–1.0.7 (threshold 15400/15600) wrongly rejected that working
 state, raising the generic "Model operation failed" error. The tolerance is profile-based:
 **LITE 1024 MiB** (9B MTP model's small overflow on an 8 GB card; llama.cpp keeps the big embedding
@@ -323,6 +324,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
     `videoProvider`, `externalMediaModels`.
   - UI: `uiPreferences.{internet, agent, accessMode}`, `firstRunApiSettings`.
   - LITE settings: `liteModel`, `liteContext`, `liteReasoningBudget`.
+  - Media: `comfyKeepAlive` (default `true`; keeps ComfyUI open, see section 5).
 - Chats are encrypted under `chats\` with the `MAMIDLABS-CHAT-DPAPI-V2` prefix.
 - `logs\audit.jsonl`: a record of tool calls (not content; path/command identity).
 
@@ -397,9 +399,9 @@ has no LoRA.
 7. **The VRAM margin is profile-based** (MAX/FLASH 600 MiB, LITE 300 MiB) and the tolerance is
    LITE 1024 / MAX/FLASH 0. On a 16 GB card a margin that is too large keeps MAX from
    ever starting, while too small lets the 27B model spill into shared memory and drop to ~6 tok/s.
-   **More importantly: ComfyUI is ALWAYS closed before the language model loads** (sections 5/7);
-   with that context open `memory.free` is misleading and the model spills to ~6 tok/s. On
-   MAX/FLASH the mmproj runs on the CPU (`--no-mmproj-offload`). On the GPU it spills
+   **ComfyUI** is kept open by default (`comfyKeepAlive=true`); this does not spill (identical
+   buffer layout, section 5) but slows chat by ~11%. If memory is short (empty queue) it is closed
+   and measured again. On MAX/FLASH the mmproj runs on the CPU (`--no-mmproj-offload`). On the GPU it spills
    ~420 MiB into shared memory and speed drops from 25 to 19 tok/s.
 8. **Single image rule:** only one image at a time goes to chat (multiple images only in the
    "multi-image reading mode", via OCR).
@@ -482,6 +484,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-09 | Added the `comfyKeepAlive` setting (1.0.9, default `true`): ComfyUI stays open between media jobs (no reopen). Measured: no spill (identical buffer layout, graph splits 2), chat ~11% slower (49.7→44.2 tok/s). `false` restores full speed. Also made two flaky tests deterministic (run_command output encoding UTF-8; empty-file test uses tmp_path). | scripts/manage-qwen.ps1, tests/test_memory_admission.py, tests/test_bound_path_and_run_command.py, tests/test_binary_file_detection.py |
 | 2026-10-09 | Hardened the single-instance check: it now verifies the window CLASS, not just the title. Another window with the same title (Explorer `TabProxyWindow`, a video window) made the app exit before opening ("window closed before opening"). | qwen-desktop.ps1, tests/test_qwen_contracts.py |
 | 2026-10-09 | Fixed the structural root cause of the spill / "Model operation failed" (1.0.8): the app's only big CUDA context, ComfyUI, is now ALWAYS closed before the language model loads (with the context open the driver fragments VRAM; 15,290 MiB "free" + context → 6 tok/s). The MAX/FLASH margin was lowered 800→600 MiB (threshold 15200); a 27B model that runs fine at 15244 MiB free on a clean GPU is no longer rejected. LITE+MAX verified together (97 / 58 tok/s). Added "Delete profile" to the Profile manager (only profile-unique files; LITE's shared media is kept). The 27B wizard label is now "PRO". Applied to the Turkish edition too. | scripts/manage-qwen.ps1, agent/profile-catalog.ps1, packaging/windows/mamidlabs.iss, tests/test_memory_admission.py, tests/test_profile_delete.py |
 | 2026-10-09 | Fixed a VRAM threshold regression (1.0.7): the 1.0.6 margin of 1000 MiB made the threshold 15600 MiB and wrongly rejected the machine's normal free value (15442–15558). The margin is now 800 MiB (threshold 15400); ComfyUI is closed when open, the model loads when it is closed / on a cold boot. Applied to the Turkish edition too. | scripts/manage-qwen.ps1, tests/test_memory_admission.py |

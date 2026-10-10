@@ -198,17 +198,24 @@ try {
     if (!(Test-Path -LiteralPath $model -PathType Leaf)) { throw "Model not found: $model" }
     # The Lite profile also runs without an image projector; on the others mmproj is mandatory.
     if (!$custom -and $Profile -ne 'lite' -and !(Test-Path -LiteralPath $projector -PathType Leaf)) { throw "Image projector not found: $projector" }
-    # Single GPU owner: the only big CUDA context we create is ComfyUI's. If its queue is
-    # empty it is ALWAYS closed; with the context open the driver keeps VRAM fragmented and
-    # the 27B model spills into shared memory even when free VRAM looks sufficient,
-    # dropping to ~6 tok/s (measured: 15,290 MiB free + another context -> 6 tok/s; the same
-    # model on a clean GPU -> 45+ tok/s). Free VRAM is only trustworthy with ComfyUI closed;
-    # the next image/video reopens it.
-    [void](Stop-IdleComfy)
+    # ComfyUI lifecycle. Default (comfyKeepAlive=true): ComfyUI is kept open; no ~15-20 s
+    # reopen between media jobs. Chat is ~11% slower (measured 49.7 -> 44.2 tok/s) BUT there
+    # is NO spill: the GPU buffer layout is identical in both cases (CPU_Mapped 644 MiB,
+    # CUDA0 model 13945 MiB, KV 576 MiB; graph splits 2). With comfyKeepAlive=false ComfyUI
+    # is closed before loading and chat stays at full speed. If memory is short (empty queue
+    # yet tight VRAM) it is closed for safety and measured again.
+    $comfyKeepAlive = $true
+    if ($settings -and $null -ne $settings.comfyKeepAlive) { $comfyKeepAlive = [bool]$settings.comfyKeepAlive }
+    if (!$comfyKeepAlive) { [void](Stop-IdleComfy) }
     # The previous process was already stopped above; free VRAM is measured here so the
     # memory freed by the old process is counted too.
     if (!$SkipMemoryCheck) {
-        Test-MemoryBudget $model $Profile $projector
+        try { Test-MemoryBudget $model $Profile $projector }
+        catch {
+            # ComfyUI was kept open but memory ran short: close it if idle and retry.
+            if ($comfyKeepAlive -and (Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector }
+            else { throw }
+        }
     }
     New-Item -ItemType Directory -Path $logs -Force | Out-Null
 

@@ -3,6 +3,22 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.9] - 2026-10-09
+
+### Added
+- **ComfyUI keep-alive setting (`settings/api.json` → `comfyKeepAlive`, default `true`):** ComfyUI
+  is now kept open between media jobs, so there is no ~15–20 s reopen after each image/video.
+  Measured: this does **not** spill — with ComfyUI open or closed the GPU buffer layout is
+  identical (CPU_Mapped 644 MiB, CUDA0 model 13945 MiB, KV 576 MiB; graph splits 2) and MTP
+  acceptance is the same (82/131). Only a general GPU effect slows chat by ~11% (49.7 → 44.2
+  tok/s; prefill 829 → 765). Set `"comfyKeepAlive": false` for full speed. If memory is short
+  (empty queue, e.g. 8 GB LITE) ComfyUI is closed for safety and measured again.
+
+### Fixed
+- **Test stability:** two environment-dependent (flaky) tests were made deterministic. The
+  `run_command` test harness pins its output encoding to UTF-8; the empty-file binary detection
+  test uses a unique `tmp_path` instead of a fixed shared temp path.
+
 ## [1.0.8] - 2026-10-09
 
 ### Fixed

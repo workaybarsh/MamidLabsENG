@@ -20,9 +20,8 @@ def test_memory_budget_function_exists_and_is_called_before_start():
     assert "function Test-MemoryBudget" in manager
     # The image projector is included in the budget since it is also loaded into VRAM.
     assert "Test-MemoryBudget $model $Profile $projector" in manager
-    # Single GPU owner: our CUDA context (ComfyUI) is ALWAYS closed before measuring.
-    # With the context open the driver fragments VRAM; even when the free figure looks
-    # sufficient the 27B model spills into shared memory and drops to ~6 tok/s.
+    # Single GPU owner: in the default behavior our CUDA context (ComfyUI) is closed
+    # before measuring (comfyKeepAlive=false). See test_comfy_keep_alive_*.
     assert "[void](Stop-IdleComfy)" in manager
     # The check must run AFTER the file existence checks (when the model path is known) but
     # BEFORE the model process is started; closing ComfyUI must come before the measurement.
@@ -30,6 +29,18 @@ def test_memory_budget_function_exists_and_is_called_before_start():
     idx_check = manager.index("Test-MemoryBudget $model $Profile $projector")
     idx_start = manager.index("$child = Start-DetachedProcess $server")
     assert idx_comfy < idx_check < idx_start
+
+
+def test_comfy_keep_alive_setting_defaults_to_open():
+    """settings/api.json -> comfyKeepAlive. Default true: ComfyUI stays open; no ~15-20 s
+    reopen between media jobs. Chat is ~11% slower (measured 49.7 -> 44.2 tok/s) but there
+    is NO spill: the GPU buffer layout is identical in both cases (CPU_Mapped 644 MiB,
+    CUDA0 model 13945 MiB; graph splits 2). false restores full speed."""
+    manager = read_text("scripts/manage-qwen.ps1")
+    assert "$comfyKeepAlive = $true" in manager
+    assert "$settings.comfyKeepAlive" in manager
+    assert "if (!$comfyKeepAlive) { [void](Stop-IdleComfy) }" in manager
+    assert "if ($comfyKeepAlive -and (Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector }" in manager
 
 
 def test_idle_comfy_is_only_stopped_when_its_queue_is_empty():
