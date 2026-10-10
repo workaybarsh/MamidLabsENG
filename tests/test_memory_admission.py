@@ -33,26 +33,23 @@ def test_memory_budget_function_exists_and_is_called_before_start():
 
 
 def test_idle_comfy_is_kept_open_but_leaks_are_cleaned():
-    """ComfyUI is kept OPEN between media jobs (default), but before the language model loads
-    a DUPLICATE/leaked ComfyUI is cleaned. Measured on the real machine: a single (fresh)
-    ComfyUI with MAX 32K ran together at 61 tok/s (192 MiB free); with TWO ComfyUI processes
-    (one a leftover copy from the smoke test) the 27B spilled into shared memory and dropped
-    to 0.89 tok/s. ComfyUI is a process PAIR (venv launcher + base-python child); the old code
-    used `Select-Object -First 1` and closed only one, leaving the context. Cleanup now closes
-    ALL matching processes."""
+    """ComfyUI stays OPEN between media jobs (default), but before the language model loads
+    ONLY a duplicate/leaked ComfyUI is cleaned. Measured on the real machine: a single (fresh)
+    ComfyUI with MAX 32K ran together at 61 tok/s; with TWO ComfyUI instances the 27B spilled
+    and dropped to 0.89 tok/s. ComfyUI is a process PAIR (launcher + base-python child), so
+    process COUNT cannot decide "leak": a single instance may be 2 processes (closing it would
+    close ComfyUI on every load). Instances are counted by roots; the instance on :8188 is kept."""
     manager = read_text("scripts/manage-qwen.ps1")
     # The setting is back and defaults to open (avoids the ~27 s reopen between media jobs).
     assert "$comfyKeepAlive = $true" in manager
     assert "$settings.comfyKeepAlive" in manager
-    # Duplicate detection: more than one process -> all closed.
-    assert "@(Get-ComfyProcesses).Count -gt 1" in manager
-    # Cleanup targets ALL processes, not a single one.
-    assert "function Get-ComfyProcesses" in manager
-    stop = manager.split("function Stop-IdleComfy")[1].split("function Get-ManagedServers")[0]
-    assert "Select-Object -First 1" not in stop
-    assert "foreach ($comfy in $procs)" in stop
-    # The empty-queue rule is preserved; a running job is never touched.
-    assert "queue_running" in stop
+    # Leak detection is based on instance roots, not process count.
+    assert "function Get-ComfyInstanceRoots" in manager
+    assert "function Stop-ComfyLeaks" in manager
+    assert "Get-NetTCPConnection -LocalPort 8188" in manager
+    # Only leaks are cleaned before loading; a single instance is kept.
+    assert "[void](Stop-ComfyLeaks)" in manager
+    assert "@(Get-ComfyProcesses).Count -gt 1" not in manager
     # If the budget fails, close and retry (fallback preserved).
     assert "if ((Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector } else { throw }" in manager
 

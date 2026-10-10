@@ -28,21 +28,56 @@ function Get-RunningComfy {
     try { return [Diagnostics.Process]::GetProcessById([int]$found.ProcessId) } catch { return $null }
 }
 
-# ComfyUI is a process PAIR (a venv launcher + a base-python child) and an old copy can be
-# left behind. If more than one matching process exists, all are closed: otherwise the
-# second copy holds free VRAM and spills the 27B together with the language model
-# (0.89 tok/s measured on the real machine).
+# ComfyUI is a process PAIR (a venv launcher + a base-python child), so process COUNT cannot
+# decide "leak": a healthy single instance is 2 processes. Instances are counted by roots
+# (a process whose parent is not a ComfyUI match). If there is more than one root, the leaked
+# instances are closed; the single healthy instance is left untouched (otherwise every media
+# job would needlessly close ComfyUI).
 function Get-ComfyLeakProcesses {
     @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like '*ComfyUI\main.py*' })
 }
 function Clear-ComfyLeaks {
     $all = @(Get-ComfyLeakProcesses)
-    if ($all.Count -le 1) { return }
-    foreach ($p in $all) {
-        try { $proc = [Diagnostics.Process]::GetProcessById([int]$p.ProcessId); $proc.Kill($true); $proc.WaitForExit(20000) | Out-Null } catch { }
+    if ($all.Count -eq 0) { return }
+    $ids = @($all | ForEach-Object { [int]$_.ProcessId })
+    $roots = @($all | Where-Object { $ids -notcontains [int]$_.ParentProcessId })
+    if ($roots.Count -le 1) { return }  # single instance (may be a pair) -> leave it
+    $listener = 0
+    try { $listener = [int](Get-NetTCPConnection -LocalPort 8188 -State Listen -ErrorAction Stop | Select-Object -First 1).OwningProcess } catch { }
+    $keepRoot = [int]$roots[0].ProcessId
+    if ($listener) {
+        foreach ($r in $roots) {
+            $cur = $listener; $hit = $false
+            for ($i = 0; $i -lt 8; $i++) {
+                if ($cur -eq [int]$r.ProcessId) { $hit = $true; break }
+                $m = $all | Where-Object { [int]$_.ProcessId -eq $cur } | Select-Object -First 1
+                if (!$m) { break }
+                $cur = [int]$m.ParentProcessId
+            }
+            if ($hit) { $keepRoot = [int]$r.ProcessId; break }
+        }
     }
     foreach ($p in $all) {
+        $cur = [int]$p.ProcessId; $under = $false
+        for ($i = 0; $i -lt 8; $i++) {
+            if ($cur -eq $keepRoot) { $under = $true; break }
+            $m = $all | Where-Object { [int]$_.ProcessId -eq $cur } | Select-Object -First 1
+            if (!$m) { break }
+            $cur = [int]$m.ParentProcessId
+        }
+        if ($under) { continue }
+        try { $proc = [Diagnostics.Process]::GetProcessById([int]$p.ProcessId); $proc.Kill($true); $proc.WaitForExit(15000) | Out-Null } catch { }
+    }
+    foreach ($p in $all) {
+        $cur = [int]$p.ProcessId; $under = $false
+        for ($i = 0; $i -lt 8; $i++) {
+            if ($cur -eq $keepRoot) { $under = $true; break }
+            $m = $all | Where-Object { [int]$_.ProcessId -eq $cur } | Select-Object -First 1
+            if (!$m) { break }
+            $cur = [int]$m.ParentProcessId
+        }
+        if ($under) { continue }
         if (Get-Process -Id ([int]$p.ProcessId) -ErrorAction SilentlyContinue) { Stop-Process -Id ([int]$p.ProcessId) -Force -ErrorAction SilentlyContinue }
     }
     Start-Sleep -Milliseconds 1500

@@ -140,22 +140,22 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
 
 # The only big CUDA context we create is ComfyUI's. Even with the models unloaded the
 # context (plus driver-side reservation) holds ~300 MiB and, more importantly, leaves VRAM
-# fragmented (measured on an RTX 5060 Ti). Before the language model loads, ComfyUI is
-# ALWAYS closed if its queue is empty, so the free-VRAM reading is trustworthy and the 27B
-# model does not spill into shared memory. The next image/video reopens it (~15-20 s).
-# If a job is running it is not touched.
+# fragmented (measured on an RTX 5060 Ti).
 # ComfyUI is NOT a single process: it forms a PAIR (a venv launcher python.exe + its real
-# base-python child). The old code used `Select-Object -First 1` and targeted only ONE of
-# them; the remaining match (or an old leaked copy) kept the CUDA context and spilled the
-# language model. On the real machine: with two ComfyUI processes MAX 32K spilled into
-# shared memory and dropped to 0.89 tok/s; with a SINGLE ComfyUI the same model ran at
-# 61 tok/s. So every cleanup closes ALL matching processes; if there is a pair/leak, all go.
+# base-python child). A healthy single instance is therefore 2 processes, so process COUNT
+# cannot decide "leak": counting >1 would close a healthy ComfyUI on every load. Instances
+# are counted by "roots" (a process whose parent is not itself a ComfyUI match). A real leak
+# (e.g. a leftover `--list` copy) adds an extra root. Measured: two ComfyUI instances -> MAX
+# 32K spilled to 0.89 tok/s; a single instance -> 61 tok/s. `Stop-Leaks` keeps the instance
+# listening on :8188 and closes only the extras; `Stop-IdleComfy` closes them all (explicit
+# cleanup). The old `Select-Object -First 1` closed only one half of the pair.
 function Get-ComfyProcesses {
     @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like '*ComfyUI\main.py*' })
 }
 
 # Closes ALL idle (empty-queue) ComfyUI processes. $true if at least one was closed.
+# (For explicit cleanup: `-Action closecomfy`, the install and smoke-test hygiene.)
 function Stop-IdleComfy {
     $procs = @(Get-ComfyProcesses)
     if ($procs.Count -eq 0) { return $false }
@@ -180,6 +180,55 @@ function Stop-IdleComfy {
         }
     }
     Start-Sleep -Milliseconds 1500  # The driver frees VRAM with a slight delay.
+    return $killed
+}
+
+# Instance roots (a matching process whose parent is not itself a matching process).
+function Get-ComfyInstanceRoots($procs) {
+    $ids = @($procs | ForEach-Object { [int]$_.ProcessId })
+    @($procs | Where-Object { $ids -notcontains [int]$_.ParentProcessId })
+}
+
+# Is $procId part of the instance rooted at $rootId? (Parent chain within matches.)
+function Test-ComfyUnderRoot($all, [int]$procId, [int]$rootId) {
+    $cur = $procId
+    for ($i = 0; $i -lt 8; $i++) {
+        if ($cur -eq $rootId) { return $true }
+        $m = $all | Where-Object { [int]$_.ProcessId -eq $cur } | Select-Object -First 1
+        if (!$m) { return $false }
+        $cur = [int]$m.ParentProcessId
+    }
+    return $false
+}
+
+# Closes only LEAKED/duplicate ComfyUI instances; a single healthy instance (with its pair)
+# is left untouched. The instance listening on :8188 is kept. $true if a leak was closed.
+function Stop-ComfyLeaks {
+    $all = @(Get-ComfyProcesses)
+    if ($all.Count -eq 0) { return $false }
+    $roots = @(Get-ComfyInstanceRoots $all)
+    if ($roots.Count -le 1) { return $false }  # single instance (may be a pair) -> leave it
+    $listener = 0
+    try { $listener = [int](Get-NetTCPConnection -LocalPort 8188 -State Listen -ErrorAction Stop | Select-Object -First 1).OwningProcess } catch { }
+    $keepRoot = [int]$roots[0].ProcessId
+    if ($listener) {
+        foreach ($r in $roots) { if (Test-ComfyUnderRoot $all $listener ([int]$r.ProcessId)) { $keepRoot = [int]$r.ProcessId; break } }
+    }
+    $killed = $false
+    foreach ($p in $all) {
+        if (Test-ComfyUnderRoot $all ([int]$p.ProcessId) $keepRoot) { continue }  # kept instance
+        try {
+            $process = [Diagnostics.Process]::GetProcessById([int]$p.ProcessId)
+            $process.Kill($true)
+            $process.WaitForExit(15000) | Out-Null
+            $killed = $true
+        } catch { }
+    }
+    foreach ($p in $all) {
+        if ((Test-ComfyUnderRoot $all ([int]$p.ProcessId) $keepRoot)) { continue }
+        if (Get-Process -Id ([int]$p.ProcessId) -ErrorAction SilentlyContinue) { Stop-Process -Id ([int]$p.ProcessId) -Force -ErrorAction SilentlyContinue; $killed = $true }
+    }
+    if ($killed) { Start-Sleep -Milliseconds 1500 }
     return $killed
 }
 
@@ -234,8 +283,9 @@ try {
     # and measured again.
     $comfyKeepAlive = $true
     if ($settings -and $null -ne $settings.comfyKeepAlive) { $comfyKeepAlive = [bool]$settings.comfyKeepAlive }
-    # Leak/duplicate detection: more than one process -> all closed (single-instance rule).
-    if (@(Get-ComfyProcesses).Count -gt 1) { [void](Stop-IdleComfy) }
+    # Leak/duplicate detection: only LEAKS are closed; a single healthy instance (with its
+    # pair) is kept (see Stop-ComfyLeaks). This keeps ComfyUI open between media jobs.
+    [void](Stop-ComfyLeaks)
     if (!$comfyKeepAlive) { [void](Stop-IdleComfy) }
     # The previous process was already stopped above; free VRAM is measured here so the
     # memory freed by the old process is counted too.

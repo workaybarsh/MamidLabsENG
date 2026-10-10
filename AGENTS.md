@@ -138,17 +138,20 @@ the full catalog (`Get-ProfileCatalog`).
 
 **VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + **600 MiB**
 (300 MiB on LITE). **ComfyUI lifecycle:** ComfyUI is **kept OPEN** between media jobs (default;
-closable via `comfyKeepAlive`), avoiding a ~27 s reopen per media job. **A single (fresh) ComfyUI and
-MAX 32K run together fine:** measured, 61 tok/s with 192 MiB free VRAM; the smoke test's
-"post-media switch" step also stayed at a 0.92 ratio. A spill happens only with a **duplicate/leaked
-ComfyUI process**: ComfyUI is not a single process but a **pair** (a venv launcher + its base-python
-child); the old code used `Select-Object -First 1` and closed only one of them, leaving the other (or
-a leftover copy) holding the CUDA context. Measured (RTX 5060 Ti 16 GB, MAX): with two ComfyUI
-processes the 27B spilled into shared memory and generation dropped to **0.89 tok/s**; with a single
-ComfyUI it ran at **61 tok/s**. So before loading, duplicate/leaked processes are closed
-(`Get-ComfyProcesses` + `Stop-IdleComfy`, which closes them all) and, if the budget fails, ComfyUI is
-closed and measured again. External cleanup: `manage-qwen.ps1 -Action closecomfy`. Reopening ComfyUI
-costs ~27 s per media job (measured: cold 55 s, warm 28 s). Measured: on a clean GPU with 15244 MiB free the 27B model loaded and ran at
+closable via `comfyKeepAlive=false`), avoiding a ~27 s reopen per media job. **A single healthy
+ComfyUI and MAX 32K run together fine:** measured, after a real image job MAX loaded WITHOUT closing
+ComfyUI and ran at **62 tok/s** (~2 tok/s slower than clean); independent run 61 tok/s / 192 MiB
+free. A spill happens only with a **leaked/duplicate ComfyUI instance**. Critical subtlety: ComfyUI is
+a process **pair** (a venv launcher + its base-python child), so process **count** cannot decide
+"leak" — a single healthy instance is already 2 processes. Instances are counted by **roots**
+(a matching process whose parent is not itself a match; `Get-ComfyInstanceRoots`); `Stop-ComfyLeaks`
+closes only extra roots and **keeps the instance listening on :8188** (`Test-ComfyUnderRoot`). So a
+single ComfyUI is not closed before loading; a leftover copy (e.g. a `--list` from the smoke test) is
+closed. The old `Select-Object -First 1` closed only one half and left the rest. Measured: two
+ComfyUI instances -> 27B spilled to **0.89 tok/s**; a single instance -> **61-62 tok/s**. If the budget
+fails ComfyUI is closed and measured again (safety net). External cleanup: `manage-qwen.ps1`
+`-Action closecomfy`. Reopening ComfyUI costs ~27 s per media job (measured: cold 55 s, warm 28 s).
+Measured: on a clean GPU with 15244 MiB free the 27B model loaded and ran at
 ~45 tok/s (file 14,600 MiB → real margin ~600 MiB).
 The 800/1000 MiB margins of 1.0.4–1.0.7 (threshold 15400/15600) wrongly rejected that working
 state, raising the generic "Model operation failed" error. The tolerance is profile-based:
@@ -406,10 +409,10 @@ has no LoRA.
 7. **The VRAM margin is profile-based** (MAX/FLASH 600 MiB, LITE 300 MiB) and the tolerance is
    LITE 1024 / MAX/FLASH 0. On a 16 GB card a margin that is too large keeps MAX from
    ever starting, while too small lets the 27B model spill into shared memory and drop to ~6 tok/s.
-   **ComfyUI** stays open between media jobs; a single (fresh) process runs together with MAX 32K
-   (61 tok/s). A spill happens only with a **duplicate/leaked ComfyUI process** (ComfyUI is a process
-   pair); so before loading all matching processes are closed (section 5). A leaked process spills the
-   27B to 0.89 tok/s. On MAX/FLASH the mmproj runs on the CPU
+   **ComfyUI** stays open between media jobs; a single healthy instance runs together with MAX 32K
+   (61-62 tok/s). A spill happens only with a **leaked/duplicate instance** (ComfyUI is a process
+   pair, so instance roots — not process count — decide); before loading only leaks are closed
+   (section 5). A leaked instance spills the 27B to 0.89 tok/s. On MAX/FLASH the mmproj runs on the CPU
    (`--no-mmproj-offload`). On the GPU it spills
    ~420 MiB into shared memory and speed drops from 25 to 19 tok/s.
 8. **Single image rule:** only one image at a time goes to chat (multiple images only in the
@@ -493,7 +496,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
-| 2026-10-10 | Found and fixed a duplicate/leaked ComfyUI process bug: ComfyUI is not a single process but a **pair** (a venv launcher + its base-python child); the old `Select-Object -First 1` closed only one and left the remaining context. With a duplicate/leaked ComfyUI, MAX 32K spilled to 0.89 tok/s; with a single (fresh) ComfyUI the same model ran at 61 tok/s (192 MiB free) — so ComfyUI can stay open. `Get-ComfyProcesses` + `Stop-IdleComfy` now close ALL matching processes; `media-model-swap.ps1` `Clear-ComfyLeaks` removes duplicate copies; the smoke test end, the UI finally, and the install comfyui stage close an idle ComfyUI. `comfyKeepAlive` (default `true`, open) is kept. | scripts/manage-qwen.ps1, agent/media-model-swap.ps1, scripts/smoke-test.ps1, scripts/install-mamidlabs.ps1, tests/test_memory_admission.py, tests/test_smoke_test_script.py |
+| 2026-10-10 | Solved "ComfyUI must stay open": leak/duplicate detection uses instance **roots**, not process **count**. ComfyUI is a process pair (launcher + base-python child), so `Count -gt 1` mistook the single healthy ComfyUI for a leak and closed it (the opposite of the goal). `Get-ComfyInstanceRoots` + `Stop-ComfyLeaks` close only extra roots and keep the instance on :8188 (`Test-ComfyUnderRoot`); `media-model-swap.ps1` `Clear-ComfyLeaks` mirrors it; the old `Select-Object -First 1` closed only one half. Measured: after a real image job MAX loaded WITHOUT closing ComfyUI -> **62 tok/s**. | scripts/manage-qwen.ps1, agent/media-model-swap.ps1, tests/test_memory_admission.py |
 | 2026-10-10 | 1.1.0 fully verified: `python -m pytest -q` **318 passed** (4 expected skips) and the full smoke test **13/13** (chat 44 tok/s, MTP acceptance 82/87, chart bar/pie/function, image 56 s, edit 96 s, post-media switch ratio 0.97, video 161 s, UI turn MTP 23/23). The installed root is **byte-identical to the repo in the program files**. | AGENTS.md |
 | 2026-10-10 | Added dependency-free chart generation (1.1.0): the chat tool `generate_chart` + `agent/chart-run.ps1` (bundled pwsh + System.Drawing; bar/line/pie/scatter/function; a safe expression evaluator, no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`. Added a `chart` step to the smoke test (`-SkipChart`). Applied to the Turkish edition too. | qwen-desktop.ps1, agent/qwen-inference.ps1, agent/chart-run.ps1, scripts/smoke-test.ps1, tests/test_chart_run.py |
 | 2026-10-10 | Added `Convert-MathText` for LaTeX math answers (1.1.0): instead of raw `$$`/`\frac`/`\int`, readable Unicode (∫, ∞, π, √, ∑, →, ≠, Greek letters), fractions → a/b, exponents/subscripts → Unicode (x², ∫₀). A currency `$` is kept. | qwen-desktop.ps1, tests/test_math_render.py |
