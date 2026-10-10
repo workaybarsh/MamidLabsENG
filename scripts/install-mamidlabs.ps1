@@ -509,6 +509,11 @@ function Invoke-ComfyUI {
     if ($SkipMedia) { Write-Skip 'ComfyUI (-SkipMedia)'; return }
     $target = Join-Path $Root 'ComfyUI'
     $main = Join-Path $target 'main.py'
+    # A running ComfyUI (from a previous session/open app) locks the files and makes git
+    # operations hang; at the start of this stage any process belonging to this root is stopped.
+    Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -like '*ComfyUI\main.py*' } |
+        ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; Write-Note ('Stopped: ComfyUI (' + $_.ProcessId + ')') } catch { } }
     if ((Test-Path -LiteralPath $main -PathType Leaf) -and !$Force) {
         Sync-PinnedCheckout $target $script:ComfyRepo $script:ComfyCommit 'ComfyUI'
     } else {

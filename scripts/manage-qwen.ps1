@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('start', 'stop', 'switch')][string]$Action = 'switch',
+    [ValidateSet('start', 'stop', 'switch', 'closecomfy')][string]$Action = 'switch',
     [ValidateSet('max', 'flash', 'lite')][string]$Profile = 'max',
     [string]$ModelId,
     # Skip the memory check (for troubleshooting). Not needed in normal use.
@@ -21,7 +21,7 @@ $logs = Join-Path $root 'logs'
 # The settings are needed for the profile choice, so they are read before the model path is determined.
 $settings = $null
 $settingsPath = Join-Path $root 'settings\api.json'
-if ($Action -ne 'stop' -and (Test-Path -LiteralPath $settingsPath)) {
+if ($Action -notin @('stop', 'closecomfy') -and (Test-Path -LiteralPath $settingsPath)) {
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
 }
 
@@ -144,21 +144,43 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
 # ALWAYS closed if its queue is empty, so the free-VRAM reading is trustworthy and the 27B
 # model does not spill into shared memory. The next image/video reopens it (~15-20 s).
 # If a job is running it is not touched.
+# ComfyUI is NOT a single process: it forms a PAIR (a venv launcher python.exe + its real
+# base-python child). The old code used `Select-Object -First 1` and targeted only ONE of
+# them; the remaining match (or an old leaked copy) kept the CUDA context and spilled the
+# language model. On the real machine: with two ComfyUI processes MAX 32K spilled into
+# shared memory and dropped to 0.89 tok/s; with a SINGLE ComfyUI the same model ran at
+# 61 tok/s. So every cleanup closes ALL matching processes; if there is a pair/leak, all go.
+function Get-ComfyProcesses {
+    @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*ComfyUI\main.py*' })
+}
+
+# Closes ALL idle (empty-queue) ComfyUI processes. $true if at least one was closed.
 function Stop-IdleComfy {
-    $comfy = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like '*ComfyUI\main.py*' } | Select-Object -First 1
-    if (!$comfy) { return $false }
+    $procs = @(Get-ComfyProcesses)
+    if ($procs.Count -eq 0) { return $false }
     try {
         $queue = Invoke-RestMethod 'http://127.0.0.1:8188/queue' -TimeoutSec 3 -ErrorAction Stop
         if (@($queue.queue_running).Count -gt 0 -or @($queue.queue_pending).Count -gt 0) { return $false }
     } catch { }  # A process that does not respond is unusable anyway; it can be closed.
-    try {
-        $process = [Diagnostics.Process]::GetProcessById([int]$comfy.ProcessId)
-        $process.Kill($true)
-        $process.WaitForExit(20000) | Out-Null
-    } catch { return $false }
+    $killed = $false
+    foreach ($comfy in $procs) {
+        try {
+            $process = [Diagnostics.Process]::GetProcessById([int]$comfy.ProcessId)
+            $process.Kill($true)
+            $process.WaitForExit(20000) | Out-Null
+            $killed = $true
+        } catch { }
+    }
+    # Force-kill anything that did not exit promptly (a pair/leak can close with a delay).
+    foreach ($comfy in $procs) {
+        if (Get-Process -Id ([int]$comfy.ProcessId) -ErrorAction SilentlyContinue) {
+            Stop-Process -Id ([int]$comfy.ProcessId) -Force -ErrorAction SilentlyContinue
+            $killed = $true
+        }
+    }
     Start-Sleep -Milliseconds 1500  # The driver frees VRAM with a slight delay.
-    return $true
+    return $killed
 }
 
 function Get-ManagedServers {
@@ -173,6 +195,12 @@ try {
     try { $ownsGate = $gate.WaitOne(30000) }
     catch [System.Threading.AbandonedMutexException] { $ownsGate = $true }
     if (!$ownsGate) { throw 'Model control is being used by another process.' }
+
+    # Resource hygiene: close a leftover ComfyUI. If the app crashed / was ended from
+    # Task Manager, or the smoke test's UI step force-killed the app, ComfyUI can be left
+    # running; loading the language model on top of it spills VRAM. Callers (uninstall,
+    # smoke-test, Shutdown-All) trigger this explicitly.
+    if ($Action -eq 'closecomfy') { [void](Stop-IdleComfy); 'ComfyUI closed (if idle).'; return }
 
     $running = @(Get-ManagedServers)
     if ($Action -ne 'stop' -and $running.Count -eq 1 -and $running[0].CommandLine -match ('--alias\s+' + [regex]::Escape($desiredAlias) + '(?:\s|$)')) {
@@ -198,23 +226,24 @@ try {
     if (!(Test-Path -LiteralPath $model -PathType Leaf)) { throw "Model not found: $model" }
     # The Lite profile also runs without an image projector; on the others mmproj is mandatory.
     if (!$custom -and $Profile -ne 'lite' -and !(Test-Path -LiteralPath $projector -PathType Leaf)) { throw "Image projector not found: $projector" }
-    # ComfyUI lifecycle. Default (comfyKeepAlive=true): ComfyUI is kept open; no ~15-20 s
-    # reopen between media jobs. Chat is ~11% slower (measured 49.7 -> 44.2 tok/s) BUT there
-    # is NO spill: the GPU buffer layout is identical in both cases (CPU_Mapped 644 MiB,
-    # CUDA0 model 13945 MiB, KV 576 MiB; graph splits 2). With comfyKeepAlive=false ComfyUI
-    # is closed before loading and chat stays at full speed. If memory is short (empty queue
-    # yet tight VRAM) it is closed for safety and measured again.
+    # ComfyUI lifecycle. Default: kept OPEN between media jobs (no ~27 s reopen). On the real
+    # machine a SINGLE (fresh) ComfyUI with MAX 32K runs fine together: 61 tok/s, 192 MiB free.
+    # A spill happens only with a DUPLICATE/leaked ComfyUI process (ComfyUI is a process pair;
+    # a leftover copy overshoots VRAM -> 0.89 tok/s measured). So before loading we clean any
+    # leak/duplicate, then measure the budget; if memory is short the idle ComfyUI is closed
+    # and measured again.
     $comfyKeepAlive = $true
     if ($settings -and $null -ne $settings.comfyKeepAlive) { $comfyKeepAlive = [bool]$settings.comfyKeepAlive }
+    # Leak/duplicate detection: more than one process -> all closed (single-instance rule).
+    if (@(Get-ComfyProcesses).Count -gt 1) { [void](Stop-IdleComfy) }
     if (!$comfyKeepAlive) { [void](Stop-IdleComfy) }
     # The previous process was already stopped above; free VRAM is measured here so the
     # memory freed by the old process is counted too.
     if (!$SkipMemoryCheck) {
         try { Test-MemoryBudget $model $Profile $projector }
         catch {
-            # ComfyUI was kept open but memory ran short: close it if idle and retry.
-            if ($comfyKeepAlive -and (Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector }
-            else { throw }
+            # Not enough memory (ComfyUI open): close it if idle and retry; else fail.
+            if ((Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector } else { throw }
         }
     }
     New-Item -ItemType Directory -Path $logs -Force | Out-Null

@@ -49,6 +49,17 @@ def test_ui_step_restores_settings_and_stops_the_server():
     assert "& $manage -Action stop" in script
 
 
+def test_smoke_test_closes_leftover_comfyui():
+    """The image/video steps leave ComfyUI open; the UI step force-kills the app so
+    Shutdown-All does not run. At the end of the test (and in the UI step's finally) any
+    idle ComfyUI is closed; otherwise the language model loads on top of it and spills VRAM
+    (measured on the real machine: 0.89 tok/s)."""
+    script = read_text("scripts/smoke-test.ps1")
+    assert "& $manage -Action closecomfy" in script
+    # Belt-and-suspenders: any leftover python ComfyUI process is killed too.
+    assert "ComfyUI\\main.py" in script
+
+
 def test_each_component_reports_pass_or_fail_independently():
     """If one component fails the others must still be attempted; there must be no early exit."""
     script = read_text("scripts/smoke-test.ps1")

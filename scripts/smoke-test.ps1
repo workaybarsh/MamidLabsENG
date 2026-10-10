@@ -723,7 +723,10 @@ if ($SkipUi) {
         if ($appProcess -and !$appProcess.HasExited) {
             try { Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue } catch { }
         }
+        # Close the server the app started and any leftover processes (no step follows, but clean up).
+        # The app was force-killed, so Shutdown-All did not run and ComfyUI can be left open.
         & $manage -Action stop | Out-Null
+        & $manage -Action closecomfy | Out-Null
         if (Test-Path -LiteralPath $settingsBackup) {
             Remove-Item -LiteralPath $settingsDir -Recurse -Force -ErrorAction SilentlyContinue
             Copy-Item -LiteralPath $settingsBackup -Destination $settingsDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -731,6 +734,16 @@ if ($SkipUi) {
         Remove-Item -LiteralPath $settingsBackup -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+# -------------------------------------------------------------------- resource hygiene
+# The image/video steps leave ComfyUI open (so consecutive media jobs in one session reuse
+# it). If the language model loads on top of it, VRAM spills; so at the end of the test any
+# idle ComfyUI is closed (even if the UI step was skipped or crashed).
+& $manage -Action closecomfy | Out-Null
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like '*ComfyUI\main.py*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Milliseconds 1500
 
 # -------------------------------------------------------------------- summary
 Write-Section 'Summary'

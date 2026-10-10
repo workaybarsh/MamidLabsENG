@@ -20,8 +20,9 @@ def test_memory_budget_function_exists_and_is_called_before_start():
     assert "function Test-MemoryBudget" in manager
     # The image projector is included in the budget since it is also loaded into VRAM.
     assert "Test-MemoryBudget $model $Profile $projector" in manager
-    # Single GPU owner: in the default behavior our CUDA context (ComfyUI) is closed
-    # before measuring (comfyKeepAlive=false). See test_comfy_keep_alive_*.
+    # Single GPU owner: our CUDA context (ComfyUI) is handled before measuring. The default
+    # keeps it open; duplicates/leaks are closed; if the budget fails it is closed and retried.
+    # See test_idle_comfy_is_kept_open_but_leaks_are_cleaned.
     assert "[void](Stop-IdleComfy)" in manager
     # The check must run AFTER the file existence checks (when the model path is known) but
     # BEFORE the model process is started; closing ComfyUI must come before the measurement.
@@ -31,16 +32,29 @@ def test_memory_budget_function_exists_and_is_called_before_start():
     assert idx_comfy < idx_check < idx_start
 
 
-def test_comfy_keep_alive_setting_defaults_to_open():
-    """settings/api.json -> comfyKeepAlive. Default true: ComfyUI stays open; no ~15-20 s
-    reopen between media jobs. Chat is ~11% slower (measured 49.7 -> 44.2 tok/s) but there
-    is NO spill: the GPU buffer layout is identical in both cases (CPU_Mapped 644 MiB,
-    CUDA0 model 13945 MiB; graph splits 2). false restores full speed."""
+def test_idle_comfy_is_kept_open_but_leaks_are_cleaned():
+    """ComfyUI is kept OPEN between media jobs (default), but before the language model loads
+    a DUPLICATE/leaked ComfyUI is cleaned. Measured on the real machine: a single (fresh)
+    ComfyUI with MAX 32K ran together at 61 tok/s (192 MiB free); with TWO ComfyUI processes
+    (one a leftover copy from the smoke test) the 27B spilled into shared memory and dropped
+    to 0.89 tok/s. ComfyUI is a process PAIR (venv launcher + base-python child); the old code
+    used `Select-Object -First 1` and closed only one, leaving the context. Cleanup now closes
+    ALL matching processes."""
     manager = read_text("scripts/manage-qwen.ps1")
+    # The setting is back and defaults to open (avoids the ~27 s reopen between media jobs).
     assert "$comfyKeepAlive = $true" in manager
     assert "$settings.comfyKeepAlive" in manager
-    assert "if (!$comfyKeepAlive) { [void](Stop-IdleComfy) }" in manager
-    assert "if ($comfyKeepAlive -and (Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector }" in manager
+    # Duplicate detection: more than one process -> all closed.
+    assert "@(Get-ComfyProcesses).Count -gt 1" in manager
+    # Cleanup targets ALL processes, not a single one.
+    assert "function Get-ComfyProcesses" in manager
+    stop = manager.split("function Stop-IdleComfy")[1].split("function Get-ManagedServers")[0]
+    assert "Select-Object -First 1" not in stop
+    assert "foreach ($comfy in $procs)" in stop
+    # The empty-queue rule is preserved; a running job is never touched.
+    assert "queue_running" in stop
+    # If the budget fails, close and retry (fallback preserved).
+    assert "if ((Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector } else { throw }" in manager
 
 
 def test_idle_comfy_is_only_stopped_when_its_queue_is_empty():

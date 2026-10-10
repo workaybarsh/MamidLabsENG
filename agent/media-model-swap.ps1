@@ -28,11 +28,33 @@ function Get-RunningComfy {
     try { return [Diagnostics.Process]::GetProcessById([int]$found.ProcessId) } catch { return $null }
 }
 
+# ComfyUI is a process PAIR (a venv launcher + a base-python child) and an old copy can be
+# left behind. If more than one matching process exists, all are closed: otherwise the
+# second copy holds free VRAM and spills the 27B together with the language model
+# (0.89 tok/s measured on the real machine).
+function Get-ComfyLeakProcesses {
+    @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*ComfyUI\main.py*' })
+}
+function Clear-ComfyLeaks {
+    $all = @(Get-ComfyLeakProcesses)
+    if ($all.Count -le 1) { return }
+    foreach ($p in $all) {
+        try { $proc = [Diagnostics.Process]::GetProcessById([int]$p.ProcessId); $proc.Kill($true); $proc.WaitForExit(20000) | Out-Null } catch { }
+    }
+    foreach ($p in $all) {
+        if (Get-Process -Id ([int]$p.ProcessId) -ErrorAction SilentlyContinue) { Stop-Process -Id ([int]$p.ProcessId) -Force -ErrorAction SilentlyContinue }
+    }
+    Start-Sleep -Milliseconds 1500
+}
+
 function Start-OrReuseComfy([string]$python, [string]$comfyDir, [string]$comfyOut, [string]$comfyIn,
                             [string]$logs, [string]$comfyUrl, [bool]$lite, [int]$timeoutSec, [hashtable]$Shared) {
     # External model folders (files used in place without copying); see media-paths.ps1.
     $extraPaths = Join-Path (Split-Path -Parent $comfyDir) 'settings\comfy-extra-models.yaml'
     $hasExtra = Test-Path -LiteralPath $extraPaths -PathType Leaf
+    # Clean up leaked/duplicate copies (single-instance rule).
+    Clear-ComfyLeaks
     $existing = Get-RunningComfy
     if ($existing) {
         # If the open process started before the external folder list changed it cannot see the new folder.

@@ -3,6 +3,20 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **A duplicate/leaked ComfyUI process caused a VRAM spill:** ComfyUI is not a single process but a
+  **pair** (a venv launcher + its base-python child). `Stop-IdleComfy`/`Get-RunningComfy` used
+  `Select-Object -First 1`, closing only one of them, so the remaining process (or a leftover copy
+  from the smoke test) held the CUDA context. The 27B model spilled into shared memory and generation
+  dropped to **0.89 tok/s**; with a **single (fresh) ComfyUI** the same model ran at **61 tok/s**
+  (192 MiB free). `Get-ComfyProcesses` + `Stop-IdleComfy` now close **all** matching processes;
+  duplicates are cleaned before loading; `media-model-swap.ps1` `Clear-ComfyLeaks` removes copies; the
+  smoke test end, the UI finally and the `install` comfyui stage close an idle ComfyUI. `comfyKeepAlive`
+  (default `true`, ComfyUI stays open) is kept. Cost: reopening ComfyUI ~27 s per media job (measured:
+  cold 55 s, warm 28 s).
+
 ## [1.1.0] - 2026-10-10
 
 ### Added

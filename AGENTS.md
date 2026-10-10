@@ -137,14 +137,19 @@ Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFil
 the full catalog (`Get-ProfileCatalog`).
 
 **VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + **600 MiB**
-(300 MiB on LITE). **ComfyUI lifecycle** (`settings/api.json` → `comfyKeepAlive`): the default
-**true** keeps ComfyUI open (no ~15–20 s reopen between media jobs). This does **not** spill:
-measured, the GPU buffer layout is identical in both cases (CPU_Mapped 644 MiB, CUDA0 model
-13945 MiB, KV 576 MiB, graph splits 2) and MTP acceptance is the same (82/131); only a general
-GPU effect slows chat by ~11% (49.7 → 44.2 tok/s). With `comfyKeepAlive=false` ComfyUI is closed
-before loading and chat stays at full speed. In either case, if memory is short (empty queue)
-ComfyUI is closed and measured again. Measured: on a clean GPU with 15244 MiB free the 27B model
-loaded and ran at ~45 tok/s (file 14,600 MiB → real margin ~600 MiB).
+(300 MiB on LITE). **ComfyUI lifecycle:** ComfyUI is **kept OPEN** between media jobs (default;
+closable via `comfyKeepAlive`), avoiding a ~27 s reopen per media job. **A single (fresh) ComfyUI and
+MAX 32K run together fine:** measured, 61 tok/s with 192 MiB free VRAM; the smoke test's
+"post-media switch" step also stayed at a 0.92 ratio. A spill happens only with a **duplicate/leaked
+ComfyUI process**: ComfyUI is not a single process but a **pair** (a venv launcher + its base-python
+child); the old code used `Select-Object -First 1` and closed only one of them, leaving the other (or
+a leftover copy) holding the CUDA context. Measured (RTX 5060 Ti 16 GB, MAX): with two ComfyUI
+processes the 27B spilled into shared memory and generation dropped to **0.89 tok/s**; with a single
+ComfyUI it ran at **61 tok/s**. So before loading, duplicate/leaked processes are closed
+(`Get-ComfyProcesses` + `Stop-IdleComfy`, which closes them all) and, if the budget fails, ComfyUI is
+closed and measured again. External cleanup: `manage-qwen.ps1 -Action closecomfy`. Reopening ComfyUI
+costs ~27 s per media job (measured: cold 55 s, warm 28 s). Measured: on a clean GPU with 15244 MiB free the 27B model loaded and ran at
+~45 tok/s (file 14,600 MiB → real margin ~600 MiB).
 The 800/1000 MiB margins of 1.0.4–1.0.7 (threshold 15400/15600) wrongly rejected that working
 state, raising the generic "Model operation failed" error. The tolerance is profile-based:
 **LITE 1024 MiB** (9B MTP model's small overflow on an 8 GB card; llama.cpp keeps the big embedding
@@ -326,7 +331,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
     `videoProvider`, `externalMediaModels`.
   - UI: `uiPreferences.{internet, agent, accessMode}`, `firstRunApiSettings`.
   - LITE settings: `liteModel`, `liteContext`, `liteReasoningBudget`.
-  - Media: `comfyKeepAlive` (default `true`; keeps ComfyUI open, see section 5).
+  - Media: `comfyKeepAlive` (default `true`; ComfyUI stays open between media jobs, see section 5).
 - Chats are encrypted under `chats\` with the `MAMIDLABS-CHAT-DPAPI-V2` prefix.
 - `logs\audit.jsonl`: a record of tool calls (not content; path/command identity).
 
@@ -401,9 +406,11 @@ has no LoRA.
 7. **The VRAM margin is profile-based** (MAX/FLASH 600 MiB, LITE 300 MiB) and the tolerance is
    LITE 1024 / MAX/FLASH 0. On a 16 GB card a margin that is too large keeps MAX from
    ever starting, while too small lets the 27B model spill into shared memory and drop to ~6 tok/s.
-   **ComfyUI** is kept open by default (`comfyKeepAlive=true`); this does not spill (identical
-   buffer layout, section 5) but slows chat by ~11%. If memory is short (empty queue) it is closed
-   and measured again. On MAX/FLASH the mmproj runs on the CPU (`--no-mmproj-offload`). On the GPU it spills
+   **ComfyUI** stays open between media jobs; a single (fresh) process runs together with MAX 32K
+   (61 tok/s). A spill happens only with a **duplicate/leaked ComfyUI process** (ComfyUI is a process
+   pair); so before loading all matching processes are closed (section 5). A leaked process spills the
+   27B to 0.89 tok/s. On MAX/FLASH the mmproj runs on the CPU
+   (`--no-mmproj-offload`). On the GPU it spills
    ~420 MiB into shared memory and speed drops from 25 to 19 tok/s.
 8. **Single image rule:** only one image at a time goes to chat (multiple images only in the
    "multi-image reading mode", via OCR).
@@ -486,7 +493,8 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
-| 2026-10-10 | 1.1.0 fully verified: `python -m pytest -q` **317 passed** (4 expected skips) and the full smoke test **13/13** (chat 44.3 tok/s, MTP acceptance 82/87, chart bar/pie/function, image 88 s, edit 69 s, post-media switch 0.92, video 133 s, UI turn MTP 23/23). The installed root is **byte-identical to the repo in 47/47 program files**. | AGENTS.md |
+| 2026-10-10 | Found and fixed a duplicate/leaked ComfyUI process bug: ComfyUI is not a single process but a **pair** (a venv launcher + its base-python child); the old `Select-Object -First 1` closed only one and left the remaining context. With a duplicate/leaked ComfyUI, MAX 32K spilled to 0.89 tok/s; with a single (fresh) ComfyUI the same model ran at 61 tok/s (192 MiB free) — so ComfyUI can stay open. `Get-ComfyProcesses` + `Stop-IdleComfy` now close ALL matching processes; `media-model-swap.ps1` `Clear-ComfyLeaks` removes duplicate copies; the smoke test end, the UI finally, and the install comfyui stage close an idle ComfyUI. `comfyKeepAlive` (default `true`, open) is kept. | scripts/manage-qwen.ps1, agent/media-model-swap.ps1, scripts/smoke-test.ps1, scripts/install-mamidlabs.ps1, tests/test_memory_admission.py, tests/test_smoke_test_script.py |
+| 2026-10-10 | 1.1.0 fully verified: `python -m pytest -q` **318 passed** (4 expected skips) and the full smoke test **13/13** (chat 44 tok/s, MTP acceptance 82/87, chart bar/pie/function, image 56 s, edit 96 s, post-media switch ratio 0.97, video 161 s, UI turn MTP 23/23). The installed root is **byte-identical to the repo in the program files**. | AGENTS.md |
 | 2026-10-10 | Added dependency-free chart generation (1.1.0): the chat tool `generate_chart` + `agent/chart-run.ps1` (bundled pwsh + System.Drawing; bar/line/pie/scatter/function; a safe expression evaluator, no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`. Added a `chart` step to the smoke test (`-SkipChart`). Applied to the Turkish edition too. | qwen-desktop.ps1, agent/qwen-inference.ps1, agent/chart-run.ps1, scripts/smoke-test.ps1, tests/test_chart_run.py |
 | 2026-10-10 | Added `Convert-MathText` for LaTeX math answers (1.1.0): instead of raw `$$`/`\frac`/`\int`, readable Unicode (∫, ∞, π, √, ∑, →, ≠, Greek letters), fractions → a/b, exponents/subscripts → Unicode (x², ∫₀). A currency `$` is kept. | qwen-desktop.ps1, tests/test_math_render.py |
 | 2026-10-09 | Added the `comfyKeepAlive` setting (1.0.9, default `true`): ComfyUI stays open between media jobs (no reopen). Measured: no spill (identical buffer layout, graph splits 2), chat ~11% slower (49.7→44.2 tok/s). `false` restores full speed. Also made two flaky tests deterministic (run_command output encoding UTF-8; empty-file test uses tmp_path). | scripts/manage-qwen.ps1, tests/test_memory_admission.py, tests/test_bound_path_and_run_command.py, tests/test_binary_file_detection.py |
