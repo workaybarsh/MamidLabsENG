@@ -1964,6 +1964,7 @@ function Get-SystemPrompt {
     }
     $lines += 'If the user explicitly says generate a video or create a short video, call generate_video. Write the video prompt in English; detail the motion, camera movement, lighting, duration and style.'
     $lines += 'If the user says create a PDF, prepare a Word document or make a presentation, call create_document. The format value can only be pdf, docx or pptx. Write the document content as markdown.'
+    $lines += 'If the user wants a chart, a plot, a bar/pie/line chart or wants you to draw the curve of a function, call generate_chart. type values: bar, line, pie, scatter, function (y=f(x)). For a single series give labels + values; use series for multiple series. Prepare the data from the numbers in the chat or from values you compute. Do not try to produce the same chart over and over; the tool is normally called ONCE, then report the result to the user briefly.'
     $lines += 'Do not call generation tools just to read/describe an image, document or video. If there is a question about an attached document use read_document; writing files and creating documents require permission.'
     return ($lines -join ' ')
 }
@@ -2148,6 +2149,7 @@ function Begin-Generation {
         videogen = $true
         office = $true
         documentCreate = $true
+        chartgen = $true
         boundFolder = $script:boundFolder
         hasSourceImage = [bool]$script:lastUserImage
         hasPreviousImage = [bool]$script:previousUserImage
@@ -2358,6 +2360,13 @@ function Render-JobEvent($jobEvent) {
         'artifact' {
             if ($b) { Add-BubbleArtifact $b ([string]$jobEvent.text); $script:dirty = $true }
         }
+        'chart' {
+            # A dependency-free chart (PNG) was produced. Show it inline in the bubble; the
+            # file is added to the artifacts list (inside Set-BubbleImage) and saved with the chat.
+            if ($b) { Set-BubbleImage $b ([string]$jobEvent.text) }
+            $script:dirty = $true
+            Save-Chat
+        }
         'denied' {
             # The note of a denied operation is shown independently of the model's text (added in 'done').
             if ($b) { $b.deniedNote = (@($b.deniedNote, [string]$jobEvent.text) | Where-Object { $_ }) -join "`r`n" }
@@ -2441,7 +2450,7 @@ function Render-JobEvent($jobEvent) {
             $script:dirty = $true
         }
         'tool' {
-            $names = @{ search_web = 'Web search'; fetch_page = 'Reading page'; list_bound_files = 'Listing folder'; read_bound_file = 'Reading file'; write_bound_file = 'Writing file'; run_command = 'Running command'; read_images_ocr = 'Multi-image reading on — reading images'; read_document = 'Reading document'; create_document = 'Creating document'; generate_image = 'Preparing image'; generate_video = 'Preparing video' }
+            $names = @{ search_web = 'Web search'; fetch_page = 'Reading page'; list_bound_files = 'Listing folder'; read_bound_file = 'Reading file'; write_bound_file = 'Writing file'; run_command = 'Running command'; read_images_ocr = 'Multi-image reading on — reading images'; read_document = 'Reading document'; create_document = 'Creating document'; generate_image = 'Preparing image'; generate_video = 'Preparing video'; generate_chart = 'Creating chart' }
             $label = $names[[string]$jobEvent.text]
             if (!$label) { $label = [string]$jobEvent.text }
             $metric.Text = "$label…"

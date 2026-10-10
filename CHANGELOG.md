@@ -5,6 +5,16 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [1.1.0] - 2026-10-10
 
+### Added
+- **Chart generation (dependency-free, no extra packages):** the chat tool `generate_chart`
+  produces bar, line, pie, scatter and function-curve (y=f(x)) charts. The image is drawn
+  straight to PNG with the bundled PowerShell + System.Drawing (no GPU/ComfyUI, no
+  numpy/matplotlib); it is shown inline in the chat and saved under `outputs\charts`. The model
+  only writes the data/spec. Function expressions are evaluated by a safe parser (`Invoke-Expression`
+  is not used; only numbers, x, pi, e, + - * / ^ ( ) and functions like sin/cos/…/sqrt/abs).
+- **A dependency-free chart step in the smoke test:** alongside `chat, document, …` the `chart`
+  step proves bar, pie and function charts are really produced (skippable with `-SkipChart`).
+
 ### Fixed
 - **Math answers looked like "broken symbols":** when the model answered a math question with
   LaTeX (`$$\int_0^\infty \frac{(\ln x)^4}{1+x^6}dx$$`), the UI showed raw `$`, `\frac`, `\int`,

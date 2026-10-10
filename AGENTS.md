@@ -39,6 +39,7 @@ Repository: `github.com/workaybarsh/MamidLabsENG`. Default install root:
 | `agent/web-server.ps1`, `agent/web-settings.ps1`, `scripts/web-serve.ps1` | Local web management (browser access): HTTP server, settings window, launcher. Localhost only by default, password protected; based on OpenCode's server model |
 | `agent/imagegen-run.ps1` | Local image generation / editing worker (ComfyUI API) |
 | `agent/videogen-run.ps1` | Local video generation worker (Wan 2.2) |
+| `agent/chart-run.ps1` | Dependency-free chart generator (bundled pwsh + System.Drawing; chat tool `generate_chart`) |
 | `agent/api-media-run.ps1`, `agent/api-media.py` | Image/video generation via API, profile download job |
 | `agent/media-model-swap.ps1` | Unload the language model → start/reuse ComfyUI → reload (single owner) |
 | `agent/media-paths.ps1` | External (not copied) model paths, `comfy-extra-models.yaml` |
@@ -161,11 +162,12 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
    `$jobData.root` carries the root **explicitly** (see pitfall 2).
 4. The worker produces `[pscustomobject]@{kind; text; usage; data}` events with `Emit`. The UI timer
    reads them. Kinds: `thinking`, `answer`, `answer-rewrite`, `status`, `metrics`, `tool`,
-   `artifact`, `ocr`, `imagegen`, `videogen`, `compact`, `denied`, `cancelled`, `error`, `done`.
+   `artifact`, `chart`, `ocr`, `imagegen`, `videogen`, `compact`, `denied`, `cancelled`, `error`,
+   `done`.
 5. **Tools** (`qwen-inference.ps1`): `search_web`, `fetch_page`, `read_document`,
-   `read_images_ocr`, `create_document`, `generate_image`, `generate_video`, `find_reference_image`,
-   `ask_model`, `list_bound_files`, `read_bound_file`, `write_bound_file`, `run_command`. Tools are
-   defined based on intent and the chips (Internet, Agent).
+   `read_images_ocr`, `create_document`, `generate_image`, `generate_video`, `generate_chart`,
+   `find_reference_image`, `ask_model`, `list_bound_files`, `read_bound_file`, `write_bound_file`,
+   `run_command`. Tools are defined based on intent and the chips (Internet, Agent).
 6. **Approval:** write/run tools write `$Shared.AskTool/AskDetail/AskId` via `Request-Approval`.
    The UI opens the "Permission required — <tool>" window (10 min timeout → denial). If the "Full
    access" chip is on, nothing is asked. After a denial the UI adds a model-independent "Nothing was
@@ -484,6 +486,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-10 | Added dependency-free chart generation (1.1.0): the chat tool `generate_chart` + `agent/chart-run.ps1` (bundled pwsh + System.Drawing; bar/line/pie/scatter/function; a safe expression evaluator, no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`. Added a `chart` step to the smoke test (`-SkipChart`). Applied to the Turkish edition too. | qwen-desktop.ps1, agent/qwen-inference.ps1, agent/chart-run.ps1, scripts/smoke-test.ps1, tests/test_chart_run.py |
 | 2026-10-10 | Added `Convert-MathText` for LaTeX math answers (1.1.0): instead of raw `$$`/`\frac`/`\int`, readable Unicode (∫, ∞, π, √, ∑, →, ≠, Greek letters), fractions → a/b, exponents/subscripts → Unicode (x², ∫₀). A currency `$` is kept. | qwen-desktop.ps1, tests/test_math_render.py |
 | 2026-10-09 | Added the `comfyKeepAlive` setting (1.0.9, default `true`): ComfyUI stays open between media jobs (no reopen). Measured: no spill (identical buffer layout, graph splits 2), chat ~11% slower (49.7→44.2 tok/s). `false` restores full speed. Also made two flaky tests deterministic (run_command output encoding UTF-8; empty-file test uses tmp_path). | scripts/manage-qwen.ps1, tests/test_memory_admission.py, tests/test_bound_path_and_run_command.py, tests/test_binary_file_detection.py |
 | 2026-10-09 | Hardened the single-instance check: it now verifies the window CLASS, not just the title. Another window with the same title (Explorer `TabProxyWindow`, a video window) made the app exit before opening ("window closed before opening"). | qwen-desktop.ps1, tests/test_qwen_contracts.py |

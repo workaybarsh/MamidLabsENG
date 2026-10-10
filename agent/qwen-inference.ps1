@@ -256,6 +256,7 @@ function Get-ToolAuditDetail([string]$name, $arguments) {
         'ask_model' { return [string]$arguments.provider }
         'generate_image' { return [string]$arguments.prompt }
         'generate_video' { return [string]$arguments.prompt }
+        'generate_chart' { return "$([string]$arguments.type) $([string]$arguments.title)" }
         default { return '' }
     }
 }
@@ -404,6 +405,73 @@ function Test-FileIntent([string]$text) {
     if ([string]::IsNullOrWhiteSpace($text)) { return $false }
     $normalized = $text.ToLowerInvariant()
     return $normalized -match '(file|folder|document|\bpdf\b|word|excel|powerpoint|\.docx|\.xlsx|\.pptx|\bzip\b|\brar\b|\bcsv\b|notes|text file|bound folder)'
+}
+
+# Dependency-free chart generator (agent\chart-run.ps1). The language model only writes the
+# spec; the bundled pwsh + System.Drawing produce the image. No GPU/ComfyUI needed, fast.
+function Invoke-ChartTool($arguments) {
+    $scriptPath = Join-Path (Get-InstallRoot) 'agent\chart-run.ps1'
+    if (!(Test-Path -LiteralPath $scriptPath -PathType Leaf)) { return 'Chart tool is not installed (chart-run.ps1 not found).' }
+    $pwsh = Join-Path (Get-InstallRoot) 'runtime\pwsh\pwsh.exe'
+    if (!(Test-Path -LiteralPath $pwsh -PathType Leaf)) {
+        # If the install root has no bundled pwsh (test/isolated environment), fall back to pwsh on PATH.
+        $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
+        if ($cmd) { $pwsh = [string]$cmd.Source }
+    }
+    if (!$pwsh -or !(Test-Path -LiteralPath $pwsh -PathType Leaf)) { return "Bundled PowerShell not found: $pwsh" }
+
+    $spec = @{}
+    foreach ($prop in $arguments.PSObject.Properties) { $spec[$prop.Name] = $prop.Value }
+    $type = ([string]$spec.type).ToLowerInvariant()
+    if ($type -notin @('bar', 'line', 'pie', 'scatter', 'function')) {
+        return "Invalid chart type: '$type'. Valid types: bar, line, pie, scatter, function."
+    }
+
+    $dir = Join-Path (Get-InstallRoot) 'outputs\charts'
+    if (!(Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $base = if ($spec.title) { [string]$spec.title } else { $type }
+    $base = ($base -replace '[^\p{L}\p{Nd}]+', '-').Trim('-')
+    if (!$base) { $base = $type }
+    if ($base.Length -gt 40) { $base = $base.Substring(0, 40) }
+    $spec.out = Join-Path $dir ("$base-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.png')
+
+    $payload = $spec | ConvertTo-Json -Depth 16 -Compress
+    $psi = [Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $pwsh
+    $psi.ArgumentList.Add('-NoProfile')
+    $psi.ArgumentList.Add('-ExecutionPolicy'); $psi.ArgumentList.Add('Bypass')
+    $psi.ArgumentList.Add('-File'); $psi.ArgumentList.Add($scriptPath)
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
+    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $p = [Diagnostics.Process]::Start($psi)
+    try {
+        $p.StandardInput.Write($payload)
+        $p.StandardInput.Close()
+        $out = $p.StandardOutput.ReadToEnd()
+        $err = $p.StandardError.ReadToEnd()
+        if (!$p.WaitForExit(60000)) {
+            try { $p.Kill($true) } catch { }
+            return 'Chart generation timed out.'
+        }
+        if ($p.ExitCode -ne 0 -and [string]::IsNullOrWhiteSpace($out)) { return "Chart tool failed: $err" }
+        $parsed = $null
+        try { $parsed = $out | ConvertFrom-Json -ErrorAction Stop } catch { }
+        if (!$parsed) { return "Chart tool returned an invalid response: $out $err" }
+        if ($parsed.error) { return "Could not create the chart: $([string]$parsed.error)" }
+        $path = [string]$parsed.path
+        if (!$path -or !(Test-Path -LiteralPath $path -PathType Leaf)) { return 'The chart file was not created.' }
+        $script:createdArtifact = $path
+        $script:chartFile = $path
+        return "Chart created ($($parsed.type), $($parsed.width)x$($parsed.height) pixels): $path"
+    } finally {
+        $p.Dispose()
+    }
 }
 
 function Invoke-Tool([string]$name, $arguments, [string]$folder) {
@@ -635,6 +703,9 @@ function Invoke-Tool([string]$name, $arguments, [string]$folder) {
         $backupNote = if ($backup) { "`n[previous version backed up: $backup]" } else { '' }
         return "$result`n[file path: $target]$backupNote"
     }
+    if ($name -eq 'generate_chart') {
+        return (Invoke-ChartTool $arguments)
+    }
     return "Unknown tool: $name"
 }
 
@@ -776,6 +847,21 @@ function Get-ToolDefinitions([hashtable]$job) {
             $imageProperties.scene_from_previous = @{ type = 'boolean'; description = 'Only identity_edit: if true the image attached in the previous turn becomes the SCENE and the last attached image the PERSON ("put this person in that scene"). Default false.' }
         }
         $defs += @{ type = 'function'; function = @{ name = 'generate_image'; description = $imageDescription; parameters = @{ type = 'object'; required = @('prompt'); properties = $imageProperties } } }
+    }
+    if ($job.chartgen) {
+        $defs += @{ type = 'function'; function = @{ name = 'generate_chart'; description = 'Call this when the user wants a chart, a plot, a bar/pie/line chart or the curve of a function. You prepare the data; the system produces the PNG. The type selects the kind: bar, line, pie, scatter, function (y=f(x)). For a single series labels + values is enough; use series for multiple series. For the function type give a functions list (e.g. ["sin(x)","cos(x)"]). Normally producing the chart ONCE is enough; do not create the same chart repeatedly, report the result to the user.'; parameters = @{ type = 'object'; required = @('type'); properties = @{
+            type = @{ type = 'string'; description = 'Chart type.'; enum = @('bar', 'line', 'pie', 'scatter', 'function') }
+            title = @{ type = 'string'; description = 'Chart title.' }
+            xlabel = @{ type = 'string'; description = 'X axis label.' }
+            ylabel = @{ type = 'string'; description = 'Y axis label.' }
+            labels = @{ type = 'array'; items = @{ type = 'string' }; description = 'Category/label names (for bar, line, pie).' }
+            values = @{ type = 'array'; items = @{ type = 'number' }; description = 'Single series numeric values (for bar, line, pie). Must match the length of labels.' }
+            series = @{ type = 'array'; description = 'Multiple series. Each item { name, values:[number] } (bar/line) or { name, points:[{x,y}] } (scatter).'; items = @{ type = 'object'; properties = @{ name = @{ type = 'string' }; values = @{ type = 'array'; items = @{ type = 'number' } }; points = @{ type = 'array'; items = @{ type = 'object'; properties = @{ x = @{ type = 'number' }; y = @{ type = 'number' } } } } } } }
+            functions = @{ type = 'array'; items = @{ type = 'string' }; description = 'Only for the function type: y=f(x) expressions. Supported: sin cos tan asin acos atan sinh cosh tanh exp ln log log10 sqrt abs floor ceil round; constants pi, e; operators + - * / ^ ( ). Examples: x^2, sin(x), exp(-x)*sin(x).' }
+            xmin = @{ type = 'number'; description = 'Only for function: lower x bound (default -10).' }
+            xmax = @{ type = 'number'; description = 'Only for function: upper x bound (default 10).' }
+            samples = @{ type = 'integer'; description = 'Only for function: number of samples (default 600).' }
+        } } } }
     }
     return $defs
 }
@@ -1456,6 +1542,7 @@ try {
                 $script:createdArtifact = $null
                 $script:lastApprovalOutcome = $null
                 $script:deniedNote = $null
+                $script:chartFile = $null
                 $arguments = $tc.function.arguments | ConvertFrom-Json -ErrorAction Stop
                 $auditDetail = Get-ToolAuditDetail $name $arguments
                 $result = if ($name -eq 'generate_image') {
@@ -1467,6 +1554,7 @@ try {
                 $auditResult = if ($approval -in @('asked_no', 'cancelled', 'timeout')) { 'denied' } else { 'ok' }
                 Write-AuditLog $name $approval $auditResult $auditDetail ([string]$script:createdArtifact)
                 if ($script:createdArtifact) { Emit 'artifact' $script:createdArtifact }
+                if ($name -eq 'generate_chart' -and $script:chartFile) { Emit 'chart' $script:chartFile }
                 if ($script:deniedNote) { Emit 'denied' $script:deniedNote }
                 if ($name -eq 'read_images_ocr') {
                     $multiOcr = $null

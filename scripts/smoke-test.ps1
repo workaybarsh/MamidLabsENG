@@ -48,6 +48,8 @@ param(
     [switch]$SkipHistoryResume,
     # Skips the MTP (speculative decoding) verification step.
     [switch]$SkipMtp,
+    # Skips the dependency-free chart generation (agent\chart-run.ps1) step.
+    [switch]$SkipChart,
     # Skips launching the real desktop app to verify MTP and the connection-error check.
     [switch]$SkipUi,
     # If the post-media chat speed drops below this ratio (relative to the first measurement) it counts as VRAM overflow.
@@ -215,6 +217,58 @@ if ($SkipMtp) {
 }
 
 # ------------------------------------------------------------------- document
+# ------------------------------------------------------------------- charts
+# Dependency-free chart generator: bundled pwsh + System.Drawing produce a PNG (no
+# GPU/ComfyUI needed). The chat tool generate_chart uses the same code path.
+Write-Section 'Chart generation (dependency-free, System.Drawing)'
+if ($SkipChart) {
+    Write-Host '   [skip] -SkipChart given'
+} else {
+    try {
+        $chartScript = Join-Path $Root 'agent\chart-run.ps1'
+        if (!(Test-Path -LiteralPath $chartScript -PathType Leaf)) { throw "Chart script not found: $chartScript" }
+        $chartPwsh = Join-Path $Root 'runtime\pwsh\pwsh.exe'
+        if (!(Test-Path -LiteralPath $chartPwsh -PathType Leaf)) { throw "Bundled pwsh not found: $chartPwsh" }
+        $chartDir = Join-Path $Root 'outputs\charts'
+        if (!(Test-Path -LiteralPath $chartDir -PathType Container)) { New-Item -ItemType Directory -Path $chartDir -Force | Out-Null }
+        $chartCases = @(
+            @{ name = 'bar'; spec = @{ type = 'bar'; labels = @('Jan', 'Feb', 'Mar'); values = @(3, 7, 4); title = 'Smoke bar' } },
+            @{ name = 'pie'; spec = @{ type = 'pie'; labels = @('X', 'Y', 'Z'); values = @(5, 3, 2); title = 'Smoke pie' } },
+            @{ name = 'function'; spec = @{ type = 'function'; functions = @('sin(x)', 'x^2'); xmin = -3; xmax = 3; title = 'Smoke function' } }
+        )
+        $chartMade = 0
+        foreach ($chartCase in $chartCases) {
+            $spec = $chartCase.spec
+            $spec.out = Join-Path $chartDir ('smoke-' + $chartCase.name + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.png')
+            $psi = [Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $chartPwsh
+            foreach ($arg in @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $chartScript)) { $psi.ArgumentList.Add($arg) }
+            $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+            $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+            $psi.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
+            $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+            $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+            $chartProc = [Diagnostics.Process]::Start($psi)
+            try {
+                $chartProc.StandardInput.Write(($spec | ConvertTo-Json -Depth 8 -Compress))
+                $chartProc.StandardInput.Close()
+                $chartOut = $chartProc.StandardOutput.ReadToEnd()
+                $chartErr = $chartProc.StandardError.ReadToEnd()
+                $chartProc.WaitForExit()
+            } finally { $chartProc.Dispose() }
+            $chartResult = $null
+            try { $chartResult = $chartOut | ConvertFrom-Json -ErrorAction Stop } catch { }
+            if (!$chartResult) { throw "Chart ($($chartCase.name)) invalid response: $chartOut $chartErr" }
+            if ($chartResult.error) { throw "Chart ($($chartCase.name)) error: $($chartResult.error)" }
+            if (!(Test-Path -LiteralPath ([string]$chartResult.path) -PathType Leaf)) { throw "Chart ($($chartCase.name)) file was not created." }
+            $chartMade++
+        }
+        Report 'chart' $true "$chartMade types produced (bar, pie, function); outputs\charts"
+    } catch {
+        Report 'chart' $false $_.Exception.Message
+    }
+}
+
 Write-Section 'Document reading (a real .docx)'
 if ($SkipDocument) {
     Write-Host '   [skip] -SkipDocument given'
