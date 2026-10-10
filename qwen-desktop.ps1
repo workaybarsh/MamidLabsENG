@@ -311,6 +311,223 @@ function Add-RichRun($rtb, [string]$text, [System.Drawing.Font]$font, [System.Dr
     $rtb.AppendText($text)
 }
 
+# LaTeX (math) -> readable Unicode. RichTextBox cannot render math; when the model produced a
+# math answer the raw "\frac{}{}", "$$", "\int" markers looked like "broken symbols". This maps
+# common LaTeX commands to Unicode equivalents, flattens fractions/roots and turns exponents/
+# subscripts into Unicode (x^2 -> x², \int_0 -> ∫₀). The answer stays readable (not real
+# typesetting). Case-sensitive (-creplace) and pairs-as-an-array are used because PowerShell
+# hashtable keys are case-insensitive ("\Gamma"/"\gamma" would collide).
+
+function Convert-ToSuperscript([string]$t) {
+    if (!$t) { return $null }
+    $m = @{ '0'='⁰';'1'='¹';'2'='²';'3'='³';'4'='⁴';'5'='⁵';'6'='⁶';'7'='⁷';'8'='⁸';'9'='⁹'
+            '+'='⁺';'-'='⁻';'='='⁼';'('='⁽';')'='⁾'
+            'a'='ᵃ';'b'='ᵇ';'c'='ᶜ';'d'='ᵈ';'e'='ᵉ';'f'='ᶠ';'g'='ᵍ';'h'='ʰ';'i'='ⁱ';'j'='ʲ'
+            'k'='ᵏ';'l'='ˡ';'m'='ᵐ';'n'='ⁿ';'o'='ᵒ';'p'='ᵖ';'r'='ʳ';'s'='ˢ';'t'='ᵗ';'u'='ᵘ'
+            'v'='ᵛ';'w'='ʷ';'x'='ˣ';'y'='ʸ';'z'='ᶻ' }
+    $sb = New-Object Text.StringBuilder
+    foreach ($ch in $t.ToCharArray()) {
+        $k = [string]$ch
+        if (!$m.ContainsKey($k)) { return $null }
+        [void]$sb.Append($m[$k])
+    }
+    return $sb.ToString()
+}
+
+function Convert-ToSubscript([string]$t) {
+    if (!$t) { return $null }
+    $m = @{ '0'='₀';'1'='₁';'2'='₂';'3'='₃';'4'='₄';'5'='₅';'6'='₆';'7'='₇';'8'='₈';'9'='₉'
+            '+'='₊';'-'='₋';'='='₌';'('='₍';')'='₎'
+            'a'='ₐ';'e'='ₑ';'h'='ₕ';'i'='ᵢ';'j'='ⱼ';'k'='ₖ';'l'='ₗ';'m'='ₘ';'n'='ₙ';'o'='ₒ'
+            'p'='ₚ';'r'='ᵣ';'s'='ₛ';'t'='ₜ';'u'='ᵤ';'v'='ᵥ';'x'='ₓ' }
+    $sb = New-Object Text.StringBuilder
+    foreach ($ch in $t.ToCharArray()) {
+        $k = [string]$ch
+        if (!$m.ContainsKey($k)) { return $null }
+        [void]$sb.Append($m[$k])
+    }
+    return $sb.ToString()
+}
+
+function Convert-MathText([string]$text) {
+    if ([string]::IsNullOrEmpty($text)) { return $text }
+    $s = $text
+    # Strip "$" delimiters only if there is a LaTeX marker; otherwise a currency "$" is kept.
+    if ($s -match '\\[a-zA-Z]+|\$\$') { $s = $s.Replace('$', '') }
+    # Display/paren delimiters
+    $s = $s -replace '\\\[', ' ' -replace '\\\]', ' ' -replace '\\\(', ' ' -replace '\\\)', ' '
+    # Fractions (simple/non-nested): \frac{a}{b} (\dfrac, \tfrac too) -> a/b. A single simple
+    # term (d, dx, x, 2) gets no parentheses; otherwise (a)/(b).
+    for ($k = 0; $k -lt 3; $k++) {
+        $s = [regex]::Replace($s, '\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}', {
+            param($m)
+            $a = $m.Groups[1].Value.Trim(); $b = $m.Groups[2].Value.Trim()
+            $na = if ($a -match '^[A-Za-z0-9]+$') { $a } else { '(' + $a + ')' }
+            $nb = if ($b -match '^[A-Za-z0-9]+$') { $b } else { '(' + $b + ')' }
+            return $na + '/' + $nb
+        })
+    }
+    # Root and box
+    for ($k = 0; $k -lt 3; $k++) {
+        $s = $s -replace '\\sqrt\s*\{([^{}]*)\}', '√($1)'
+        $s = $s -replace '\\boxed\s*\{([^{}]*)\}', '[ $1 ]'
+    }
+    # Text wrappers: keep content
+    $s = $s -replace '\\(text|mathrm|mathbf|mathit|operatorname|mbox)\s*\{([^{}]*)\}', '$2'
+    # Drop sizing/paren commands
+    $s = $s -replace '\\(left|right|big|Big|bigg|Bigg|displaystyle|textstyle)\b', ''
+    # Spacing commands
+    $s = $s -replace '\\[,;:!>]', ' '
+    $s = $s -replace '\\quad', '   ' -replace '\\qquad', '     '
+    $s = $s.Replace('~', ' ')
+    # Glyph table kept as plain text: PowerShell flattens nested arrays (@(@('a','b')) -> @('a','b'))
+    # and would corrupt the table (it was replacing letters wrongly).
+    $table = @'
+\int=∫
+\iint=∬
+\oint=∮
+\sum=∑
+\prod=∏
+\infty=∞
+\partial=∂
+\nabla=∇
+\surd=√
+\times=×
+\div=÷
+\cdot=·
+\ast=∗
+\pm=±
+\mp=∓
+\leq=≤
+\le=≤
+\geq=≥
+\ge=≥
+\neq=≠
+\ne=≠
+\approx=≈
+\equiv=≡
+\cong=≅
+\sim=∼
+\simeq=≃
+\propto=∝
+\ll=≪
+\gg=≫
+\longrightarrow=⟶
+\rightarrow=→
+\to=→
+\leftarrow=←
+\Rightarrow=⇒
+\Leftrightarrow=⇔
+\mapsto=↦
+\notin=∉
+\in=∈
+\subseteq=⊆
+\subset=⊂
+\cup=∪
+\cap=∩
+\emptyset=∅
+\varnothing=∅
+\nexists=∄
+\exists=∃
+\forall=∀
+\neg=¬
+\land=∧
+\lor=∨
+\perp=⊥
+\parallel=∥
+\angle=∠
+\triangle=△
+\degree=°
+\circ=∘
+\prime=′
+\vdots=⋮
+\ddots=⋱
+\cdots=⋯
+\ldots=…
+\dots=…
+\varepsilon=ε
+\epsilon=ε
+\vartheta=ϑ
+\varphi=ϕ
+\varpi=ϖ
+\varsigma=ς
+\alpha=α
+\beta=β
+\gamma=γ
+\delta=δ
+\zeta=ζ
+\eta=η
+\theta=θ
+\iota=ι
+\kappa=κ
+\lambda=λ
+\mu=μ
+\nu=ν
+\xi=ξ
+\omicron=ο
+\pi=π
+\rho=ρ
+\sigma=σ
+\tau=τ
+\upsilon=υ
+\phi=φ
+\chi=χ
+\psi=ψ
+\omega=ω
+\Gamma=Γ
+\Delta=Δ
+\Theta=Θ
+\Lambda=Λ
+\Xi=Ξ
+\Pi=Π
+\Sigma=Σ
+\Upsilon=Υ
+\Phi=Φ
+\Psi=Ψ
+\Omega=Ω
+\ln=ln
+\log=log
+\exp=exp
+\lim=lim
+\max=max
+\min=min
+\sin=sin
+\cos=cos
+\tan=tan
+\cot=cot
+\sec=sec
+\csc=csc
+'@
+    $pairs = @($table -split "`n" | Where-Object { $_.Trim() } | ForEach-Object {
+        $p = $_.Trim() -split '=', 2; if ($p.Count -eq 2) { , @($p[0], $p[1]) } else { $null }
+    } | Where-Object { $_ })
+    $pairs = $pairs | Sort-Object { $_[0].Length } -Descending
+    # Case-sensitive (-creplace): \Gamma must not match \gamma; word boundary: \in must not
+    # corrupt \infty.
+    foreach ($g in $pairs) {
+        $s = $s -creplace ([regex]::Escape($g[0]) + '(?![a-zA-Z])'), $g[1]
+    }
+    # Superscripts/subscripts: ^{...}, ^x, _{...}, _x -> Unicode (when fully convertible).
+    $s = [regex]::Replace($s, '\^\{([^{}]*)\}', { param($m)
+        $r = Convert-ToSuperscript $m.Groups[1].Value
+        if ($r) { $r } else { '^(' + $m.Groups[1].Value + ')' } })
+    $s = [regex]::Replace($s, '\^([A-Za-z0-9\+\-])', { param($m)
+        $r = Convert-ToSuperscript $m.Groups[1].Value
+        if ($r) { $r } else { $m.Value } })
+    $s = [regex]::Replace($s, '_\{([^{}]*)\}', { param($m)
+        $r = Convert-ToSubscript $m.Groups[1].Value
+        if ($r) { $r } else { '_(' + $m.Groups[1].Value + ')' } })
+    $s = [regex]::Replace($s, '_([A-Za-z0-9\+\-])', { param($m)
+        $r = Convert-ToSubscript $m.Groups[1].Value
+        if ($r) { $r } else { $m.Value } })
+    # Unknown remaining commands: drop the backslash, keep the name
+    $s = $s -replace '\\([a-zA-Z]+)', '$1'
+    $s = $s -replace '\\', ''
+    # Collapse repeated spaces (without touching line ends)
+    $s = [regex]::Replace($s, '(?<=\S)[ \t]{2,}(?=\S)', ' ')
+    return $s
+}
+
 # Writes **bold**, *italic* and `code` segments with separate styles
 function Add-RichInline($rtb, [string]$text, [System.Drawing.Font]$baseFont, [System.Drawing.Color]$color) {
     foreach ($part in [regex]::Split($text, '(\*\*.+?\*\*|(?<!\*)\*(?!\*).+?(?<!\*)\*(?!\*)|`[^`]+`)')) {
@@ -329,6 +546,7 @@ function Add-RichInline($rtb, [string]$text, [System.Drawing.Font]$baseFont, [Sy
 
 function Render-Markdown($rtb, [string]$text, [System.Drawing.Color]$color) {
     $rtb.Clear()
+    $text = Convert-MathText $text
     $lines = ($text -replace "`r`n", "`n").Split("`n")
     $i = 0
     while ($i -lt $lines.Count) {
@@ -2290,8 +2508,9 @@ function Render-JobEvent($jobEvent) {
                     if ($displayFinal -match '(?m)^\s*(\||#{1,6}\s|[-*+]\s|\d+[.)]\s|```)' -or $displayFinal -match '\*\*.+?\*\*|`[^`]+`') {
                         Render-Markdown $b.body $displayFinal $colText
                         $b.hasRich = $true
-                    } elseif (!$b.body.Text -or $b.deniedNote) {
-                        $b.body.Text = $displayFinal
+                    } else {
+                        # Turn LaTeX/math markers into readable text (see Convert-MathText).
+                        $b.body.Text = (Convert-MathText $displayFinal)
                     }
                 }
             }

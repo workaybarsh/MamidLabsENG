@@ -3,6 +3,16 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-10-10
+
+### Fixed
+- **Math answers looked like "broken symbols":** when the model answered a math question with
+  LaTeX (`$$\int_0^\infty \frac{(\ln x)^4}{1+x^6}dx$$`), the UI showed raw `$`, `\frac`, `\int`,
+  `{}` markers. A new `Convert-MathText` layer turns common LaTeX commands into readable Unicode:
+  ∫, ∞, π, √, ∑, →, ≤, ≥, ≠ and Greek letters; fractions become `a/b` (simple terms without
+  parentheses); exponents/subscripts become Unicode (`x^2`→`x²`, `\int_0`→`∫₀`). This is readable
+  text, not typesetting; no raw LaTeX remains. A currency `$` (with no LaTeX present) is kept.
+
 ## [1.0.9] - 2026-10-09
 
 ### Added
