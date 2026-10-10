@@ -334,7 +334,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 
 ```powershell
 python -m pip install pytest -r requirements\app.txt
-python -m pytest -q          # ~250 tests, ~90 s; no extra setup needed (tests/conftest.py)
+python -m pytest -q          # ~320 tests, ~115 s; no extra setup needed (tests/conftest.py)
 %LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\smoke-test.ps1 -Profile flash -SkipVideo
 ```
 
@@ -486,6 +486,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-10 | 1.1.0 fully verified: `python -m pytest -q` **317 passed** (4 expected skips) and the full smoke test **13/13** (chat 44.3 tok/s, MTP acceptance 82/87, chart bar/pie/function, image 88 s, edit 69 s, post-media switch 0.92, video 133 s, UI turn MTP 23/23). The installed root is **byte-identical to the repo in 47/47 program files**. | AGENTS.md |
 | 2026-10-10 | Added dependency-free chart generation (1.1.0): the chat tool `generate_chart` + `agent/chart-run.ps1` (bundled pwsh + System.Drawing; bar/line/pie/scatter/function; a safe expression evaluator, no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`. Added a `chart` step to the smoke test (`-SkipChart`). Applied to the Turkish edition too. | qwen-desktop.ps1, agent/qwen-inference.ps1, agent/chart-run.ps1, scripts/smoke-test.ps1, tests/test_chart_run.py |
 | 2026-10-10 | Added `Convert-MathText` for LaTeX math answers (1.1.0): instead of raw `$$`/`\frac`/`\int`, readable Unicode (∫, ∞, π, √, ∑, →, ≠, Greek letters), fractions → a/b, exponents/subscripts → Unicode (x², ∫₀). A currency `$` is kept. | qwen-desktop.ps1, tests/test_math_render.py |
 | 2026-10-09 | Added the `comfyKeepAlive` setting (1.0.9, default `true`): ComfyUI stays open between media jobs (no reopen). Measured: no spill (identical buffer layout, graph splits 2), chat ~11% slower (49.7→44.2 tok/s). `false` restores full speed. Also made two flaky tests deterministic (run_command output encoding UTF-8; empty-file test uses tmp_path). | scripts/manage-qwen.ps1, tests/test_memory_admission.py, tests/test_bound_path_and_run_command.py, tests/test_binary_file_detection.py |
