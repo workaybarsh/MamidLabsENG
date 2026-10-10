@@ -480,6 +480,9 @@ has no LoRA.
 ## 15. Checklist when making changes
 
 - [ ] Run the relevant tests; add a test for new behavior (`python -m pytest -q`).
+- [ ] **Pre-release variant gate (mandatory):** before tagging/releasing, in **TR and ENG** repos;
+      a full smoke test with the **PRO (MAX/FLASH)** and **LITE** profiles; and the installer's
+      (Inno, `MamidLabs_Setup.exe`) TR/ENG build. **No release until all pass.**
 - [ ] If you touched the media/chat flow, run the smoke test with the relevant steps.
 - [ ] Is user-facing text in English and saved with the right encoding (BOM)?
 - [ ] Install/uninstall impact: does a new file or folder write outside the root? If so, add it to
@@ -496,6 +499,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-10 | 1.0.0 pre-release variant gate + verification: **PRO (flash) smoke 13/13**, **LITE smoke 12/13** (+1 expected skip: `identity_edit`), pytest **TR 318 / ENG 317**, install `verify` 12/12, Inno package built for TR/ENG and **v1.0.0 released**. LITE measurement: 85.7 tok/s, post-media 88.4 (ratio 1.03), ComfyUI stayed open. Added a "pre-release variant gate" to section 15. | AGENTS.md |
 | 2026-10-10 | Solved "ComfyUI must stay open": leak/duplicate detection uses instance **roots**, not process **count**. ComfyUI is a process pair (launcher + base-python child), so `Count -gt 1` mistook the single healthy ComfyUI for a leak and closed it (the opposite of the goal). `Get-ComfyInstanceRoots` + `Stop-ComfyLeaks` close only extra roots and keep the instance on :8188 (`Test-ComfyUnderRoot`); `media-model-swap.ps1` `Clear-ComfyLeaks` mirrors it; the old `Select-Object -First 1` closed only one half. Measured: after a real image job MAX loaded WITHOUT closing ComfyUI -> **62 tok/s**. | scripts/manage-qwen.ps1, agent/media-model-swap.ps1, tests/test_memory_admission.py |
 | 2026-10-10 | 1.1.0 fully verified: `python -m pytest -q` **318 passed** (4 expected skips) and the full smoke test **13/13** (chat 44 tok/s, MTP acceptance 82/87, chart bar/pie/function, image 56 s, edit 96 s, post-media switch ratio 0.97, video 161 s, UI turn MTP 23/23). The installed root is **byte-identical to the repo in the program files**. | AGENTS.md |
 | 2026-10-10 | Added dependency-free chart generation (1.1.0): the chat tool `generate_chart` + `agent/chart-run.ps1` (bundled pwsh + System.Drawing; bar/line/pie/scatter/function; a safe expression evaluator, no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`. Added a `chart` step to the smoke test (`-SkipChart`). Applied to the Turkish edition too. | qwen-desktop.ps1, agent/qwen-inference.ps1, agent/chart-run.ps1, scripts/smoke-test.ps1, tests/test_chart_run.py |
