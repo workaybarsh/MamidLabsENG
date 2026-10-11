@@ -109,11 +109,14 @@ $script:lastUserImage = $null
 $script:previousUserImage = $null
 $script:currentTurnHasImage = $false
 $script:currentTurnImagePaths = @()
+$script:currentTurnAudioPaths = @()
 $script:currentTurnMultiImageOcr = $false
 $script:multiImageOcrMode = $false
 $script:selectedVideos = New-Object System.Collections.Generic.List[string]
 $script:lastUserVideo = $null
 $script:selectedDocuments = New-Object System.Collections.Generic.List[string]
+# Audio files (transcribed with whisper.cpp; the audio counterpart of image OCR).
+$script:selectedAudio = New-Object System.Collections.Generic.List[string]
 $script:attachedDocuments = New-Object System.Collections.Generic.List[string]
 $script:videoJob = $null
 $script:boundFolder = $null
@@ -844,7 +847,7 @@ function New-Bubble([string]$role) {
     $panel.Controls.Add($body)
 
     $b = @{ role = $role; panel = $panel; body = $body; thinkToggle = $null; thinkBox = $null; pic = $null
-            thinkOpen = $false; seconds = $null; contentHeight = 18; hasRich = $false; rawText = ''; ocrText = ''
+            thinkOpen = $false; seconds = $null; contentHeight = 18; hasRich = $false; rawText = ''; ocrText = ''; transcriptText = ''
             answerStarted = $false; answerStartLength = 0; deniedNote = ''
             artifacts = [Collections.ArrayList]::new(); copyText = $null; copyFile = $null; openFile = $null }
     $body.Tag = $b
@@ -1126,6 +1129,29 @@ $send.ForeColor = [System.Drawing.Color]::White
 $send.FlatAppearance.BorderSize = 0
 $composer.Controls.Add($send)
 
+# Microphone button: immediately left of Send. Clicking it opens a menu:
+# "Upload audio file" / "Use microphone" / "Cancel". When audio is attached it is
+# transcribed automatically (whisper.cpp) and the findings are given to the language
+# model (the audio counterpart of OCR). GDI cannot draw color emoji; the Segoe MDL2
+# Assets microphone glyph (U+E720) is used.
+$micBtn = New-Object System.Windows.Forms.Button
+$micBtn.Text = [string][char]0xE720
+$micBtn.Font = New-Object System.Drawing.Font('Segoe MDL2 Assets', 12)
+$micBtn.FlatStyle = 'Flat'
+$micBtn.BackColor = [System.Drawing.Color]::FromArgb(60, 64, 76)
+$micBtn.ForeColor = [System.Drawing.Color]::White
+$micBtn.FlatAppearance.BorderSize = 0
+$micBtn.AccessibleName = 'Add audio'
+$composer.Controls.Add($micBtn)
+
+$micMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$micUse = $micMenu.Items.Add('Use microphone')
+[void]$micMenu.Items.Add('-')
+$micCancel = $micMenu.Items.Add('Cancel')
+$micBtn.Add_Click({ $micMenu.Show($micBtn, 0, $micBtn.Height) })
+$micUse.Add_Click({ Start-MicrophoneCapture })
+$micCancel.Add_Click({ $micMenu.Close() })
+
 function New-Chip([string]$text, [bool]$isChecked) {
     $c = New-Object System.Windows.Forms.CheckBox
     $c.Appearance = 'Button'
@@ -1263,6 +1289,8 @@ function Update-ComposerLayout {
     $fullAccessChip.Size = New-Object System.Drawing.Size(110, 30)
     $send.Location = New-Object System.Drawing.Point(($cw - 118), 178)
     $send.Size = New-Object System.Drawing.Size(104, 30)
+    $micBtn.Location = New-Object System.Drawing.Point(($cw - 152), 178)
+    $micBtn.Size = New-Object System.Drawing.Size(30, 30)
     $metric.Location = New-Object System.Drawing.Point(278, 148)
     $metric.Size = New-Object System.Drawing.Size(140, 22)
     $modelChoice.Location = New-Object System.Drawing.Point(426, 142)
@@ -1286,16 +1314,17 @@ $chatScroll.Add_Resize({
 function Reset-CurrentTurnImageState {
     $script:currentTurnHasImage = $false
     $script:currentTurnImagePaths = @()
+    $script:currentTurnAudioPaths = @()
     $script:currentTurnMultiImageOcr = $false
 }
 
 function Update-AttachmentBadge {
-    $count = $script:selectedImages.Count + $script:selectedVideos.Count + $script:selectedDocuments.Count
+    $count = $script:selectedImages.Count + $script:selectedVideos.Count + $script:selectedDocuments.Count + $script:selectedAudio.Count
     if ($count -eq 0) { $clearImage.Visible = $false; return }
     $clearImage.Visible = $true
     if ($count -eq 1) {
-        $only = @($script:selectedImages) + @($script:selectedVideos) + @($script:selectedDocuments)
-        $icon = if ($script:selectedImages.Count) { 'Image:' } elseif ($script:selectedVideos.Count) { 'Video:' } else { 'Document:' }
+        $only = @($script:selectedImages) + @($script:selectedVideos) + @($script:selectedDocuments) + @($script:selectedAudio)
+        $icon = if ($script:selectedImages.Count) { 'Image:' } elseif ($script:selectedVideos.Count) { 'Video:' } elseif ($script:selectedDocuments.Count) { 'Document:' } else { 'Audio:' }
         # The badge is 136 px and fits ~17 characters per line; a long file name overflowed to
         # two lines and got cut off at the bottom. Only the end of the name (with extension) is shown, the full name is in the tooltip.
         $name = [System.IO.Path]::GetFileName($only[0])
@@ -1312,6 +1341,7 @@ function Update-AttachmentBadge {
         if ($script:selectedImages.Count) { $kinds += 'image' }
         if ($script:selectedVideos.Count) { $kinds += 'video' }
         if ($script:selectedDocuments.Count) { $kinds += 'document' }
+        if ($script:selectedAudio.Count) { $kinds += 'audio' }
         $clearImage.Text = "$count files attached (" + ($kinds -join ', ') + ")"
     }
 }
@@ -1337,6 +1367,29 @@ function Add-SelectedDocument([string]$path) {
     [void]$script:selectedDocuments.Add($path)
     Update-AttachmentBadge
 }
+function Add-SelectedAudio([string]$path) {
+    if (!$path) { return }
+    if (@($script:selectedAudio) -contains $path) { return }
+    [void]$script:selectedAudio.Add($path)
+    Update-AttachmentBadge
+}
+# File picker for the microphone button / "Upload audio file".
+function Pick-AudioFile {
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    try {
+        $dlg.Title = 'Choose an audio file'
+        $dlg.Filter = 'Audio files|*.wav;*.mp3;*.m4a;*.ogg;*.flac;*.opus;*.aac;*.wma|All files|*.*'
+        $dlg.Multiselect = $true
+        if ($dlg.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
+            foreach ($f in $dlg.FileNames) { [void](Add-SelectedFile $f) }
+        }
+    } catch { $metric.Text = 'Could not attach the audio file: ' + $_.Exception.Message }
+    finally { $dlg.Dispose() }
+}
+# Microphone capture (whisper.cpp stream) is a later step; for now guide the user.
+function Start-MicrophoneCapture {
+    $metric.Text = 'Microphone capture is coming soon (whisper.cpp). For now use "Add audio" from the "+" menu on the left.'
+}
 function Add-SelectedFile([string]$path) {
     if (!$path -or !(Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
     $extension = [IO.Path]::GetExtension($path).ToLowerInvariant()
@@ -1344,6 +1397,7 @@ function Add-SelectedFile([string]$path) {
         '^\.(png|jpe?g|webp|bmp|gif)$' { 100MB; break }
         '^\.(mp4|mov|mkv|webm|avi|m4v)$' { 512MB; break }
         '^\.(pdf|docx|xlsx|xlsm|pptx|zip|rar)$' { 256MB; break }
+        '^\.(wav|mp3|m4a|ogg|flac|opus|aac|wma)$' { 512MB; break }
         default { 0 }
     }
     if (!$limit) { return $false }
@@ -1354,6 +1408,7 @@ function Add-SelectedFile([string]$path) {
     if ($extension -match '^\.(png|jpe?g|webp|bmp|gif)$') { Add-SelectedImage $path; return $true }
     if ($extension -match '^\.(mp4|mov|mkv|webm|avi|m4v)$') { Add-SelectedVideo $path; return $true }
     if ($extension -match '^\.(pdf|docx|xlsx|xlsm|pptx|zip|rar)$') { Add-SelectedDocument $path; return $true }
+    if ($extension -match '^\.(wav|mp3|m4a|ogg|flac|opus|aac|wma)$') { Add-SelectedAudio $path; return $true }
     return $false
 }
 function Save-ClipboardImage {
@@ -1396,7 +1451,7 @@ function Paste-ClipboardAttachments {
     return $false
 }
 $clearImage.Add_Click({
-    $script:selectedImages.Clear(); $script:selectedVideos.Clear(); $script:selectedDocuments.Clear()
+    $script:selectedImages.Clear(); $script:selectedVideos.Clear(); $script:selectedDocuments.Clear(); $script:selectedAudio.Clear()
     $clearImage.Visible = $false
 })
 
@@ -1413,10 +1468,12 @@ $attachMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $attachImage = New-Object System.Windows.Forms.ToolStripMenuItem('Add image')
 $attachVideo = New-Object System.Windows.Forms.ToolStripMenuItem('Add video')
 $attachDocument = New-Object System.Windows.Forms.ToolStripMenuItem('Add document')
+$attachAudio = New-Object System.Windows.Forms.ToolStripMenuItem('Add audio')
 $attachFolder = New-Object System.Windows.Forms.ToolStripMenuItem('Select folder')
 $attachMenu.Items.Add($attachImage) | Out-Null
 $attachMenu.Items.Add($attachVideo) | Out-Null
 $attachMenu.Items.Add($attachDocument) | Out-Null
+$attachMenu.Items.Add($attachAudio) | Out-Null
 $attachMenu.Items.Add($attachFolder) | Out-Null
 $drop.Add_Click({ $attachMenu.Show($drop, 0, $drop.Height) })
 $attachImage.Add_Click({
@@ -1437,6 +1494,7 @@ $attachDocument.Add_Click({
     $dlg.Multiselect = $true
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { foreach ($f in $dlg.FileNames) { Add-SelectedFile $f | Out-Null } }
 })
+$attachAudio.Add_Click({ Pick-AudioFile })
 $attachFolder.Add_Click({ $folder.PerformClick() })
 
 $folder.Add_Click({
@@ -1687,11 +1745,13 @@ function Clear-ChatView {
     $script:previousUserImage = $null
     $script:currentTurnHasImage = $false
     $script:currentTurnImagePaths = @()
+    $script:currentTurnAudioPaths = @()
     $script:currentTurnMultiImageOcr = $false
     $script:multiImageOcrMode = $false
     $script:selectedVideos.Clear()
     $script:lastUserVideo = $null
     $script:selectedDocuments.Clear()
+    $script:selectedAudio.Clear()
     $script:attachedDocuments.Clear()
     $clearImage.Visible = $false
 }
@@ -2088,6 +2148,9 @@ function Start-BackgroundCompaction {
         contextLimit = $script:ctxLimit
         maxTokens = 1200
         consultProviders = @{}
+        # The 'custom' base URL and provider settings are passed to the worker explicitly.
+        apiSettings = $script:apiSettings
+        baseUrl = (Get-CustomBaseUrl)
     }
     if ($script:providerId -ne 'local') {
         $jobData.model = if ($modelChoice.SelectedIndex -ge 0) { [string]$script:modelEntries[$modelChoice.SelectedIndex].model } else { '' }
@@ -2156,6 +2219,7 @@ function Begin-Generation {
         hasCurrentImage = $turnHasImage
         currentImagePath = $(if ($script:currentTurnImagePaths.Count -gt 0) { [string]$script:currentTurnImagePaths[0] } else { '' })
         currentImagePaths = @($script:currentTurnImagePaths)
+        currentAudioPaths = @($script:currentTurnAudioPaths)
         multiImageOcr = [bool]$script:currentTurnMultiImageOcr
         multiImageOcrMode = [bool]$script:multiImageOcrMode
         profile = $profile
@@ -2169,6 +2233,9 @@ function Begin-Generation {
         compact = ($script:contextTokens -gt $script:compactAt)
         contextLimit = $script:ctxLimit
         effort = $null
+        # The 'custom' base URL and provider settings are passed to the worker explicitly.
+        apiSettings = $script:apiSettings
+        baseUrl = (Get-CustomBaseUrl)
     }
     if ($script:providerId -ne 'local') {
         try {
@@ -2207,6 +2274,7 @@ function Begin-Generation {
         # the old image as if it were newly attached.
         $script:currentTurnHasImage = $false
         $script:currentTurnImagePaths = @()
+        $script:currentTurnAudioPaths = @()
         $script:currentTurnMultiImageOcr = $false
         $script:busy = $true
         $send.Text = 'Stop'
@@ -2416,6 +2484,17 @@ function Render-JobEvent($jobEvent) {
             } else { 'unknown' }
             $metric.Text = "OCR complete ($confidence confidence)"
         }
+        'transcript' {
+            # The attached audio was transcribed (whisper.cpp). The transcript is shown in the
+            # bubble and the language model answers over the findings (like OCR).
+            if ($b) {
+                $b.transcriptText = [string]$jobEvent.text
+                if (![string]::IsNullOrWhiteSpace($b.transcriptText)) { $b.body.Text = $b.transcriptText }
+                $script:dirty = $true
+            }
+            $modelLabel = if ($jobEvent.data -and $jobEvent.data.model) { [string]$jobEvent.data.model } else { 'whisper' }
+            $metric.Text = "Transcript ready ($modelLabel)"
+        }
         'thinking' {
             $script:prefillWatch = $false
             if (!$b) { return }
@@ -2508,7 +2587,9 @@ function Render-JobEvent($jobEvent) {
             if ($b) {
                 $final = [string]$jobEvent.text
                 if (!$final) { $final = $b.body.Text }
-                $displayFinal = if ($b.ocrText -and $final -ne $b.ocrText) { "OCR result:`r`n$($b.ocrText)`r`n`r`n$final" } else { $final }
+                $displayFinal = if ($b.ocrText -and $final -ne $b.ocrText) { "OCR result:`r`n$($b.ocrText)`r`n`r`n$final" }
+        elseif ($b.transcriptText -and $final -ne $b.transcriptText) { "Audio transcript:`r`n$($b.transcriptText)`r`n`r`n$final" }
+        else { $final }
                 # Display only: the model's real text goes to $chatMessages so the KV cache match is not broken.
                 if ($b.deniedNote) { $displayFinal = "$displayFinal`r`n`r`n$($b.deniedNote)".TrimStart() }
                 if ($displayFinal) {
@@ -2585,7 +2666,7 @@ $send.Add_Click({
     if ($script:imageBusy) { if($script:sharedMedia){Cancel-Generation}; return }
     if ($script:busy -or $script:pendingSend) { Cancel-Generation; return }
     $text = Get-PromptText
-    $allPaths = @($script:selectedImages) + @($script:selectedVideos) + @($script:selectedDocuments)
+    $allPaths = @($script:selectedImages) + @($script:selectedVideos) + @($script:selectedDocuments) + @($script:selectedAudio)
     if (!$text -and $allPaths.Count -eq 0) { return }
     $activationIntent = Test-MultiImageOcrActivationIntent $text
     $activatingMode = $activationIntent -and !$script:multiImageOcrMode
@@ -2609,6 +2690,7 @@ $send.Add_Click({
     }
     $script:currentTurnHasImage = $script:selectedImages.Count -gt 0
     $script:currentTurnImagePaths = @($script:selectedImages.ToArray())
+    $script:currentTurnAudioPaths = @($script:selectedAudio.ToArray())
     $script:currentTurnMultiImageOcr = $multiImageRequested
     if ($script:currentTurnMultiImageOcr) {
         $metric.Text = 'Multi-image reading on — you can upload several images.'
@@ -2626,6 +2708,10 @@ $send.Add_Click({
     foreach ($doc in $script:selectedDocuments) {
         $content += @{ type = 'text'; text = "[The user attached a document: $doc]" }
     }
+    foreach ($aud in $script:selectedAudio) {
+        # Audio will be transcribed with whisper.cpp into text (the audio counterpart of OCR).
+        $content += @{ type = 'text'; text = "[The user attached an audio file: $([IO.Path]::GetFileName($aud))]" }
+    }
     if ($activatingMode) {
         $script:multiImageOcrMode = $true
         $script:currentTurnMultiImageOcr = $script:selectedImages.Count -gt 1
@@ -2636,6 +2722,9 @@ $send.Add_Click({
     $bubbleText = $text
     if (!$text -and $allPaths.Count -eq 1 -and $script:selectedDocuments.Count -eq 1) {
         $bubbleText = 'Document: ' + [IO.Path]::GetFileName($script:selectedDocuments[0])
+    }
+    if (!$text -and $allPaths.Count -eq 1 -and $script:selectedAudio.Count -eq 1) {
+        $bubbleText = 'Audio: ' + [IO.Path]::GetFileName($script:selectedAudio[0])
     }
     $bubble.body.Text = $bubbleText
     # With several files a clickable name list (prevents overlapping); with a single file
@@ -2648,6 +2737,8 @@ $send.Add_Click({
         Set-BubbleVideo $bubble $script:selectedVideos[0] $null
     } elseif ($script:selectedDocuments.Count -eq 1) {
         Add-BubbleArtifact $bubble $script:selectedDocuments[0]
+    } elseif ($script:selectedAudio.Count -eq 1) {
+        Add-BubbleArtifact $bubble $script:selectedAudio[0]
     }
     if ($script:selectedImages.Count -gt 0) { Set-LastUserImage $script:selectedImages[$script:selectedImages.Count - 1] }
     if ($script:selectedVideos.Count -gt 0) { $script:lastUserVideo = $script:selectedVideos[$script:selectedVideos.Count - 1] }
@@ -2665,6 +2756,7 @@ $send.Add_Click({
     $script:selectedImages.Clear()
     $script:selectedVideos.Clear()
     $script:selectedDocuments.Clear()
+    $script:selectedAudio.Clear()
     $clearImage.Visible = $false
     $script:pendingSend = $true
     $send.Text = 'Stop'
@@ -2686,6 +2778,30 @@ $promptBox.Add_KeyDown({
         if (!$script:busy -and !$script:pendingSend -and !$script:imageBusy) { $send.PerformClick() }
     }
 })
+
+# Right-click menu for the prompt box: paste clipboard content as media (image/document/
+# audio/video) or plain text; cut/copy/select-all/clear.
+$promptMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$pmPasteMedia = New-Object System.Windows.Forms.ToolStripMenuItem('Paste (image/document/audio)')
+$pmPasteText = New-Object System.Windows.Forms.ToolStripMenuItem('Paste text')
+[void]$promptMenu.Items.Add($pmPasteMedia)
+[void]$promptMenu.Items.Add($pmPasteText)
+[void]$promptMenu.Items.Add('-')
+$pmCut = New-Object System.Windows.Forms.ToolStripMenuItem('Cut')
+$pmCopy = New-Object System.Windows.Forms.ToolStripMenuItem('Copy')
+$pmSelectAll = New-Object System.Windows.Forms.ToolStripMenuItem('Select all')
+$pmClear = New-Object System.Windows.Forms.ToolStripMenuItem('Clear')
+[void]$promptMenu.Items.Add($pmCut)
+[void]$promptMenu.Items.Add($pmCopy)
+[void]$promptMenu.Items.Add($pmSelectAll)
+[void]$promptMenu.Items.Add($pmClear)
+$pmPasteMedia.Add_Click({ [void](Paste-ClipboardAttachments) })
+$pmPasteText.Add_Click({ if ([Windows.Forms.Clipboard]::ContainsText()) { $promptBox.SelectedText = [Windows.Forms.Clipboard]::GetText() } })
+$pmCut.Add_Click({ $promptBox.Cut() })
+$pmCopy.Add_Click({ $promptBox.Copy() })
+$pmSelectAll.Add_Click({ $promptBox.SelectAll() })
+$pmClear.Add_Click({ $promptBox.Clear() })
+$promptBox.ContextMenuStrip = $promptMenu
 
 $newChat = New-Object System.Windows.Forms.ToolStripMenuItem('New chat')
 $fileMenu.DropDownItems.Add($newChat) | Out-Null

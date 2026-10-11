@@ -22,6 +22,11 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   cleaned before loading.
 - **Documents and OCR:** read PDF/Word/Excel/PowerPoint/ZIP/RAR, create PDF/DOCX/PPTX; image and PDF
   OCR with PaddleOCR.
+- **Audio transcription (whisper.cpp):** an attached audio file is transcribed automatically and the
+  findings are given to the language model (the OCR/mmproj pattern). Model **large-v3-turbo-q5_0 +
+  Silero VAD** (hallucination suppressed). Measured: 2 min audio ~53 s on CPU, ~2.5 s on GPU (CUDA).
+  On the local provider the language model is unloaded from VRAM, the transcript is taken, then it is
+  restored. A **microphone** button left of Send and **Add audio** in the "+" menu.
 - **Dependency-free chart generation:** the `generate_chart` chat tool + `agent/chart-run.ps1`
   (bundled pwsh + System.Drawing; bar/line/pie/scatter/function charts; a safe expression evaluator,
   no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`.
@@ -31,3 +36,9 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   management server (localhost only, password-protected session).
 - **Installation and updates:** Inno Setup wizard; pinned infrastructure (PowerShell 7.6.6, llama.cpp
   b10998 CUDA 13.4, ComfyUI b0f4b7b); in-app update check; full uninstall.
+
+### Fixed
+- **The `custom` (OpenAI-compatible endpoint) provider did not work in chat:** the base address only
+  lived in the UI settings; the worker does not read settings, so `custom` requests stopped with
+  "enter a base address" (only verification in the settings window worked). The desktop now passes
+  `baseUrl` plus settings to the worker; verified end to end with commandcode (text + image).

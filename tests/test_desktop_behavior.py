@@ -95,6 +95,7 @@ $bubbles = [Collections.ArrayList]::new(); $chatMessages = [Collections.ArrayLis
 $script:selectedImages = [Collections.Generic.List[string]]::new()
 $script:selectedVideos = [Collections.Generic.List[string]]::new()
 $script:selectedDocuments = [Collections.Generic.List[string]]::new()
+$script:selectedAudio = [Collections.Generic.List[string]]::new()
 $script:attachedDocuments = [Collections.Generic.List[string]]::new()
 $promptBox = @{Text='turn on multi-image reading mode'}; $clearImage = @{Visible=$false}
 $chatInner = [pscustomobject]@{Height=0; Width=300}

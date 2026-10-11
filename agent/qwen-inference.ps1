@@ -32,6 +32,8 @@ function Get-OfficePyPath { Join-Path (Get-InstallRoot) 'agent\office-tools.py' 
 function Get-OcrPyPath { Join-Path (Get-InstallRoot) 'agent\ocr-tools.py' }
 function Get-OcrPythonExe { Join-Path (Get-InstallRoot) 'venv\ocr\Scripts\python.exe' }
 function Get-OcrCpuPythonExe { Join-Path (Get-InstallRoot) 'venv\ocr-cpu\Scripts\python.exe' }
+function Get-WhisperPyPath { Join-Path (Get-InstallRoot) 'agent\whisper-tools.py' }
+function Get-MediaPythonExe { Join-Path (Get-InstallRoot) 'venv\imagegen\Scripts\python.exe' }
 function Get-ManageQwenPath { Join-Path (Get-InstallRoot) 'scripts\manage-qwen.ps1' }
 function Get-AuditLogPath { Join-Path (Get-InstallRoot) 'logs\audit.jsonl' }
 
@@ -75,6 +77,15 @@ function Write-AuditLog([string]$tool, [string]$approval, [string]$result, [stri
 }
 $endpoint = 'http://127.0.0.1:8080/v1/chat/completions'
 . (Join-Path $root 'agent\api-providers.ps1')
+# Settings come from the desktop (the worker does not read the settings file; $PSScriptRoot
+# is empty). The 'custom' base URL is passed via $JobData.baseUrl; otherwise Get-CustomBaseUrl
+# returns empty and the custom provider does not work in the chat flow (only verification in
+# the settings window used to work).
+$script:apiSettings = if ($JobData.apiSettings) { $JobData.apiSettings } else { @{ providers = @{} } }
+if ($JobData.baseUrl) {
+    if (!$script:apiSettings.providers) { $script:apiSettings.providers = @{} }
+    $script:apiSettings.providers['custom'] = @{ baseUrl = [string]$JobData.baseUrl }
+}
 $provider = if ($JobData.provider) { [string]$JobData.provider } else { 'local' }
 if ($provider -ne 'local') { $endpoint = Get-ProviderEndpoint $provider }
 $handler = [Net.Http.HttpClientHandler]::new()
@@ -369,6 +380,50 @@ function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = 
     }
     if ($ocrError) { throw $ocrError }
     return $ocrResponse
+}
+
+# Audio transcription (whisper.cpp). Same pattern as OCR: on the local provider the language
+# model is unloaded from VRAM (leaving the GPU to whisper), the transcript is taken, the model
+# is restored. Measured: turbo-q5_0 ~1-3 s on GPU (2 min audio), ~53 s on CPU. If the GPU attempt
+# fails (driver/VRAM) it falls back to CPU; the transcript always reaches the user.
+function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $true) {
+    $swapModel = ($provider -eq 'local')
+    $resp = $null
+    $err = $null
+    if (!$path -or !(Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Audio file not found.' }
+    if ($swapModel) {
+        Emit 'status' 'Moving the language model to RAM; freeing VRAM for transcription…' | Out-Null
+        try { & (Get-ManageQwenPath) -Action stop | Out-Null; Wait-LocalModelStopped } catch { $err = $_ }
+    }
+    if (!$err) {
+        $whisperPy = Get-WhisperPyPath; $mediaPy = Get-MediaPythonExe
+        $payloadBase = @{ action = 'transcribe'; path = $path; language = 'auto' }
+        foreach ($device in @('gpu', 'cpu')) {
+            try {
+                Emit 'status' ("Transcribing audio with whisper.cpp (" + $device + ")…") | Out-Null
+                $candidate = Invoke-PythonTool ($payloadBase + @{ device = $device }) $whisperPy $mediaPy
+                $parsed = $null
+                try { $parsed = $candidate | ConvertFrom-Json -ErrorAction Stop } catch { }
+                if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null; break }
+                if ($parsed -and $parsed.error) { $err = [Exception]::new([string]$parsed.error) } else { $err = [Exception]::new([string]$candidate) }
+            } catch { $err = $_ }
+            if ($device -eq 'gpu') { Emit 'status' 'GPU transcription failed; trying CPU…' | Out-Null }
+        }
+    }
+    if ($swapModel) {
+        try {
+            Emit 'status' 'Transcription done; reloading the language model in the background…' | Out-Null
+            Start-LocalModelRestore ([string]$JobData.profile)
+            if ($waitForRestore) {
+                Wait-LocalModelReady
+                Emit 'status' 'Language model reloaded; preparing the answer...' | Out-Null
+            }
+        } catch {
+            Emit 'status' "Transcription done; could not restart the language model: $($_.Exception.Message)" | Out-Null
+        }
+    }
+    if ($err) { throw $err }
+    return $resp
 }
 
 # Did a web tool fail? The tool layer returns {"error": "..."} JSON on failure (no network,
@@ -1193,6 +1248,26 @@ function Replace-CurrentImagesWithOcr([Collections.ArrayList]$items, [string]$oc
     return $false
 }
 
+# Adds the transcript text to the last user message: the audio counterpart of the OCR
+# image->text conversion. The language model then reasons over the transcript.
+function Add-TranscriptToMessages([Collections.ArrayList]$items, [string]$transcript, [string]$fileName) {
+    for ($i = $items.Count - 1; $i -ge 0; $i--) {
+        $message = $items[$i]
+        if ([string]$message.role -ne 'user') { continue }
+        $note = "[Audio transcript ($fileName)]`n$transcript"
+        if ($message.content -is [string]) {
+            $message.content = [string]$message.content + "`n`n" + $note
+        } else {
+            $parts = New-Object System.Collections.Generic.List[object]
+            foreach ($part in @($message.content)) { [void]$parts.Add($part) }
+            [void]$parts.Add(@{ type = 'text'; text = $note })
+            $message.content = @($parts.ToArray())
+        }
+        return $true
+    }
+    return $false
+}
+
 function Replace-CurrentImagesWithOcrToolNotice([Collections.ArrayList]$items) {
     for ($i = $items.Count - 1; $i -ge 0; $i--) {
         $message = $items[$i]
@@ -1266,6 +1341,31 @@ try {
             }
         } else {
             Emit 'status' 'Image understanding request; Qwen mmproj is examining the image directly…'
+        }
+    }
+    # Attached audio (if any) is transcribed automatically and the findings are given to the
+    # language model. Unlike OCR no intent is required: attaching audio always triggers it.
+    $currentAudioPaths = @($JobData.currentAudioPaths | Where-Object { $_ })
+    if ($currentAudioPaths.Count -gt 0) {
+        $audioPath = [string]$currentAudioPaths[0]
+        try {
+            Emit 'status' 'Transcribing the attached audio (whisper.cpp)…'
+            $trResponse = Invoke-TranscribeWithModelSwap $audioPath
+            $tr = $null
+            try { $tr = $trResponse | ConvertFrom-Json -ErrorAction Stop } catch { }
+            if ($tr -and !$tr.error -and ![string]::IsNullOrWhiteSpace([string]$tr.text)) {
+                [void](Add-TranscriptToMessages $messages ([string]$tr.text) ([IO.Path]::GetFileName($audioPath)))
+                Emit 'transcript' ([string]$tr.text) $null @{
+                    model = [string]$tr.model
+                    vad = [string]$tr.vad
+                    charCount = [int]$tr.chars
+                }
+            } else {
+                $reason = if ($tr -and $tr.error) { [string]$tr.error } else { 'Speech recognition produced no text.' }
+                Emit 'status' "Could not transcribe the audio; continuing without a transcript. $reason"
+            }
+        } catch {
+            Emit 'status' ("Could not transcribe the audio; continuing without a transcript. " + $_.Exception.Message)
         }
     }
     # Automatic context compaction: we always produce the summary with low effort (fast mode).

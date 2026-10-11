@@ -90,6 +90,37 @@ function Get-ProviderModels([string]$provider, [string]$key, [string]$baseUrlOve
     return @($ids | Sort-Object -Unique)
 }
 
+# Reads the context window (context_length etc.) from the model list endpoint. Used to
+# auto-apply the MAXIMUM context when a key is entered: model id -> tokens.
+# Returns an empty map if the endpoint does not report it (the configured default is kept).
+function Get-ProviderModelContexts([string]$provider, [string]$key, [string]$baseUrlOverride = '') {
+    $entry = Get-ChatProvider $provider
+    if (!$entry) { return @{} }
+    if (!$key -and $provider -ne 'custom') { return @{} }
+    $modelsUrl = if ($provider -eq 'custom') {
+        $base = if ($baseUrlOverride) { $baseUrlOverride.TrimEnd('/') } else { Get-CustomBaseUrl }
+        if (!$base) { return @{} }
+        "$base/models"
+    } else { [string]$entry.models }
+    $headers = if (!$key) { @{} }
+               elseif ($provider -eq 'claude') { @{ 'x-api-key' = $key; 'anthropic-version' = '2023-06-01' } }
+               else { @{ Authorization = "Bearer $key" } }
+    try { $response = Invoke-RestMethod -Uri $modelsUrl -Headers $headers -TimeoutSec 20 -ErrorAction Stop }
+    catch { return @{} }
+    $map = @{}
+    foreach ($m in @($response.data)) {
+        $id = ([string]$m.id) -replace '^models/', ''
+        if (!$id) { continue }
+        $ctx = 0
+        foreach ($field in @('context_length', 'context_window', 'max_context_length', 'max_input_tokens', 'max_context_tokens')) {
+            if ($null -ne $m.$field -and [int]$m.$field -gt 0) { $ctx = [int]$m.$field; break }
+        }
+        if ($ctx -le 0 -and $m.top_provider -and $null -ne $m.top_provider.context_length) { $ctx = [int]$m.top_provider.context_length }
+        if ($ctx -gt 0) { $map[$id] = $ctx }
+    }
+    return $map
+}
+
 # Providers that do not accept images (DeepSeek) reject the request with 400 when they see an
 # image_url part. The parts are reduced to text; a short note is left in place of the image so
 # the model knows the user attached an image.

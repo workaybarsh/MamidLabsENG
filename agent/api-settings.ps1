@@ -52,7 +52,7 @@ function Show-ApiSettings {
     $model=[Windows.Forms.ComboBox]::new();$model.DropDownStyle='DropDown';$model.SetBounds(20,274,510,28)
     $context=[Windows.Forms.NumericUpDown]::new();$context.SetBounds(20,340,190,28);$context.Minimum=4096;$context.Maximum=2000000;$context.Increment=1024
     $accountLabel=$null;$keyLabel=$null
-    foreach ($item in @(@('Provider',20),@('Account connection',86),@('API key — leave empty to keep the saved key',152),@('Model id (pick from the list or type the full API model name)',252),@('Context limit to use (tokens)',318))) {
+    foreach ($item in @(@('Provider',20),@('Account connection',86),@('API key — leave empty to keep the saved key',152),@('Model id (pick from the list or type the full API model name)',252),@('Context limit to use (tokens — auto-detected when the key is verified)',318))) {
         $label=[Windows.Forms.Label]::new();$label.Text=$item[0];$label.SetBounds(20,[int]$item[1],510,22);$dlg.Controls.Add($label)
         if ([int]$item[1] -eq 86) { $accountLabel = $label }
         if ([int]$item[1] -eq 152) { $keyLabel = $label }
@@ -62,8 +62,14 @@ function Show-ApiSettings {
     $save=[Windows.Forms.Button]::new();$save.Text='Save';$save.SetBounds(420,430,110,32)
     $status=[Windows.Forms.Label]::new();$status.SetBounds(20,430,390,40)
     $dlg.Controls.AddRange(@($provider,$openPage,$baseUrl,$key,$verify,$model,$context,$note,$save,$status))
-    $fields=@{provider=$provider;model=$model;key=$key;baseUrl=$baseUrl;context=$context;status=$status;providers=$providers;dialog=$dlg;openPage=$openPage;accountLabel=$accountLabel;keyLabel=$keyLabel}
-    $provider.Tag=$fields;$save.Tag=$fields;$openPage.Tag=$fields;$verify.Tag=$fields
+    $fields=@{provider=$provider;model=$model;key=$key;baseUrl=$baseUrl;context=$context;status=$status;providers=$providers;dialog=$dlg;openPage=$openPage;accountLabel=$accountLabel;keyLabel=$keyLabel;contexts=@{}}
+    $provider.Tag=$fields;$save.Tag=$fields;$openPage.Tag=$fields;$verify.Tag=$fields;$model.Tag=$fields
+    # When a model is selected/typed, apply the context window detected from the endpoint
+    # ($f.contexts is filled once the key is verified).
+    $model.Add_TextChanged({
+        $f=$this.Tag;$name=$this.Text.Trim()
+        if($f.contexts -and $f.contexts.ContainsKey($name)){$f.context.Value=[Math]::Min([int]$f.contexts[$name],[int]$f.context.Maximum)}
+    })
     $provider.Add_SelectedIndexChanged({
         $f=$this.Tag;$id=[string]$f.providers[$this.SelectedIndex].id;$p=$script:apiSettings.providers[$id]
         $f.model.Items.Clear()
@@ -103,7 +109,17 @@ function Show-ApiSettings {
             $current=$f.model.Text
             $f.model.Items.Clear();foreach($name in $names){[void]$f.model.Items.Add($name)}
             $f.model.Text=if($current -and $names -contains $current){$current}elseif($names){$names[0]}else{$current}
-            $f.status.Text="Key is valid: $($names.Count) models found. Pick a model and press Save."
+            # Auto-detect the context window from the endpoint (once a key is entered). If the
+            # endpoint does not report context_length, the current value is kept.
+            $f.contexts = if($id -eq 'custom'){ Get-ProviderModelContexts $id $candidate $f.baseUrl.Text.Trim() } else { Get-ProviderModelContexts $id $candidate }
+            if(@($f.contexts.Keys).Count){
+                $sel=$f.model.Text.Trim()
+                $val = if($f.contexts.ContainsKey($sel)){[int]$f.contexts[$sel]}else{([int[]]@($f.contexts.Values)|Measure-Object -Maximum).Maximum}
+                if($val -gt 0){ $f.context.Value=[Math]::Min($val,[int]$f.context.Maximum) }
+                $f.status.Text="Key is valid: $($names.Count) models. Context auto-detected: $([int]$f.context.Value) tokens."
+            } else {
+                $f.status.Text="Key is valid: $($names.Count) models found. Pick a model and press Save."
+            }
         } catch { $f.status.Text=$_.Exception.Message }
         finally { $f.dialog.Cursor=[Windows.Forms.Cursors]::Default }
     })

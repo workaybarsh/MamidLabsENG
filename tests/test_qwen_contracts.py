@@ -14,6 +14,23 @@ def read_text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
+def test_custom_provider_base_url_is_passed_to_the_worker():
+    """The 'custom' base URL only lives in the settings (apiSettings); the worker
+    (Start-ThreadJob) does not read settings and $PSScriptRoot is empty. So the desktop
+    must pass apiSettings + baseUrl into jobData and the worker must use them for real
+    requests; otherwise the custom provider fails with "enter a base address" in chat
+    (only verification works). Found in a real end-to-end test."""
+    desktop = read_text("qwen-desktop.ps1")
+    worker = read_text("agent/qwen-inference.ps1")
+    assert desktop.count("apiSettings = $script:apiSettings") >= 2
+    assert desktop.count("baseUrl = (Get-CustomBaseUrl)") >= 2
+    assert "$script:apiSettings = if ($JobData.apiSettings)" in worker
+    assert "$JobData.baseUrl" in worker
+    idx_apply = worker.index("$script:apiSettings.providers['custom'] = @{ baseUrl")
+    idx_endpoint = worker.index("$endpoint = Get-ProviderEndpoint $provider")
+    assert idx_apply < idx_endpoint
+
+
 def test_model_profiles_use_max_flash_and_lite_names():
     registry = read_text("agent/model-registry.ps1")
     manager = read_text("scripts/manage-qwen.ps1")
