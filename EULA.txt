@@ -79,6 +79,19 @@ If any provision of this Agreement is held invalid, the validity of the remainin
 not affected. Failure to exercise a right under this Agreement does not constitute a waiver of
 that right.
 
-11) ACCEPTANCE
+11) UNCENSORED / OPEN-SOURCE AI MODELS AND THIRD-PARTY COMPONENTS
+The Software facilitates access to, and the running of, AI models that are already published as
+open source and that may be unfiltered (uncensored), so that users may use them for scientific
+research, education and personal development. Such models do not belong to the Owner; the Owner
+does not create, train, own or distribute them, and merely facilitates access to publicly
+available sources. The outputs of those models are not warranted as to accuracy, legality,
+ethical suitability or fitness for a particular purpose.
+The User is solely responsible for any use of those models for malicious, unlawful or harmful
+purposes, or in a manner that infringes the rights of third parties. The User agrees to use those
+models in compliance with applicable law and the rights of third parties. The Owner shall not be
+liable for any direct or indirect damage, nor for any civil or criminal liability, arising or
+that may arise from the use of those models.
+
+12) ACCEPTANCE
 Installing, copying or using the Software indicates that you have read and accept all of the
 provisions of this Agreement. If you do not accept them, do not use the Software.
