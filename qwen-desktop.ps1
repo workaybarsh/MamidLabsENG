@@ -2272,6 +2272,15 @@ function Begin-Generation {
     $turnHasImage = [bool]$script:currentTurnHasImage
     $profile = Get-ProfileFromAlias $script:activeModel
     $jobMessages = Build-JobMessages
+    # Are the components installed? Image/video generation and multi-image OCR are offered only
+    # when the component is present (or image/video comes from an API provider). Otherwise the
+    # model used to call a non-existent tool and behave erratically.
+    $hasMedia = Test-Path -LiteralPath (Join-Path $root 'ComfyUI\main.py') -PathType Leaf
+    $hasOcr = (Test-Path -LiteralPath (Join-Path $root 'venv\ocr\Scripts\python.exe')) -or (Test-Path -LiteralPath (Join-Path $root 'venv\ocr-cpu\Scripts\python.exe'))
+    $imgProv = [string]$script:apiSettings.imageProvider
+    $vidProv = [string]$script:apiSettings.videoProvider
+    $imageApiOk = [bool]($imgProv -and $imgProv -ne 'local')
+    $videoApiOk = [bool]($vidProv -and $vidProv -ne 'local')
     $jobData = @{
         # Start-ThreadJob -FilePath reads the target file as text and runs it;
         # $PSScriptRoot is always empty in that context (verified). So the root is
@@ -2282,8 +2291,9 @@ function Begin-Generation {
         agent = [bool]$agentChip.Checked
         internet = [bool]$netChip.Checked
         # Generation/office tools are chosen by message intent and system instructions, not by chips.
-        imagegen = $true
-        videogen = $true
+        # Image/video are offered only if the component is installed (local) or an API provider is set.
+        imagegen = ($hasMedia -or $imageApiOk)
+        videogen = ($hasMedia -or $videoApiOk)
         office = $true
         documentCreate = $true
         chartgen = $true
@@ -2294,7 +2304,7 @@ function Begin-Generation {
         currentImagePath = $(if ($script:currentTurnImagePaths.Count -gt 0) { [string]$script:currentTurnImagePaths[0] } else { '' })
         currentImagePaths = @($script:currentTurnImagePaths)
         currentAudioPaths = @($script:currentTurnAudioPaths)
-        multiImageOcr = [bool]$script:currentTurnMultiImageOcr
+        multiImageOcr = [bool]($script:currentTurnMultiImageOcr -and $hasOcr)
         multiImageOcrMode = [bool]$script:multiImageOcrMode
         profile = $profile
         # The image pipeline is independent of the chat provider; whether the identity_edit mode
