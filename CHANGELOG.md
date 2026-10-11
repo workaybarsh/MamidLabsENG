@@ -28,6 +28,8 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   On the local provider the language model is unloaded from VRAM, the transcript is taken, then it is
   restored. A **microphone** button left of Send (**live recording from the Windows default input
   device**, dependency-free) and **Add audio** in the "+" menu.
+  **Audio capture quality** is selectable from the microphone menu: **Normal** (turbo-q5_0, fast) /
+  **High quality (large-v3)** (**highest accuracy**, ~2x slower).
 - **Dependency-free chart generation:** the `generate_chart` chat tool + `agent/chart-run.ps1`
   (bundled pwsh + System.Drawing; bar/line/pie/scatter/function charts; a safe expression evaluator,
   no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`.

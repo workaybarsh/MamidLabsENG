@@ -80,6 +80,22 @@ def test_microphone_capture_uses_default_device_via_mci():
     assert "script:micRecording" in desktop
 
 
+def test_audio_quality_toggle_switches_between_turbo_and_large_v3():
+    """Mikrofon menusunde 'Yuksek kalite' anahtari: normal = turbo-q5_0 (hizli), yuksek =
+    large-v3 (en yuksek dogruluk, daha yavas). Secim ayarlarda saklanir ve isci, kaliteye
+    gore acik model yolunu whisper'a gecirir."""
+    desktop = read_text("qwen-desktop.ps1")
+    worker = read_text("agent/qwen-inference.ps1")
+    assert "$script:audioQuality" in desktop
+    assert "audioQuality = $script:audioQuality" in desktop  # isciye tasinir
+    assert "$script:apiSettings.audioQuality = $script:audioQuality" in desktop  # saklanir
+    assert "CheckOnClick" in desktop
+    # Isci, 'high' ise large-v3 tam yolunu gecirir; aksi halde varsayilan (turbo) kalir.
+    assert "audioQuality" in worker
+    assert "ggml-large-v3.bin" in worker
+    assert "payloadBase.model" in worker
+
+
 def test_transcription_uses_model_swap_for_local_provider():
     """OCR ile ayni desen: yerel saglayicida dil modeli bosaltilir (GPU whisper'a kalir),
     dökum alinir, model geri yuklenir."""

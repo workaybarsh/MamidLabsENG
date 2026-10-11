@@ -398,6 +398,11 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
     if (!$err) {
         $whisperPy = Get-WhisperPyPath; $mediaPy = Get-MediaPythonExe
         $payloadBase = @{ action = 'transcribe'; path = $path; language = 'auto' }
+        # Quality: 'high' -> large-v3 (highest accuracy, slower); otherwise turbo-q5_0.
+        if ([string]$JobData.audioQuality -eq 'high') {
+            $modelPath = Join-Path (Get-InstallRoot) 'models\whisper\ggml-large-v3.bin'
+            if (Test-Path -LiteralPath $modelPath -PathType Leaf) { $payloadBase.model = $modelPath }
+        }
         foreach ($device in @('gpu', 'cpu')) {
             try {
                 Emit 'status' ("Transcribing audio with whisper.cpp (" + $device + ")…") | Out-Null

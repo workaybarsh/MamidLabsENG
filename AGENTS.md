@@ -341,6 +341,8 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
     `videoProvider`, `externalMediaModels`.
   - UI: `uiPreferences.{internet, agent, accessMode}`, `firstRunApiSettings`.
   - LITE settings: `liteModel`, `liteContext`, `liteReasoningBudget`.
+- Audio transcription quality: `audioQuality` (`normal` = turbo-q5_0, fast; `high` = large-v3,
+  highest accuracy, ~2x slower; default `normal`). Managed by the checkbox in the microphone menu.
   - Media: `comfyKeepAlive` (default `false`; ComfyUI runs only during media generation and holds no VRAM/RAM while idle; set `true` on LITE to keep it open between media jobs, see section 5).
 - Chats are encrypted under `chats\` with the `MAMIDLABS-CHAT-DPAPI-V2` prefix.
 - `logs\audit.jsonl`: a record of tool calls (not content; path/command identity).
@@ -506,6 +508,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-11 | Audio capture quality is now selectable: a **"High quality (large-v3)"** checkbox (toggle) in the microphone menu. Unchecked = normal (turbo-q5_0, fast), checked = high (large-v3, highest accuracy, ~2x slower). The choice is stored in `settings\api.json` → `audioQuality` and the worker passes the explicit model path to whisper. | qwen-desktop.ps1, agent/qwen-inference.ps1, tests/test_whisper_tools.py |
 | 2026-10-11 | Added dependency-free microphone recording: winmm `mciSendString` records the Windows **default** input device (WAVE_MAPPER); the microphone button toggles start/stop. The recording is attached as audio and sent automatically (transcript + answer). | qwen-desktop.ps1, tests/test_whisper_tools.py |
 | 2026-10-11 | Made the ComfyUI lifecycle **profile-aware**: on MAX/FLASH (27B, at the card's limit on 16 GB) an idle ComfyUI is **always closed** before loading — otherwise the MTP draft context moves to the CPU and chat drops **intermittently to ~6-7 tok/s** (measured: the post-media switch step once gave a 0.18 ratio). LITE (9B) runs with ComfyUI (ratio 1.04) and **keeps it open**. This removes the "ComfyUI open + 27B" flakiness. | scripts/manage-qwen.ps1, tests/test_memory_admission.py |
 | 2026-10-11 | Added a smoke test `ui_chat` step (drives the real window like a user: type + Send, a response must arrive); fixed a `$pid` automatic-variable clash. | scripts/smoke-test.ps1, tests/test_smoke_test_script.py |
