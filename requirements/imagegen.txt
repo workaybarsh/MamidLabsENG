@@ -10,4 +10,10 @@
 # ComfyUI's own requirements.txt is installed separately from the ComfyUI folder.
 #
 # The version is locked from a venv\imagegen environment verified on Windows 11.
+#
+# transformers: Qwen3-ASR (audio transcription) needs >=5.13 (the qwen3_asr module /
+# AutoModelForMultimodalLM). ComfyUI's own requirement is only >=4.50.3, so it is pinned
+# exactly here; otherwise a fresh install could get an older version and audio transcription
+# would not work. (Version verified with ComfyUI (b0f4b7b) + Qwen3-ASR: 5.17.0.)
+transformers==5.17.0
 av==18.1.0
