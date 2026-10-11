@@ -1,0 +1,84 @@
+﻿MAMIDLABS — END USER LICENSE AGREEMENT (EULA)
+
+Version 1.0 — Effective date: 2026
+Copyright (c) 2026 Aybars Haydar Altuntas. All Rights Reserved.
+
+This End User License Agreement ("Agreement") applies to the MamidLabs software together with
+all of its source code, compiled files, assets, documentation, updates and related files (the
+"Software"). By installing, copying or using the Software you acknowledge that you have read and
+accept all of the terms of this Agreement. If you do not accept the terms, do not install or use
+the Software.
+
+1) DEFINITIONS
+"Owner" means the developer and rights holder of the Software, Aybars Haydar Altuntas.
+"User" means the natural or legal person who installs, uses or accesses the Software.
+
+2) OWNERSHIP AND INTELLECTUAL PROPERTY RIGHTS
+The Software is owned by the Owner. The copyright, trademark, design, patent and all other
+intellectual and industrial property rights in and to the Software belong exclusively to the
+Owner. This Agreement does NOT transfer any ownership right in the Software to the User; it
+grants only the limited license of use described below. The Software is licensed, not sold,
+under this Agreement.
+
+3) SCOPE OF LICENSE AND RIGHT OF USE
+The Owner grants the User the right to install and use the Software solely for personal and/or
+purposes expressly authorized by the Owner, on the User's own device(s) that the User owns or
+lawfully controls. The User may not spread the Software beyond the permitted devices or transfer
+the license. The granted license is non-transferable, non-exclusive and revocable, and is subject
+to the terms of this Agreement.
+
+4) PROHIBITED ACTIONS
+Without the Owner's prior written permission, the User may NOT:
+  a) copy, reproduce, distribute, publish, sell, rent, lease, lend, sublicense or otherwise
+     transfer the Software or any part of it;
+  b) market, sell, rent or otherwise commercialize the Software, or offer it for a fee or service;
+  c) modify, adapt or create derivative works of the Software;
+  d) present the Software as belonging to the User or to any other person; or remove, alter or
+     conceal the Owner's name or any copyright/proprietary notices;
+  e) attempt to reverse engineer, decompile or disassemble the Software; or disable its
+     protection/licensing mechanisms or apply a "crack" (except to the extent expressly permitted
+     by applicable law);
+  f) present the Software to third parties as "your own product" or make it part of a commercial
+     product or service.
+The actions above are prohibited.
+
+5) LEGAL CONSEQUENCES OF UNAUTHORIZED USE
+Any use in violation of the prohibitions in this Agreement constitutes an infringement of, among
+others, copyright, trademark and intellectual/industrial property law. In the event of such
+unauthorized use, the Owner reserves all rights and remedies available under applicable law,
+including identification, cessation and remediation of the infringement, injunctive relief,
+damages, and civil and criminal remedies. Any person who copies, reproduces, steals,
+distributes, modifies, cracks or commercially markets the Software without authorization accepts
+in advance the resulting civil and criminal liability.
+
+6) DISCLAIMER AND LIMITATION OF LIABILITY
+The Software is provided "AS IS" and "AS AVAILABLE". The Owner makes no warranty of any kind,
+express or implied, including merchantability, fitness for a particular purpose and
+non-infringement. The Owner shall not be liable for any direct, indirect, special, incidental or
+consequential damage, including but not limited to data loss, data corruption, crashes,
+downtime, loss of work or loss of profit, arising from the use of, or inability to use, the
+Software. To the maximum extent permitted by applicable law, the Owner's total liability is
+limited to the amount the User paid for the Software (if any).
+
+7) TERMINATION
+If the User breaches any provision of this Agreement, the rights granted by the license
+terminate automatically and without notice. In that case the User must immediately stop using
+the Software and delete all copies in their possession. Termination of the license does not
+affect the ownership, liability and governing-law provisions of this Agreement.
+
+8) UPDATES AND CHANGES
+Software updates are provided under this Agreement. The Owner reserves the right to publish new
+versions of this Agreement.
+
+9) GOVERNING LAW AND JURISDICTION
+This Agreement is governed by the laws of the Republic of Turkey. The courts and enforcement
+offices of the Republic of Turkey have jurisdiction over disputes.
+
+10) GENERAL PROVISIONS
+If any provision of this Agreement is held invalid, the validity of the remaining provisions is
+not affected. Failure to exercise a right under this Agreement does not constitute a waiver of
+that right.
+
+11) ACCEPTANCE
+Installing, copying or using the Software indicates that you have read and accept all of the
+provisions of this Agreement. If you do not accept them, do not use the Software.

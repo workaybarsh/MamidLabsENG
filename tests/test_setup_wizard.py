@@ -1,4 +1,4 @@
-"""The one-click installer package: the wizard script, the profile report, the model settings.
+﻿"""The one-click installer package: the wizard script, the profile report, the model settings.
 
 The Inno Setup build is done on Windows with GitHub Actions (installer.yml);
 here the PowerShell scripts the wizard calls are really run and the contract of the .iss
@@ -201,7 +201,7 @@ def test_wizard_offers_every_profile_later_and_own_model_choices():
     for text in ("LITE", "FLASH", "MAX", "I will install the profile later", "I will use my own model or my API account"):
         assert text in iss
     assert 'MessagesFile: "compiler:Default.isl"' in iss
-    assert "LicenseFile=..\\..\\LICENSE" in iss
+    assert "LicenseFile=..\\..\\EULA.txt" in iss
     assert "PrivilegesRequired=lowest" in iss
     # Own models are not copied; the file path is passed to setup-run.
     assert "-LlmPath" in iss and "-ImageModelPath" in iss and "-VideoModelPath" in iss
@@ -220,6 +220,13 @@ def test_installer_workflow_builds_the_setup():
     assert "innosetup" in workflow
     assert "packaging\\windows\\mamidlabs.iss" in workflow
     assert "MamidLabs_Setup.exe" in workflow
+
+
+def test_eula_exists_and_covers_ownership():
+    eula = read_text(ROOT / "EULA.txt")
+    assert "Altunta" in eula
+    assert "2026" in eula
+    assert len(eula) > 1500
 
 
 def test_repository_is_proprietary_licensed():

@@ -1,4 +1,4 @@
-name: Installer package
+﻿name: Installer package
 
 # Builds the one-click setup wizard (dist\MamidLabs_Setup.exe) with Inno Setup 6.
 # The single source of the version is MyAppVersion in packaging\windows\mamidlabs.iss.
@@ -21,6 +21,7 @@ on:
       - 'docs/installation.md'
       - 'README.md'
       - 'LICENSE'
+      - 'EULA.txt'
       - '.github/workflows/installer.yml'
   pull_request:
     paths:
@@ -34,6 +35,7 @@ on:
       - 'docs/installation.md'
       - 'README.md'
       - 'LICENSE'
+      - 'EULA.txt'
       - '.github/workflows/installer.yml'
 
 jobs:

@@ -36,7 +36,7 @@ VersionInfoProductName={#MyAppName}
 DefaultDirName={autopf}\MamidLabs
 UsePreviousAppDir=yes
 DisableProgramGroupPage=yes
-LicenseFile=..\..\LICENSE
+LicenseFile=..\..\EULA.txt
 
 OutputDir=..\..\dist
 OutputBaseFilename=MamidLabs_Setup
@@ -85,6 +85,7 @@ Source: "..\..\qwen-desktop.ps1"; DestDir: "{app}\setup-source"; Flags: ignoreve
 Source: "..\..\launch-qwen-desktop.vbs"; DestDir: "{app}\setup-source"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}\setup-source"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}\setup-source"; Flags: ignoreversion
+Source: "..\..\EULA.txt"; DestDir: "{app}\setup-source"; Flags: ignoreversion
 Source: "..\..\agent\*"; DestDir: "{app}\setup-source\agent"; Excludes: "__pycache__\*,*.pyc"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\scripts\*"; DestDir: "{app}\setup-source\scripts"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\assets\*"; DestDir: "{app}\setup-source\assets"; Excludes: "installer\*"; Flags: ignoreversion recursesubdirs createallsubdirs
