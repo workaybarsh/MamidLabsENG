@@ -328,6 +328,9 @@ function Start-LocalModelRestore([string]$profile) {
 function Wait-LocalModelReady {
     $deadline = [DateTime]::UtcNow.AddSeconds(120)
     while ([DateTime]::UtcNow -lt $deadline) {
+        # If the user stopped, stop waiting for the model load; the model is loaded in the
+        # background anyway (separate process) and the UI sees it when ready. This keeps "Stop" fast.
+        if ($Shared.Cancel) { return }
         try {
             $health = Invoke-RestMethod 'http://127.0.0.1:8080/health' -TimeoutSec 2 -ErrorAction Stop
             if ($health.status -eq 'ok') { return }
@@ -370,7 +373,7 @@ function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = 
             Start-LocalModelRestore ([string]$JobData.profile)
             if ($waitForRestore) {
                 Wait-LocalModelReady
-                Emit 'status' 'Language model reloaded after OCR; preparing the answer...' | Out-Null
+                if (!$Shared.Cancel) { Emit 'status' 'Language model reloaded after OCR; preparing the answer...' | Out-Null }
             }
         } catch {
             # The OCR result should still reach the user; the model readiness state
@@ -391,6 +394,8 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
     $swapModel = ($provider -eq 'local')
     $resp = $null
     $err = $null
+    # If the user stopped right after sending, exit before starting.
+    if ($Shared.Cancel) { throw [OperationCanceledException]::new() }
     if (!$path -or !(Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Audio file not found.' }
     if ($swapModel) {
         Emit 'status' 'Moving the language model to RAM; freeing VRAM for transcription…' | Out-Null
@@ -417,12 +422,14 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
             Start-LocalModelRestore ([string]$JobData.profile)
             if ($waitForRestore) {
                 Wait-LocalModelReady
-                Emit 'status' 'Language model reloaded; preparing the answer...' | Out-Null
+                # If it was stopped we gave up waiting; claiming "ready" would mislead.
+                if (!$Shared.Cancel) { Emit 'status' 'Language model reloaded; preparing the answer...' | Out-Null }
             }
         } catch {
             Emit 'status' "Transcription done; could not restart the language model: $($_.Exception.Message)" | Out-Null
         }
     }
+    if ($Shared.Cancel) { throw [OperationCanceledException]::new() }
     if ($err) { throw $err }
     return $resp
 }
@@ -1348,6 +1355,7 @@ try {
     # language model. Unlike OCR no intent is required: attaching audio always triggers it.
     $currentAudioPaths = @($JobData.currentAudioPaths | Where-Object { $_ })
     if ($currentAudioPaths.Count -gt 0) {
+        if ($Shared.Cancel) { Emit 'cancelled' 'The request was stopped.'; return }
         $audioPath = [string]$currentAudioPaths[0]
         try {
             Emit 'status' 'Transcribing the attached audio (Qwen3-ASR)…'
@@ -1366,6 +1374,8 @@ try {
                 Emit 'status' "Could not transcribe the audio; continuing without a transcript. $reason"
             }
         } catch {
+            # An exception caused by stopping is a cancellation, not an error.
+            if ($Shared.Cancel) { Emit 'cancelled' 'The request was stopped.'; return }
             Emit 'status' ("Could not transcribe the audio; continuing without a transcript. " + $_.Exception.Message)
         }
     }

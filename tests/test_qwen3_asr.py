@@ -87,27 +87,61 @@ def test_desktop_pipes_audio_to_worker_and_shows_transcript():
 
 
 def test_microphone_capture_uses_default_device_via_mci():
-    """Mikrofon kaydi bagimliliksiz: winmm mciSendString. `open new type waveaudio` Windows
-    VARSAYILAN kayit cihazini (WAVE_MAPPER) kullanir - cihaz secimi/hardcode yok. Kayit
-    toggle ile baslar/durur ve ses eki olarak eklenip otomatik gonderilir."""
+    """Dependency-free microphone recording: winmm mciSendString. `open new type waveaudio` uses
+    the Windows DEFAULT recording device (WAVE_MAPPER) - no device selection/hardcode. Recording
+    starts; when finished the audio is attached and sent automatically; it can be cancelled."""
     desktop = read_text("qwen-desktop.ps1")
     assert "function Start-MicrophoneCapture" in desktop
     assert "mciSendString" in desktop
     assert "open new type waveaudio alias" in desktop  # WAVE_MAPPER = default device
     assert "Add-SelectedAudio" in desktop
     assert "script:micRecording" in desktop
+    # Stop / cancel / send separation.
+    assert "function Stop-MicrophoneCapture" in desktop
+    assert "function Complete-MicrophoneCapture" in desktop
+    assert "function Cancel-MicrophoneCapture" in desktop
+    # Red microphone (while recording) click finishes+sends; the menu "Cancel recording" discards.
+    assert "$micBtn.Add_Click({" in desktop and "Complete-MicrophoneCapture" in desktop
+    assert "$micCancel.Add_Click({" in desktop and "Cancel-MicrophoneCapture" in desktop
+    assert "$micBtn.Add_MouseUp({" in desktop  # right click: cancel menu reachable while recording
 
 
 def test_transcription_uses_model_swap_for_local_provider():
-    """OCR ile ayni desen: yerel saglayicida dil modeli bosaltilir (GPU ses modeline kalir),
-    dökum alinir, model geri yuklenir."""
+    """Like OCR: on the local provider the language model is unloaded (the GPU is left to the
+    audio model), the transcript is taken, then the model is restored."""
     worker = read_text("agent/qwen-inference.ps1")
     block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
     assert "(Get-ManageQwenPath) -Action stop" in block
     assert "Start-LocalModelRestore" in block
     assert "Get-AsrPyPath" in block
-    # CUDA once, sonra CPU yedegi.
+    # CUDA first, then the CPU fallback.
     assert "@('cuda', 'cpu')" in block
+
+
+def test_transcription_honors_cancel_and_stop_does_not_wait_for_restore():
+    """After audio is sent "Stop" must work: transcription and the model-restore wait honor the
+    cancel flag; the UI does not stay in "Stopping" for long."""
+    worker = read_text("agent/qwen-inference.ps1")
+    block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
+    assert "$Shared.Cancel" in block
+    wait = worker.split("function Wait-LocalModelReady")[1].split("function ")[0]
+    assert "if ($Shared.Cancel) { return }" in wait
+    # During a cancel a "ready" message would mislead.
+    assert "if (!$Shared.Cancel) { Emit 'status' 'Language model reloaded; preparing the answer" in block
+    # The caller does not show a cancel as an error.
+    caller = worker.split("$currentAudioPaths = @($JobData.currentAudioPaths")[1].split("Automatic context")[0]
+    assert "Emit 'cancelled'" in caller
+
+
+def test_audio_turn_preempts_language_model_loading():
+    """When audio is sent while the language model is loading, the load is abandoned and ASR runs
+    first; the language model returns after the transcript. The UI starts immediately for audio."""
+    desktop = read_text("qwen-desktop.ps1")
+    assert "function Stop-ModelSwitchForAudio" in desktop
+    begin = desktop.split("function Begin-Generation {")[1].split("function Set-LastUserImage")[0]
+    assert "$turnAudio" in begin and "Stop-ModelSwitchForAudio" in begin
+    send = desktop.split("$send.Add_Click({")[1].split("$promptBox.Add_KeyDown")[0]
+    assert "currentTurnAudioPaths.Count -gt 0" in send
 
 
 @pytest.mark.skipif(not WORKER.is_file(), reason="worker missing")

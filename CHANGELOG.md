@@ -3,6 +3,23 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-10-11
+
+### Fixed
+- **Microphone (audio recording) flow fixed:** clicking the **red microphone button** while
+  recording now **finishes and sends** the recording (before it only opened the menu and nothing was
+  sent). **"Cancel"** now really cancels the recording (the file is deleted and nothing is sent);
+  **right-clicking** the microphone button opens the menu so it can be cancelled while recording.
+  Pressing **Send** while recording also finishes and sends the recording.
+- **"Stop" works properly after audio is sent:** transcription and the language-model restore wait
+  now honor the cancel request; the UI no longer stays in "Stopping" for a long time.
+
+### Added
+- **ASR preempts the language-model load:** when a message with an audio attachment is sent while
+  the language model is not ready, the job starts immediately; the in-flight model load is
+  abandoned, the audio is transcribed with Qwen3-ASR, then the language model (per the selected
+  profile) is restored. So there is no need to wait for the model to load before sending audio.
+
 ## [1.0.0] - 2026-10-10
 
 First release. A fully local multimodal AI workspace for Windows: a single WinForms window offers

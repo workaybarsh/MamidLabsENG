@@ -1158,11 +1158,13 @@ $send.ForeColor = [System.Drawing.Color]::White
 $send.FlatAppearance.BorderSize = 0
 $composer.Controls.Add($send)
 
-# Microphone button: immediately left of Send. Clicking it opens a menu:
-# "Use microphone" / "Cancel". When audio is attached it is
+# Microphone button: immediately left of Send. While the microphone is RED (recording) clicking
+# the button finishes the recording and SENDS it; when idle it opens a small menu
+# ("Use microphone" / "Cancel"). When audio is attached it is
 # transcribed automatically (Qwen3-ASR) and the findings are given to the language
-# model (the audio counterpart of OCR). GDI cannot draw color emoji; the Segoe MDL2
-# Assets microphone glyph (U+E720) is used.
+# model (the audio counterpart of OCR). Right-click ALWAYS opens the menu, so a recording can be
+# cancelled even while it is running (the file is deleted and nothing is sent).
+# GDI cannot draw color emoji; the Segoe MDL2 Assets microphone glyph (U+E720) is used.
 $micBtn = New-Object System.Windows.Forms.Button
 $micBtn.Text = [string][char]0xE720
 $micBtn.Font = New-Object System.Drawing.Font('Segoe MDL2 Assets', 12)
@@ -1177,9 +1179,35 @@ $micMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $micUse = $micMenu.Items.Add('Use microphone')
 [void]$micMenu.Items.Add('-')
 $micCancel = $micMenu.Items.Add('Cancel')
-$micBtn.Add_Click({ $micMenu.Show($micBtn, 0, $micBtn.Height) })
-$micUse.Add_Click({ Start-MicrophoneCapture })
-$micCancel.Add_Click({ $micMenu.Close() })
+# While recording the labels become "Finish and send" / "Cancel recording".
+function Show-MicMenu {
+    if ($script:micRecording) {
+        $micUse.Text = 'Finish and send'
+        $micCancel.Text = 'Cancel recording'
+    } else {
+        $micUse.Text = 'Use microphone'
+        $micCancel.Text = 'Cancel'
+    }
+    $micMenu.Show($micBtn, 0, $micBtn.Height)
+}
+# Left click: finish+send while recording; otherwise open the menu.
+$micBtn.Add_Click({
+    if ($script:micRecording) { Complete-MicrophoneCapture }
+    else { Show-MicMenu }
+})
+# Right click: always the menu (cancel is reachable while recording).
+$micBtn.Add_MouseUp({
+    param($sender, $mouseEvent)
+    if ($mouseEvent.Button -eq [System.Windows.Forms.MouseButtons]::Right) { Show-MicMenu }
+})
+$micUse.Add_Click({
+    if ($script:micRecording) { Complete-MicrophoneCapture }
+    else { Start-MicrophoneCapture }
+})
+$micCancel.Add_Click({
+    if ($script:micRecording) { Cancel-MicrophoneCapture }
+    else { $micMenu.Close() }
+})
 
 function New-Chip([string]$text, [bool]$isChecked) {
     $c = New-Object System.Windows.Forms.CheckBox
@@ -1416,10 +1444,11 @@ function Pick-AudioFile {
     finally { $dlg.Dispose() }
 }
 # Microphone capture (dependency-free): records via winmm mciSendString. `open new type
-# waveaudio` uses the Windows DEFAULT recording device (WAVE_MAPPER) — no device selection needed. Toggle: first click starts recording, second stops it; the WAV is attached as
-# an audio attachment and sent automatically (transcript + language-model answer). The recording
-# format is the device default; qwen3-asr-tools.py converts it to 16 kHz mono and transcribes with Qwen3-ASR.
-function Start-MicrophoneCapture {
+# waveaudio` uses the Windows DEFAULT recording device (WAVE_MAPPER) — no device selection needed.
+# The recording format is the device default; qwen3-asr-tools.py converts it to 16 kHz mono and
+# transcribes with Qwen3-ASR. When finished the WAV is attached as an audio attachment and sent
+# automatically (transcript + language-model answer).
+function Add-MamidMciType {
     if (-not ([System.Management.Automation.PSTypeName]'MamidMci').Type) {
         Add-Type @'
 using System; using System.Text; using System.Runtime.InteropServices;
@@ -1428,28 +1457,11 @@ public static class MamidMci {
 }
 '@
     }
+}
+function Start-MicrophoneCapture {
+    if ($script:micRecording) { return }
+    Add-MamidMciType
     $alias = 'mamidmic'
-    if ($script:micRecording) {
-        try {
-            [void][MamidMci]::mciSendString("stop $alias", $null, 0, [IntPtr]::Zero)
-            $dir = Join-Path $root 'outputs\input'
-            if (!(Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-            $wav = Join-Path $dir ('microphone-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.wav')
-            [void][MamidMci]::mciSendString('save ' + $alias + ' "' + $wav + '"', $null, 0, [IntPtr]::Zero)
-            [void][MamidMci]::mciSendString("close $alias", $null, 0, [IntPtr]::Zero)
-        } finally {
-            $script:micRecording = $false
-            $micBtn.BackColor = [System.Drawing.Color]::FromArgb(60, 64, 76)
-        }
-        if (Test-Path -LiteralPath $wav -PathType Leaf) {
-            Add-SelectedAudio $wav
-            $metric.Text = 'Microphone recording attached; transcribing…'
-            if (!$script:busy -and !$script:pendingSend -and !$script:imageBusy) { $send.PerformClick() }
-        } else {
-            $metric.Text = 'Microphone recording was not created (no device or access denied).'
-        }
-        return
-    }
     try {
         [void][MamidMci]::mciSendString("close $alias", $null, 0, [IntPtr]::Zero)
         $openCode = [MamidMci]::mciSendString("open new type waveaudio alias $alias", $null, 0, [IntPtr]::Zero)
@@ -1458,11 +1470,48 @@ public static class MamidMci {
         if ($recCode -ne 0) { throw ('mci record: ' + $recCode) }
         $script:micRecording = $true
         $micBtn.BackColor = [System.Drawing.Color]::FromArgb(180, 60, 60)
-        $metric.Text = 'Recording started — click the microphone button again to stop.'
+        $metric.Text = 'Recording started — press the microphone button to finish and send.'
     } catch {
         $script:micRecording = $false
         $metric.Text = 'Could not open the microphone: ' + $_.Exception.Message
     }
+}
+# Stops the recording. With $discard the file is NOT saved (cancel): the device is closed and the
+# state reset. Returns $null when not recording; otherwise the WAV path to be created (may not exist).
+function Stop-MicrophoneCapture([switch]$discard) {
+    if (!$script:micRecording) { return $null }
+    Add-MamidMciType
+    $alias = 'mamidmic'
+    $wav = $null
+    try {
+        [void][MamidMci]::mciSendString("stop $alias", $null, 0, [IntPtr]::Zero)
+        $dir = Join-Path $root 'outputs\input'
+        if (!(Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $wav = Join-Path $dir ('microphone-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.wav')
+        if (!$discard) { [void][MamidMci]::mciSendString('save ' + $alias + ' "' + $wav + '"', $null, 0, [IntPtr]::Zero) }
+        [void][MamidMci]::mciSendString("close $alias", $null, 0, [IntPtr]::Zero)
+    } finally {
+        $script:micRecording = $false
+        $micBtn.BackColor = [System.Drawing.Color]::FromArgb(60, 64, 76)
+    }
+    return $wav
+}
+# Finishes the recording, attaches it as an audio attachment and (when idle) sends it.
+function Complete-MicrophoneCapture {
+    $wav = Stop-MicrophoneCapture
+    if ($wav -and (Test-Path -LiteralPath $wav -PathType Leaf)) {
+        Add-SelectedAudio $wav
+        $metric.Text = 'Microphone recording attached; transcribing…'
+        if (!$script:busy -and !$script:pendingSend -and !$script:imageBusy) { $send.PerformClick() }
+    } else {
+        $metric.Text = 'Microphone recording was not created (no device or access denied).'
+    }
+}
+# Cancels the recording: stops it, deletes the file; nothing is sent.
+function Cancel-MicrophoneCapture {
+    $wav = Stop-MicrophoneCapture -discard
+    if ($wav -and (Test-Path -LiteralPath $wav -PathType Leaf)) { Remove-Item -LiteralPath $wav -Force -ErrorAction SilentlyContinue }
+    $metric.Text = 'Microphone recording cancelled.'
 }
 function Add-SelectedFile([string]$path) {
     if (!$path -or !(Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
@@ -1671,6 +1720,28 @@ function Update-ModelSwitch {
         try { $script:switchProcess = Invoke-Manage $change.action $change.profile $change.modelId }
         catch { $script:modelSwitchError = 'Could not start the model operation: ' + $_.Exception.Message }
     }
+}
+
+# A turn with an audio attachment that is sent before the language model is ready: the in-flight
+# model load is ABANDONED (the process is killed, the queued choice cleared) so the worker can free
+# VRAM for ASR right away. The language model is restored in the background afterwards (by the
+# worker). The fields are cleared first so the killed process's exit code is not shown as
+# "Model operation failed".
+function Stop-ModelSwitchForAudio {
+    if ($script:pendingModelChange) { $script:pendingModelChange = $null }
+    if ($script:switchProcess) {
+        try {
+            if (!$script:switchProcess.HasExited) {
+                $script:switchProcess.Kill($true)
+                $script:switchProcess.WaitForExit(5000) | Out-Null
+            }
+        } catch { }
+        try { $script:switchProcess.Dispose() } catch { }
+        $script:switchProcess = $null
+    }
+    $script:modelSwitchError = $null
+    $script:modelReady = $false
+    $script:activeModel = $null
 }
 
 function Cancel-Generation {
@@ -2266,11 +2337,22 @@ function Estimate-ContextTokens {
 }
 
 function Begin-Generation {
-    if ($script:busy -or $script:imageBusy -or !$script:pendingSend -or ($script:providerId -eq 'local' -and !$script:modelReady)) { return }
+    if ($script:busy -or $script:imageBusy -or !$script:pendingSend) { return }
+    # A turn with an audio attachment starts IMMEDIATELY even if the language model is not ready:
+    # the worker unloads the model for ASR, transcribes, then restores the model. So the in-flight
+    # model load is abandoned and the audio (ASR) is handled first. Without audio the old behavior
+    # is kept: wait until the model is ready.
+    $turnAudio = @($script:currentTurnAudioPaths | Where-Object { $_ })
+    if ($script:providerId -eq 'local' -and !$script:modelReady) {
+        if ($turnAudio.Count -eq 0) { return }
+        Stop-ModelSwitchForAudio
+    }
     $script:pendingSend = $false
     Stop-BackgroundCompaction
     $turnHasImage = [bool]$script:currentTurnHasImage
-    $profile = Get-ProfileFromAlias $script:activeModel
+    # While the model is loading the active alias may not exist yet (an audio turn preempted the
+    # load); fall back to the SELECTED profile so the wrong profile is never started.
+    $profile = Get-ProfileFromAlias $(if ($script:activeModel) { $script:activeModel } else { Get-SelectedLocalAlias })
     $jobMessages = Build-JobMessages
     # Are the components installed? Image/video generation and multi-image OCR are offered only
     # when the component is present (or image/video comes from an API provider). Otherwise the
@@ -2747,6 +2829,16 @@ function Show-MultiImageOcrNotice {
 }
 
 $send.Add_Click({
+    # Pressing Send while recording finishes the recording; the normal flow below sends the audio.
+    if ($script:micRecording) {
+        $micWav = Stop-MicrophoneCapture
+        if ($micWav -and (Test-Path -LiteralPath $micWav -PathType Leaf)) {
+            Add-SelectedAudio $micWav
+            $metric.Text = 'Microphone recording attached; transcribing…'
+        } else {
+            $metric.Text = 'Microphone recording was not created (no device or access denied).'
+        }
+    }
     if ($script:imageBusy) { if($script:sharedMedia){Cancel-Generation}; return }
     if ($script:busy -or $script:pendingSend) { Cancel-Generation; return }
     $text = Get-PromptText
@@ -2844,7 +2936,8 @@ $send.Add_Click({
     $clearImage.Visible = $false
     $script:pendingSend = $true
     $send.Text = 'Stop'
-    if ($script:modelReady -or $script:providerId -ne 'local') { Begin-Generation }
+    # With an audio attachment start immediately even if the model is not ready (ASR preempts the load).
+    if ($script:modelReady -or $script:providerId -ne 'local' -or $script:currentTurnAudioPaths.Count -gt 0) { Begin-Generation }
     else { $metric.Text = 'Loading the model… The message will be sent when it is ready.' }
 })
 

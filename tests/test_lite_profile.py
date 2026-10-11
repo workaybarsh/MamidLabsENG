@@ -162,7 +162,10 @@ def test_desktop_resolves_profile_through_alias_helper():
 
     # The old "-like '*-flash'" derivation existed in three places; it took lite for max.
     assert "-like '*-flash'" not in desktop
-    assert desktop.count("Get-ProfileFromAlias $script:activeModel") == 3
+    assert desktop.count("Get-ProfileFromAlias") == 3
+    # While the model is loading (e.g. an audio turn preempted the load) the active alias may not
+    # exist yet; fall back to the SELECTED profile so the wrong profile is never started.
+    assert "else { Get-SelectedLocalAlias }" in desktop
     assert "'builtin-lite' { 'lite'; break }" in desktop
 
 
