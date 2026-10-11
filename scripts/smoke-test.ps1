@@ -652,10 +652,10 @@ using System; using System.Runtime.InteropServices;
 public static class Smk { [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, IntPtr l); }
 '@
         $AE = [Windows.Automation.AutomationElement]; $TS = [Windows.Automation.TreeScope]
-        function Find-UiWin([int]$pid, [int]$timeoutSec) {
+        function Find-UiWin([int]$procId, [int]$timeoutSec) {
             $end = (Get-Date).AddSeconds($timeoutSec)
             while ((Get-Date) -lt $end) {
-                $cond = New-Object Windows.Automation.PropertyCondition($AE::ProcessIdProperty, $pid)
+                $cond = New-Object Windows.Automation.PropertyCondition($AE::ProcessIdProperty, $procId)
                 foreach ($w in $AE::RootElement.FindAll($TS::Children, $cond)) { if ($w.Current.Name -like '*MamidLabs*') { return $w } }
                 Start-Sleep -Milliseconds 500
             }
