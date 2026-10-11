@@ -84,9 +84,12 @@ $script:Packages = @{
 }
 # whisper.cpp binary version and model files (HF). Default model turbo-q5_0 (speed/accuracy
 # balance; measured 2 min audio ~53 s CPU / ~2.5 s GPU); Silero VAD suppresses hallucination.
+# large-v3 is the full-accuracy model ("High quality" option) selectable from the microphone
+# menu; both are downloaded so the option works on a fresh install too.
 $script:WhisperBuild = 'b5454'
 $script:WhisperModels = @(
     @{ url = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin'; file = 'ggml-large-v3-turbo-q5_0.bin'; bytes = 574041195 },
+    @{ url = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin'; file = 'ggml-large-v3.bin'; bytes = 3095033483 },
     @{ url = 'https://huggingface.co/ggml-org/silero-v5.1.2/resolve/main/ggml-silero-v5.1.2.bin'; file = 'ggml-silero-v5.1.2.bin'; bytes = 885098 }
 )
 $script:LlamaBuild = 'b10998'
@@ -432,10 +435,12 @@ function Invoke-Whisper {
     Write-Step ('whisper.cpp audio transcription engine (' + $script:WhisperBuild + ')')
     if ($SkipMedia) { Write-Skip 'whisper.cpp (-SkipMedia)'; return }
     $target = Join-Path $Root ('whisper.cpp\' + $script:WhisperBuild)
-    $exe = Join-Path $target 'whisper-cli.exe'
     $cache = Join-Path $Root 'tools\indirme'
     New-Item -ItemType Directory -Path $cache -Force | Out-Null
-    if ((Test-Path -LiteralPath $exe -PathType Leaf) -and !$Force) {
+    # The archive extracts into a 'Release' subfolder; search recursively instead of a direct
+    # path. Otherwise the skip condition never matches and 662 MB of binaries redownload every time.
+    $installed = Get-ChildItem -LiteralPath $target -Recurse -Filter 'whisper-cli.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($installed -and !$Force) {
         Write-Skip 'whisper-cli.exe already installed'
     } else {
         foreach ($key in @('whisperCuda', 'whisperCpu')) {

@@ -22,6 +22,13 @@ def test_runtime_packages_carry_source_and_verified_size():
     assert "The file was deleted, run again." in installer
 
 
+def test_whisper_binary_skip_detects_release_subfolder():
+    """The whisper binaries extract into a 'Release' subfolder. The skip condition must search
+    recursively; a direct path never matches and 662 MB of binaries redownload every install."""
+    installer = read_text("scripts/install-mamidlabs.ps1")
+    assert "Get-ChildItem -LiteralPath $target -Recurse -Filter 'whisper-cli.exe'" in installer
+
+
 def test_comfyui_clone_is_pinned_to_a_specific_commit_not_a_floating_branch():
     installer = read_text("scripts/install-mamidlabs.ps1")
     assert "$script:ComfyCommit = '" in installer

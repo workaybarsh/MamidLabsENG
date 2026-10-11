@@ -96,6 +96,16 @@ def test_audio_quality_toggle_switches_between_turbo_and_large_v3():
     assert "payloadBase.model" in worker
 
 
+def test_installer_downloads_both_default_and_high_quality_models():
+    """'Yuksek kalite' secenegi sifirdan kurulumda da calissin diye kurulum hem turbo-q5_0
+    (varsayilan) hem large-v3 (yuksek kalite) hem de Silero VAD modelini indirir. Aksi
+    halde yuksek kalite sessizce turbo'ya duser."""
+    installer = read_text("scripts/install-mamidlabs.ps1")
+    assert "ggml-large-v3-turbo-q5_0.bin" in installer
+    assert "ggml-large-v3.bin" in installer
+    assert "ggml-silero-v5.1.2.bin" in installer
+
+
 def test_transcription_uses_model_swap_for_local_provider():
     """OCR ile ayni desen: yerel saglayicida dil modeli bosaltilir (GPU whisper'a kalir),
     dökum alinir, model geri yuklenir."""
