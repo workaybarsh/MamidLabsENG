@@ -92,7 +92,8 @@ def _load_model(model_dir: str, device: str):
     if device == 'cpu':
         model = _ModelCls.from_pretrained(model_dir)
     else:
-        # No device_map/accelerate required; move straight to the GPU.
+        # bf16 (unquantized). int8 was measured: same text but ~2x slower on long audio ->
+        # not used. No device_map/accelerate required; move straight to the GPU.
         model = _ModelCls.from_pretrained(model_dir, dtype=torch.bfloat16)
         model = model.to(device)
     model.eval()
