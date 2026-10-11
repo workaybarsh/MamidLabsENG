@@ -102,12 +102,27 @@ def _load_model(model_dir: str, device: str):
 
 
 def _extract_text(processor, raw: str) -> tuple[str, str]:
-    """Qwen3-ASR output is 'language <LANG><asr_text>text'. Returns (text, language)."""
-    text, lang = raw, ''
+    """Qwen3-ASR output is 'language <LANG><asr_text>text'. Returns (text, language).
+
+    The '<asr_text>' tag and the 'language ...' wrapper are ALWAYS stripped. On a silent or
+    unparseable result the text comes back EMPTY - the raw wrapper must never leak into the
+    transcript (a silent recording once sent 'language None<asr_text>' to the model)."""
+    text, lang = '', ''
+    # The documented Qwen3-ASR format is the source of truth: everything after '<asr_text>' is
+    # the transcript and everything between 'language' and the tag is the language. This also
+    # covers the silence case correctly (tail = '').
+    if '<asr_text>' in raw:
+        head, _, tail = raw.partition('<asr_text>')
+        text = tail.strip()
+        lang = head.replace('language', '').strip()
+        if lang.lower() in ('none', 'null', 'n/a'):
+            lang = ''
+        return text, lang
+    # Fallback for other/older output shapes.
     try:
         parsed = processor.extract_transcription(raw)
         if isinstance(parsed, list):
-            parsed = parsed[0] if parsed else raw
+            parsed = parsed[0] if parsed else ''
         if isinstance(parsed, str) and parsed.strip():
             text = parsed
     except Exception:
@@ -116,16 +131,13 @@ def _extract_text(processor, raw: str) -> tuple[str, str]:
             if isinstance(parsed, list) and parsed:
                 parsed = parsed[0]
             if isinstance(parsed, dict):
-                text = parsed.get('transcription') or parsed.get('text') or text
+                text = parsed.get('transcription') or parsed.get('text') or ''
                 lang = parsed.get('language') or ''
         except Exception:
             pass
-    if not lang and 'language ' in raw:
-        try:
-            head = raw.split('<asr_text>')[0]
-            lang = head.replace('language', '').strip()
-        except Exception:
-            pass
+    # Never let the wrapper through, whatever the fallback produced.
+    if '<asr_text>' in text:
+        text = text.partition('<asr_text>')[2]
     return text.strip(), lang.strip()
 
 

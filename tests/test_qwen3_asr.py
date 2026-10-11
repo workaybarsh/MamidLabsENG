@@ -106,6 +106,21 @@ def test_microphone_capture_uses_default_device_via_mci():
     assert "$micBtn.Add_MouseUp({" in desktop  # right click: cancel menu reachable while recording
 
 
+def test_extract_text_strips_wrapper_and_handles_silence():
+    """The '<asr_text>' tag and the 'language ...' wrapper are always stripped; on a silent or
+    short recording the text comes back EMPTY. A silent microphone once leaked the raw
+    'language None<asr_text>' to the model (caught in the UI test)."""
+    module = load_worker()
+    assert module._extract_text(None, 'language Turkish<asr_text>Merhaba dünya') == ('Merhaba dünya', 'Turkish')
+    assert module._extract_text(None, 'language English<asr_text>Hello.') == ('Hello.', 'English')
+    # Silence: empty tail -> empty text, the 'None' language is cleaned up.
+    assert module._extract_text(None, 'language None<asr_text>') == ('', '')
+    assert module._extract_text(None, 'language None<asr_text>   ') == ('', '')
+    # The wrapper never leaks into the text.
+    text, _ = module._extract_text(None, 'language Turkish<asr_text>Merhaba')
+    assert '<asr_text>' not in text and 'language' not in text
+
+
 def test_transcription_uses_model_swap_for_local_provider():
     """Like OCR: on the local provider the language model is unloaded (the GPU is left to the
     audio model), the transcript is taken, then the model is restored."""

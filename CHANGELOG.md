@@ -58,6 +58,12 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **The transcript wrapper leaked on a silent/empty recording:** the Qwen3-ASR output parser
+  (`_extract_text`) sent the raw `language None<asr_text>` text to the model as the transcript when a
+  short recording contained no speech, so the model replied "the transcript looks empty". The
+  `<asr_text>` tag and the `language ...` wrapper are now ALWAYS stripped; a silent result returns an
+  **empty** text (caught in the UI test; verified with a real silent recording and a speech
+  recording).
 - **"Stop" now cancels EVERYTHING running at that moment instantly:** answer generation, long
   **subprocess work such as ASR/OCR/search** (Python subprocesses are killed immediately) and media
   generation stop without waiting; the language model is then loaded in the background and chat
