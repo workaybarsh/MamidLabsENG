@@ -621,11 +621,18 @@ function Invoke-Verify {
     if (!$SkipMedia) {
         $checks += @{ label = 'imagegen environment'; path = 'venv\imagegen\Scripts\python.exe' }
         $checks += @{ label = 'ComfyUI';         path = 'ComfyUI\main.py' }
-    $checks += @{ label = 'whisper.cpp (audio)'; path = ('whisper.cpp\' + $script:WhisperBuild + '\whisper-cli.exe') }
+    $checks += @{ label = 'whisper.cpp (audio)'; path = ('whisper.cpp\' + $script:WhisperBuild); glob = 'whisper-cli.exe' }
         $checks += @{ label = 'ComfyUI-GGUF';    path = 'ComfyUI\custom_nodes\ComfyUI-GGUF\__init__.py' }
         $checks += @{ label = 'Photo editing nodes'; path = 'ComfyUI\custom_nodes\comfyui-krea2edit\__init__.py' }
     }
     foreach ($check in $checks) {
+        # The folder inside the zip (e.g. 'Release\') can vary by version; if glob is set,
+        # search for the file recursively under the folder.
+        if ($check.glob) {
+            $hit = @(Get-ChildItem -LiteralPath (Join-Path $Root $check.path) -Recurse -Filter $check.glob -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+            if ($hit.Count) { Write-Ok $check.label } else { Write-Warn ($check.label + ' missing: ' + $check.path + '\' + $check.glob) }
+            continue
+        }
         $full = Join-Path $Root $check.path
         if (Test-Path -LiteralPath $full -PathType Leaf) { Write-Ok ($check.label + ' -> ' + $check.path) }
         else { Write-Warn ($check.label + ' missing: ' + $check.path) }
