@@ -130,7 +130,9 @@ function Show-ApiSettings {
             if (!$p) {$p=@{}}
             $updated=$p.Clone()
             $updated.model=$fields.model.Text.Trim();$updated.contextLimit=[int]$fields.context.Value
-            $updated.models=@(@($p.models)+@($updated.model) | Where-Object {$_} | Select-Object -Unique)
+            # Persist ALL models fetched during verification, so the API's models also appear in the
+            # model selection list (not just the selected one).
+            $updated.models=@(@($fields.model.Items | Where-Object {$_})+@($p.models)+@($updated.model) | Where-Object {$_} | Select-Object -Unique)
             if ($id -eq 'custom') {
                 $trimmed=$fields.baseUrl.Text.Trim().TrimEnd('/')
                 if (!$trimmed) { throw 'First enter a base address (e.g. http://127.0.0.1:1234/v1).' }

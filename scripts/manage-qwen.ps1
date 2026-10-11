@@ -275,14 +275,15 @@ try {
     if (!(Test-Path -LiteralPath $model -PathType Leaf)) { throw "Model not found: $model" }
     # The Lite profile also runs without an image projector; on the others mmproj is mandatory.
     if (!$custom -and $Profile -ne 'lite' -and !(Test-Path -LiteralPath $projector -PathType Leaf)) { throw "Image projector not found: $projector" }
-    # ComfyUI lifecycle. MAX/FLASH (27B, at the card's limit on 16 GB) does NOT run reliably
-    # together with ComfyUI: the remaining headroom plus the ComfyUI context and the desktop can
-    # push the MTP draft context onto the CPU and chat intermittently drops to ~6-7 tok/s
-    # (measured: the post-media step hit a 0.18 ratio once on this machine). So on 27B profiles
-    # an idle ComfyUI is ALWAYS closed before loading; it is reopened on demand (~27 s). LITE
-    # (9B) runs together with ComfyUI even on 8 GB (measured ratio 1.04) and keeps it open. A
-    # leaked/duplicate ComfyUI is cleaned in every profile first.
-    $comfyKeepAlive = $true
+    # ComfyUI lifecycle. DEFAULT OFF: ComfyUI runs only during image/video generation and is
+    # closed when the job ends and before the language model loads — it holds neither VRAM nor RAM
+    # while idle. Rationale: the LITE target machine is 8 GB VRAM / 16 GB RAM; the 9B model is
+    # already at the card's limit (~7.5 GB), so the ComfyUI context (~300 MiB) plus the desktop
+    # spills it. On a 16 GB card, LITE users who want it open between media jobs set
+    # `settings/api.json` -> `comfyKeepAlive=true` (no ~27 s reopen). MAX/FLASH (27B) always close.
+    # In API mode this script is not called; ComfyUI stays open after media.
+    # A leaked/duplicate ComfyUI is cleaned in every profile first.
+    $comfyKeepAlive = $false
     if ($settings -and $null -ne $settings.comfyKeepAlive) { $comfyKeepAlive = [bool]$settings.comfyKeepAlive }
     [void](Stop-ComfyLeaks)
     if (!$comfyKeepAlive -or $Profile -ne 'lite') { [void](Stop-IdleComfy) }

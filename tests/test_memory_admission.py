@@ -33,19 +33,19 @@ def test_memory_budget_function_exists_and_is_called_before_start():
 
 
 def test_idle_comfy_policy_is_profile_aware():
-    """ComfyUI lifecycle is profile-aware: MAX/FLASH (27B, at the card's limit on 16 GB) does not
-    run reliably with ComfyUI — the remaining headroom plus the ComfyUI context and desktop can push
-    the MTP draft context onto the CPU and chat drops intermittently to ~6-7 tok/s (measured: the
-    post-media step once hit a 0.18 ratio). So on 27B profiles an idle ComfyUI is ALWAYS closed
-    before loading; LITE (9B) runs together with ComfyUI (measured ratio 1.04) and keeps it open.
-    A leaked/duplicate ComfyUI is cleaned in every profile first."""
+    """ComfyUI lifecycle. DEFAULT OFF: ComfyUI runs only during media generation and is closed
+    when the job ends and before the language model loads — it holds no VRAM/RAM while idle.
+    Rationale: the LITE target machine is 8 GB VRAM / 16 GB RAM; the 9B is at the card's limit
+    and the ComfyUI context spills it. On a 16 GB card LITE users can keep it open with
+    `comfyKeepAlive=true`; MAX/FLASH always close. In API mode the script is not called."""
     manager = read_text("scripts/manage-qwen.ps1")
-    assert "$comfyKeepAlive = $true" in manager
+    # Default OFF (no idle VRAM/RAM).
+    assert "$comfyKeepAlive = $false" in manager
     assert "$settings.comfyKeepAlive" in manager
     assert "function Get-ComfyInstanceRoots" in manager
     assert "function Stop-ComfyLeaks" in manager
     assert "[void](Stop-ComfyLeaks)" in manager
-    # Profile-aware close: MAX/FLASH always, LITE defers to the setting.
+    # Default off -> MAX/FLASH and LITE close; only opt-in (true) + LITE stays open.
     assert "if (!$comfyKeepAlive -or $Profile -ne 'lite') { [void](Stop-IdleComfy) }" in manager
     # If the budget fails, close and retry (safety net preserved).
     assert "if ((Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector } else { throw }" in manager

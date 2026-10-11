@@ -25,8 +25,8 @@ function Get-ProfileFromAlias([string]$alias) {
 # "Switch to this profile" flow; collected here so there is one source of truth.
 function Get-BuiltinProfileDefinitions {
     return @(
-        @{ id = 'builtin-max'; label = 'Qwen3.8 MAX'; profile = 'max' },
-        @{ id = 'builtin-flash'; label = 'Qwen3.8 FLASH'; profile = 'flash' },
+        @{ id = 'builtin-max'; label = 'Qwen3.8 27B MAX'; profile = 'max' },
+        @{ id = 'builtin-flash'; label = 'Qwen3.8 27B FLASH'; profile = 'flash' },
         @{ id = 'builtin-lite'; label = 'Qwen3.5 9B LITE'; profile = 'lite' }
     )
 }

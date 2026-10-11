@@ -137,13 +137,20 @@ Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFil
 the full catalog (`Get-ProfileCatalog`).
 
 **VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + **600 MiB**
-(300 MiB on LITE). **ComfyUI lifecycle (profile-aware):** on **MAX/FLASH (27B)** profiles an idle
-ComfyUI is **always closed** before the language model loads — the 27B sits at the card's limit on
-16 GB, so the ComfyUI context plus the desktop can push the MTP draft context onto the CPU and chat
-drops **intermittently to ~6-7 tok/s** (measured: the "post-media switch" step once hit a 0.18
-ratio). **LITE (9B)** runs together with ComfyUI (measured ratio 1.04) and **keeps it open** (no
-~27 s reopen per media job). `comfyKeepAlive=false` also closes it on LITE. A **leaked/duplicate**
-ComfyUI instance is cleaned in every profile first: ComfyUI is a process **pair** (a venv launcher +
+(300 MiB on LITE). **ComfyUI lifecycle (default: runs only during generation):** ComfyUI runs **only
+during image/video generation**; it is closed when the job ends and before the language model loads,
+so it holds **neither VRAM nor RAM while idle** (an idle ComfyUI kept ~300 MiB of CUDA context plus
+RAM; `comfyKeepAlive` default `false`). It reopens on demand (~27 s).
+- **Local mode (MAX/FLASH):** the 27B sits at the card's limit on 16 GB, so ComfyUI is **always**
+  closed before loading (otherwise the MTP draft context moves to the CPU and chat drops
+  intermittently to ~6-7 tok/s; measured: the "post-media switch" step once hit ratio 0.18).
+- **Local mode (LITE):** the 9B can coexist with ComfyUI (measured ratio 1.04); to keep it open
+  between media jobs set `settings/api.json` -> `comfyKeepAlive=true` (it then holds ~300 MiB VRAM +
+  RAM while idle; recommended only on a 16 GB card — the LITE target is 8 GB VRAM / 16 GB RAM).
+- **API mode:** the local model is not running (GPU free), so after media the ComfyUI process is
+  left open (no VRAM conflict, no reopen).
+A **leaked/duplicate** ComfyUI instance is cleaned in every profile first: ComfyUI is a process
+**pair** (a venv launcher +
 its base-python child), so process **count** cannot decide "leak" — a single healthy instance is
 already 2 processes. Instances are counted by **roots** (a matching process whose parent is not
 itself a match; `Get-ComfyInstanceRoots`); `Stop-ComfyLeaks` closes only extra roots and **keeps the
@@ -334,7 +341,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
     `videoProvider`, `externalMediaModels`.
   - UI: `uiPreferences.{internet, agent, accessMode}`, `firstRunApiSettings`.
   - LITE settings: `liteModel`, `liteContext`, `liteReasoningBudget`.
-  - Media: `comfyKeepAlive` (default `true`; on LITE ComfyUI stays open between media jobs; on MAX/FLASH it is closed before loading because of the 27B, see section 5).
+  - Media: `comfyKeepAlive` (default `false`; ComfyUI runs only during media generation and holds no VRAM/RAM while idle; set `true` on LITE to keep it open between media jobs, see section 5).
 - Chats are encrypted under `chats\` with the `MAMIDLABS-CHAT-DPAPI-V2` prefix.
 - `logs\audit.jsonl`: a record of tool calls (not content; path/command identity).
 
@@ -412,7 +419,7 @@ has no LoRA.
 7. **The VRAM margin is profile-based** (MAX/FLASH 600 MiB, LITE 300 MiB) and the tolerance is
    LITE 1024 / MAX/FLASH 0. On a 16 GB card a margin that is too large keeps MAX from
    ever starting, while too small lets the 27B model spill into shared memory and drop to ~6 tok/s.
-   **ComfyUI** lifecycle is profile-aware: on MAX/FLASH (27B, at the card's limit) it is **always** closed before loading (otherwise the MTP draft context moves to the CPU and chat drops intermittently to ~6-7 tok/s); on LITE it stays open (9B runs together with ComfyUI). A leaked/duplicate instance is cleaned in every profile (ComfyUI is a process pair, so instance roots - not process count - decide). A leaked instance spills the 27B to 0.89 tok/s. On MAX/FLASH the mmproj runs on the CPU
+   **ComfyUI** by default runs only during media generation (it holds no VRAM/RAM while idle) and is closed before the language model loads; on LITE it can be kept open between media jobs with `comfyKeepAlive=true`. A leaked/duplicate instance is cleaned in every profile (ComfyUI is a process pair, so instance roots - not process count - decide). A leaked instance spills the 27B to 0.89 tok/s. On MAX/FLASH the mmproj runs on the CPU
    (`--no-mmproj-offload`). On the GPU it spills
    ~420 MiB into shared memory and speed drops from 25 to 19 tok/s.
 8. **Single image rule:** only one image at a time goes to chat (multiple images only in the
