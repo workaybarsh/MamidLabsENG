@@ -40,6 +40,9 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   management server (localhost only, password-protected session).
 - **Installation and updates:** Inno Setup wizard; pinned infrastructure (PowerShell 7.6.6, llama.cpp
   b10998 CUDA 13.4, ComfyUI b0f4b7b); in-app update check; full uninstall.
+  In setup, **image/video generation, audio capture and OCR are optional** (checked by default;
+  unchecking installs only the chat/document tools). The same components can be selected, downloaded
+  or deleted from the **Profile Manager**.
 - **License (EULA):** the setup wizard shows an **End User License Agreement** and requires accepting
   it. Ownership and all rights belong to the developer; copying, modifying, cracking or commercially
   marketing the Software is prohibited. Unauthorized use may carry civil and criminal liability;

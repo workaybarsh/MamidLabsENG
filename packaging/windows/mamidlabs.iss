@@ -75,8 +75,10 @@ FinishedHeadingLabel=MamidLabs setup complete
 FinishedLabelNoIcons=MamidLabs has been installed on your computer. You can open it with the MamidLabs shortcut on the desktop.
 
 [Tasks]
-Name: "smoketest"; Description: "Run the smoke test at the end of setup (chat, document, image, photo editing, model switch) — can take a long time (tens of minutes including image/video steps), skipped if the model files were not downloaded"; GroupDescription: "Verification:"; Flags: unchecked
-Name: "ocr"; Description: "Also install OCR — when you send a photo, a scanned page or a screenshot, it reads the text inside and converts it to text, for example you can photograph an invoice or a handwritten note and have it read out as text; about 3 GB, recommended"; GroupDescription: "Optional:"
+Name: "media"; Description: "Image and video generation - generate/edit photos and generate video (ComfyUI + Krea-2 + Wan 2.2, ~20 GB depending on the profile). Uncheck to install only chat, documents, OCR and audio"; GroupDescription: "Components (recommended):"
+Name: "audio"; Description: "Audio capture - transcribe a microphone recording or an audio file to text (Qwen3-ASR, ~4 GB)"; GroupDescription: "Components (recommended):"
+Name: "ocr"; Description: "OCR - reads the text inside a photo, a scanned page or a screenshot and converts it to text (e.g. an invoice or a handwritten note); about 5.5 GB"; GroupDescription: "Components (recommended):"
+Name: "smoketest"; Description: "Run the smoke test at the end of setup (chat, document, image, model switch) - can take a long time (tens of minutes)"; GroupDescription: "Verification:"; Flags: checkedonce
 
 [Files]
 ; Program source. setup-run.ps1 uses it as install-mamidlabs.ps1 -Source;
@@ -363,6 +365,8 @@ begin
   begin
     P := P + ' -DownloadModels';
     if WizardIsTaskSelected('smoketest') then P := P + ' -SmokeTest';
+    if not WizardIsTaskSelected('media') then P := P + ' -SkipMedia';
+    if not WizardIsTaskSelected('audio') then P := P + ' -SkipAudio';
     if WizardIsTaskSelected('ocr') then P := P + ' -Ocr';
   end;
   if ProfilePage.SelectedValueIndex = OptOwn then

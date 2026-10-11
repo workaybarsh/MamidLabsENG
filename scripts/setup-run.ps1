@@ -31,6 +31,9 @@ param(
     [switch]$DownloadModels,
     [switch]$SmokeTest,
     [switch]$Ocr,
+    # Image/video generation and audio capture are optional; unchecked in the wizard skips them.
+    [switch]$SkipMedia,
+    [switch]$SkipAudio,
     [string]$LlmPath,
     [string]$ImageModelPath,
     [string]$VideoModelPath,
@@ -216,7 +219,7 @@ $prereqOk = Invoke-Step 'Prerequisites (Python, Git, 7-Zip, VC++ Redistributable
 if ($prereqOk) {
     $infraOk = Invoke-Step 'Infrastructure (PowerShell 7, llama.cpp, Python, ComfyUI)' {
         # The child script writes its own output; if it throws, the step fails.
-        & (Join-Path $Source 'scripts\install-mamidlabs.ps1') -Profile $installProfile -Root $Root -Source $Source -NoUninstallEntry:$FromWizard | Out-Host
+        & (Join-Path $Source 'scripts\install-mamidlabs.ps1') -Profile $installProfile -Root $Root -Source $Source -SkipMedia:$SkipMedia -SkipAudio:$SkipAudio -NoUninstallEntry:$FromWizard | Out-Host
         if (!(Test-Path -LiteralPath $pwsh -PathType Leaf)) { throw 'The bundled PowerShell 7 was not installed.' }
         'installed'
     }
@@ -283,6 +286,7 @@ if (!$SmokeTest) {
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'scripts\smoke-test.ps1'),
                        '-Profile', $Profile, '-Root', $Root, '-SkipVideo', '-ReportPath', $smokeReport)
         if (!$Ocr) { $arguments += '-SkipOcr' }
+        if ($SkipMedia) { $arguments += '-SkipImage'; $arguments += '-SkipEdit' }
         & $pwsh @arguments | Out-Host
         if ($LASTEXITCODE -ne 0) { throw 'At least one component could not be verified; details at the end of the summary.' }
         'all components verified'

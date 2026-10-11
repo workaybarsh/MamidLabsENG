@@ -123,6 +123,30 @@ function Remove-ProfileFiles([string]$id) {
     return $result
 }
 
+# Component classification: media (image/video) lives under ComfyUI, audio under
+# models\qwen3-asr; everything else (language model/mmproj) is core and not optional.
+function Get-ProfileFileComponent([string]$target) {
+    $t = ([string]$target) -replace '\\', '/'
+    if ($t -like 'ComfyUI/*') { return 'media' }
+    if ($t -like 'models/qwen3-asr/*') { return 'audio' }
+    return 'core'
+}
+
+# Deletes the selected components' (media/audio) files for a profile; only touches files
+# unique to this profile. Returns removed count and total bytes.
+function Remove-ProfileComponents([string]$id, [string[]]$components) {
+    $result = @{ removed = 0; failed = 0; totalBytes = 0L }
+    foreach ($target in (Get-ProfileUniqueTargets $id)) {
+        if ($components -notcontains (Get-ProfileFileComponent $target)) { continue }
+        $full = Join-Path $root $target
+        if (!(Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+        try { $result.totalBytes += [long](Get-Item -LiteralPath $full).Length } catch { }
+        try { Remove-Item -LiteralPath $full -Force -ErrorAction Stop; $result.removed++ }
+        catch { $result.failed++ }
+    }
+    return $result
+}
+
 # Checks whether a profile's CHAT-required files (language model + mmproj) are on disk.
 # ComfyUI media (image/video) models are deliberately excluded: the install may have used
 # -SkipMedia and they are not needed for chat to work. Used so the model bar at the bottom
@@ -244,11 +268,11 @@ function Switch-ToProfile([string]$id) {
     return $true
 }
 
-function Start-ProfileDownload([string]$id) {
+function Start-ProfileDownload([string]$id, [string[]]$components = @('core', 'media', 'audio')) {
     if ($script:busy -or $script:imageBusy) { return 'Wait for the current operation to finish first.' }
     $state = Get-ProfileState $id
-    $missing = @($state.missingDownloadable)
-    if (!$missing.Count) { return 'There are no files to download.' }
+    $missing = @($state.missingDownloadable | Where-Object { $components -contains (Get-ProfileFileComponent ([string]$_.target)) })
+    if (!$missing.Count) { return 'There are no files to download for the selected components.' }
     $files = @()
     foreach ($file in $missing) {
         $files += @{
@@ -280,7 +304,7 @@ function Show-ProfileManager([string]$focusId) {
 
     $dlg = [Windows.Forms.Form]::new()
     $dlg.Text = 'MamidLabs · Profiles'
-    $dlg.Size = [Drawing.Size]::new(790, 540)
+    $dlg.Size = [Drawing.Size]::new(790, 600)
     $dlg.StartPosition = 'CenterParent'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.MaximizeBox = $false
@@ -337,6 +361,20 @@ function Show-ProfileManager([string]$focusId) {
     $tokenClear = [Windows.Forms.Button]::new()
     $tokenClear.Text = 'Clear'
     $tokenClear.SetBounds(592, 439, 60, 28)
+    # Component selection: optional components to download/delete (language model is core).
+    $mediaChk = [Windows.Forms.CheckBox]::new()
+    $mediaChk.Text = 'Image/video generation'
+    $mediaChk.SetBounds(16, 478, 200, 24)
+    $mediaChk.Checked = $true
+    $mediaChk.ForeColor = $colText
+    $audioChk = [Windows.Forms.CheckBox]::new()
+    $audioChk.Text = 'Audio capture'
+    $audioChk.SetBounds(224, 478, 200, 24)
+    $audioChk.Checked = $true
+    $audioChk.ForeColor = $colText
+    $delCompBtn = [Windows.Forms.Button]::new()
+    $delCompBtn.Text = 'Delete selected components'
+    $delCompBtn.SetBounds(16, 508, 200, 34)
     if ($script:apiSettings.providers -and $script:apiSettings.providers['github']) {
         $tokenLabel.Text = 'Update token saved (leave blank to keep it; type to replace):'
     }
@@ -386,9 +424,35 @@ function Show-ProfileManager([string]$focusId) {
     $downloadBtn.Add_Click({
         $index = $list.SelectedIndex
         if ($index -lt 0) { return }
-        $failure = Start-ProfileDownload $catalog[$index].id
+        $components = @('core')
+        if ($mediaChk.Checked) { $components += 'media' }
+        if ($audioChk.Checked) { $components += 'audio' }
+        $failure = Start-ProfileDownload $catalog[$index].id $components
         if ($failure) { $status.Text = $failure; return }
         $dlg.Close()
+    }.GetNewClosure())
+
+    # Delete the selected components (image/video, audio) from this profile: only files
+    # unique to this profile are removed; core (language model) and shared files are kept.
+    $delCompBtn.Add_Click({
+        $index = $list.SelectedIndex
+        if ($index -lt 0) { return }
+        if ($script:busy -or $script:imageBusy) { $status.Text = 'Wait for the current operation to finish first.'; return }
+        $components = @()
+        if ($mediaChk.Checked) { $components += 'media' }
+        if ($audioChk.Checked) { $components += 'audio' }
+        if (!$components.Count) { $status.Text = 'No component selected (Image/video or Audio).'; return }
+        $profile = $catalog[$index]
+        $answer = [Windows.Forms.MessageBox]::Show(
+            ('The selected components for ' + $profile.label + ' will be deleted (only files unique to this profile).' + "`r`n`r`nDelete?"),
+            'Delete components', 'YesNo', 'Warning')
+        if ($answer -ne 'Yes') { return }
+        $result = Remove-ProfileComponents $profile.id $components
+        $list.Items[$index] = "$($profile.label) — $(Get-ProfileStatusLabel $profile.id)"
+        & $refresh
+        $status.Text = if ($result.removed) { "Selected components deleted ($($result.removed) files, $(Format-ByteSize $result.totalBytes))." }
+            else { 'No (profile-unique) files found to delete.' }
+        try { Update-ProviderSelection } catch { }
     }.GetNewClosure())
 
     $switchBtn.Add_Click({
@@ -532,7 +596,7 @@ function Show-ProfileManager([string]$focusId) {
         }
     }.GetNewClosure())
 
-    $dlg.Controls.AddRange(@($list, $detail, $status, $downloadBtn, $switchBtn, $deleteBtn, $updateBtn, $closeBtn, $tokenLabel, $tokenBox, $tokenSave, $tokenClear))
+    $dlg.Controls.AddRange(@($list, $detail, $status, $downloadBtn, $switchBtn, $deleteBtn, $updateBtn, $closeBtn, $tokenLabel, $tokenBox, $tokenSave, $tokenClear, $mediaChk, $audioChk, $delCompBtn))
     $wanted = 0
     if ($focusId) {
         for ($i = 0; $i -lt $catalog.Count; $i++) { if ($catalog[$i].id -eq $focusId) { $wanted = $i; break } }

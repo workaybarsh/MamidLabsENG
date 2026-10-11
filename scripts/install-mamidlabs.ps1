@@ -34,6 +34,9 @@ param(
     [string]$Root = (Join-Path $env:LOCALAPPDATA 'Programs\MamidLabs'),
     [string]$Source,
     [switch]$SkipMedia,
+    # Audio capture (Qwen3-ASR) is separate from media: -SkipMedia skips media but not audio;
+    # only when audio is not wanted is -SkipAudio given.
+    [switch]$SkipAudio,
     [switch]$Force,
     # The setup wizard writes its own uninstall entry; the script does not create a second one.
     [switch]$NoUninstallEntry
@@ -426,7 +429,7 @@ function Invoke-Llama {
 # ------------------------------------------------------------- Qwen3-ASR (audio transcription)
 function Invoke-Asr {
     Write-Step 'Qwen3-ASR audio transcription engine (1.7B)'
-    if ($SkipMedia) { Write-Skip 'Qwen3-ASR (-SkipMedia)'; return }
+    if ($SkipAudio) { Write-Skip 'Qwen3-ASR (-SkipAudio)'; return }
     # The engine code runs in the imagegen venv (torch + transformers); there is no separate binary.
     $modelDir = Join-Path $Root 'models\qwen3-asr'
     New-Item -ItemType Directory -Path $modelDir -Force | Out-Null
@@ -470,8 +473,8 @@ function Invoke-Python {
     $appPython = New-Venv (Join-Path $Root 'venv\app') 'app'
     Install-Packages $appPython $script:AppPackages 'app' $null
 
-    if ($SkipMedia) {
-        Write-Skip 'imagegen environment (-SkipMedia)'
+    if ($SkipMedia -and $SkipAudio) {
+        Write-Skip 'imagegen environment (neither media nor audio requested)'
         return
     }
     $imagegen = New-Venv (Join-Path $Root 'venv\imagegen') 'imagegen'
@@ -598,12 +601,16 @@ function Invoke-Verify {
         @{ label = 'llama-server';         path = ('llama.cpp\' + $script:LlamaBuild + '\llama-server.exe') },
         @{ label = 'app environment';       path = 'venv\app\Scripts\python.exe' }
     )
-    if (!$SkipMedia) {
+    if (!$SkipMedia -or !$SkipAudio) {
         $checks += @{ label = 'imagegen environment'; path = 'venv\imagegen\Scripts\python.exe' }
+    }
+    if (!$SkipMedia) {
         $checks += @{ label = 'ComfyUI';         path = 'ComfyUI\main.py' }
-        $checks += @{ label = 'Qwen3-ASR model'; path = 'models\qwen3-asr\model.safetensors' }
         $checks += @{ label = 'ComfyUI-GGUF';    path = 'ComfyUI\custom_nodes\ComfyUI-GGUF\__init__.py' }
         $checks += @{ label = 'Photo editing nodes'; path = 'ComfyUI\custom_nodes\comfyui-krea2edit\__init__.py' }
+    }
+    if (!$SkipAudio) {
+        $checks += @{ label = 'Qwen3-ASR model'; path = 'models\qwen3-asr\model.safetensors' }
     }
     foreach ($check in $checks) {
         # The folder inside the zip (e.g. 'Release\') can vary by version; if glob is set,

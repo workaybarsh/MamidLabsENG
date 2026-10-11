@@ -229,6 +229,21 @@ def test_eula_exists_and_covers_ownership():
     assert len(eula) > 1500
 
 
+def test_wizard_optional_components_are_default_on_and_passed_as_skips():
+    """Image/video, audio and OCR are optional; all come CHECKED by default (no 'unchecked').
+    Unchecking passes -SkipMedia / -SkipAudio to the install."""
+    iss = read_text(ROOT / "packaging" / "windows" / "mamidlabs.iss")
+    for task in ("media", "audio", "ocr", "smoketest"):
+        assert 'Name: "%s"' % task in iss, task + " task missing"
+    assert "unchecked" not in iss, "all tasks must be checked by default"
+    assert "if not WizardIsTaskSelected('media') then P := P + ' -SkipMedia'" in iss
+    assert "if not WizardIsTaskSelected('audio') then P := P + ' -SkipAudio'" in iss
+    installer = read_text("scripts/install-mamidlabs.ps1")
+    assert "[switch]$SkipAudio" in installer
+    setup = read_text("scripts/setup-run.ps1")
+    assert "[switch]$SkipMedia" in setup and "[switch]$SkipAudio" in setup
+
+
 def test_repository_is_proprietary_licensed():
     license_text = read_text(ROOT / "LICENSE")
     assert "All Rights Reserved" in license_text
