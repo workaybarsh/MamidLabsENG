@@ -22,15 +22,13 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   cleaned before loading.
 - **Documents and OCR:** read PDF/Word/Excel/PowerPoint/ZIP/RAR, create PDF/DOCX/PPTX; image and PDF
   OCR with PaddleOCR.
-- **Audio transcription (whisper.cpp):** an attached audio file is transcribed automatically and the
-  findings are given to the language model (the OCR/mmproj pattern). Model **large-v3-turbo-q5_0 +
-  Silero VAD** (hallucination suppressed). Measured: 2 min audio ~53 s on CPU, ~2.5 s on GPU (CUDA).
+- **Audio transcription (Qwen3-ASR-1.7B):** an attached audio file is transcribed automatically and
+  the findings are given to the language model (the OCR/mmproj pattern). The engine is **Qwen3-ASR**:
+  52 languages + **Turkish**; speech, singing and music-with-BGM; fast on GPU (falls back to CPU).
   On the local provider the language model is unloaded from VRAM, the transcript is taken, then it is
   restored. A **microphone** button left of Send (**live recording from the Windows default input
-  device**, dependency-free) and **Add audio** in the "+" menu.
-  **Audio capture quality** is selectable from the microphone menu: **Normal** (turbo-q5_0, fast) /
-  **High quality (large-v3)** (**highest accuracy**, ~2x slower). The installer downloads both
-  models, so the option works on a fresh install too.
+  device**, dependency-free) and **Add audio** in the "+" menu. The model is downloaded into
+  `models\qwen3-asr` during installation.
 - **Dependency-free chart generation:** the `generate_chart` chat tool + `agent/chart-run.ps1`
   (bundled pwsh + System.Drawing; bar/line/pie/scatter/function charts; a safe expression evaluator,
   no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`.

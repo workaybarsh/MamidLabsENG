@@ -22,11 +22,14 @@ def test_runtime_packages_carry_source_and_verified_size():
     assert "The file was deleted, run again." in installer
 
 
-def test_whisper_binary_skip_detects_release_subfolder():
-    """The whisper binaries extract into a 'Release' subfolder. The skip condition must search
-    recursively; a direct path never matches and 662 MB of binaries redownload every install."""
+def test_installer_downloads_qwen3_asr_model_files():
+    """The audio transcription engine is Qwen3-ASR. The installer downloads its model files from
+    HF with size verification (the whisper binaries/model were removed)."""
     installer = read_text("scripts/install-mamidlabs.ps1")
-    assert "Get-ChildItem -LiteralPath $target -Recurse -Filter 'whisper-cli.exe'" in installer
+    assert "Qwen/Qwen3-ASR-1.7B-hf" in installer
+    assert "models\\qwen3-asr" in installer
+    assert "'model.safetensors'" in installer
+    assert "asr       = { Invoke-Asr }" in installer
 
 
 def test_comfyui_clone_is_pinned_to_a_specific_commit_not_a_floating_branch():

@@ -111,14 +111,12 @@ $script:currentTurnHasImage = $false
 $script:currentTurnImagePaths = @()
 $script:currentTurnAudioPaths = @()
 $script:micRecording = $false
-# Audio transcription quality: 'normal' (turbo-q5_0, fast) | 'high' (large-v3, highest accuracy).
-$script:audioQuality = 'normal'
 $script:currentTurnMultiImageOcr = $false
 $script:multiImageOcrMode = $false
 $script:selectedVideos = New-Object System.Collections.Generic.List[string]
 $script:lastUserVideo = $null
 $script:selectedDocuments = New-Object System.Collections.Generic.List[string]
-# Audio files (transcribed with whisper.cpp; the audio counterpart of image OCR).
+# Audio files (transcribed with Qwen3-ASR; the audio counterpart of image OCR).
 $script:selectedAudio = New-Object System.Collections.Generic.List[string]
 $script:attachedDocuments = New-Object System.Collections.Generic.List[string]
 $script:videoJob = $null
@@ -1161,8 +1159,8 @@ $send.FlatAppearance.BorderSize = 0
 $composer.Controls.Add($send)
 
 # Microphone button: immediately left of Send. Clicking it opens a menu:
-# "Upload audio file" / "Use microphone" / "Cancel". When audio is attached it is
-# transcribed automatically (whisper.cpp) and the findings are given to the language
+# "Use microphone" / "Cancel". When audio is attached it is
+# transcribed automatically (Qwen3-ASR) and the findings are given to the language
 # model (the audio counterpart of OCR). GDI cannot draw color emoji; the Segoe MDL2
 # Assets microphone glyph (U+E720) is used.
 $micBtn = New-Object System.Windows.Forms.Button
@@ -1178,22 +1176,9 @@ $composer.Controls.Add($micBtn)
 $micMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $micUse = $micMenu.Items.Add('Use microphone')
 [void]$micMenu.Items.Add('-')
-# Audio capture quality: checked = high (large-v3), unchecked = normal (turbo-q5_0).
-$script:audioQuality = if ([string]$script:apiSettings.audioQuality -eq 'high') { 'high' } else { 'normal' }
-$micQuality = New-Object System.Windows.Forms.ToolStripMenuItem('High quality (large-v3)')
-$micQuality.CheckOnClick = $true
-$micQuality.Checked = ($script:audioQuality -eq 'high')
-[void]$micMenu.Items.Add($micQuality)
-[void]$micMenu.Items.Add('-')
 $micCancel = $micMenu.Items.Add('Cancel')
 $micBtn.Add_Click({ $micMenu.Show($micBtn, 0, $micBtn.Height) })
 $micUse.Add_Click({ Start-MicrophoneCapture })
-$micQuality.Add_Click({
-    $script:audioQuality = if ($micQuality.Checked) { 'high' } else { 'normal' }
-    $script:apiSettings.audioQuality = $script:audioQuality
-    Save-ApiSettings
-    $metric.Text = if ($script:audioQuality -eq 'high') { 'Audio quality: High (large-v3, slower)' } else { 'Audio quality: Normal (turbo)' }
-})
 $micCancel.Add_Click({ $micMenu.Close() })
 
 function New-Chip([string]$text, [bool]$isChecked) {
@@ -1430,11 +1415,10 @@ function Pick-AudioFile {
     } catch { $metric.Text = 'Could not attach the audio file: ' + $_.Exception.Message }
     finally { $dlg.Dispose() }
 }
-# Microphone capture (whisper.cpp stream) is a later step; for now guide the user.
 # Microphone capture (dependency-free): records via winmm mciSendString. `open new type
 # waveaudio` uses the Windows DEFAULT recording device (WAVE_MAPPER) — no device selection needed. Toggle: first click starts recording, second stops it; the WAV is attached as
 # an audio attachment and sent automatically (transcript + language-model answer). The recording
-# format is the device default; whisper-tools.py converts it to 16 kHz mono WAV.
+# format is the device default; qwen3-asr-tools.py converts it to 16 kHz mono and transcribes with Qwen3-ASR.
 function Start-MicrophoneCapture {
     if (-not ([System.Management.Automation.PSTypeName]'MamidMci').Type) {
         Add-Type @'
@@ -2310,7 +2294,6 @@ function Begin-Generation {
         currentImagePath = $(if ($script:currentTurnImagePaths.Count -gt 0) { [string]$script:currentTurnImagePaths[0] } else { '' })
         currentImagePaths = @($script:currentTurnImagePaths)
         currentAudioPaths = @($script:currentTurnAudioPaths)
-        audioQuality = $script:audioQuality
         multiImageOcr = [bool]$script:currentTurnMultiImageOcr
         multiImageOcrMode = [bool]$script:multiImageOcrMode
         profile = $profile
@@ -2576,14 +2559,14 @@ function Render-JobEvent($jobEvent) {
             $metric.Text = "OCR complete ($confidence confidence)"
         }
         'transcript' {
-            # The attached audio was transcribed (whisper.cpp). The transcript is shown in the
+            # The attached audio was transcribed (Qwen3-ASR). The transcript is shown in the
             # bubble and the language model answers over the findings (like OCR).
             if ($b) {
                 $b.transcriptText = [string]$jobEvent.text
                 if (![string]::IsNullOrWhiteSpace($b.transcriptText)) { $b.body.Text = $b.transcriptText }
                 $script:dirty = $true
             }
-            $modelLabel = if ($jobEvent.data -and $jobEvent.data.model) { [string]$jobEvent.data.model } else { 'whisper' }
+            $modelLabel = if ($jobEvent.data -and $jobEvent.data.model) { [string]$jobEvent.data.model } else { 'Qwen3-ASR' }
             $metric.Text = "Transcript ready ($modelLabel)"
         }
         'thinking' {
@@ -2800,7 +2783,7 @@ $send.Add_Click({
         $content += @{ type = 'text'; text = "[The user attached a document: $doc]" }
     }
     foreach ($aud in $script:selectedAudio) {
-        # Audio will be transcribed with whisper.cpp into text (the audio counterpart of OCR).
+        # Audio will be transcribed with Qwen3-ASR into text (the audio counterpart of OCR).
         $content += @{ type = 'text'; text = "[The user attached an audio file: $([IO.Path]::GetFileName($aud))]" }
     }
     if ($activatingMode) {

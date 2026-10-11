@@ -341,8 +341,6 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
     `videoProvider`, `externalMediaModels`.
   - UI: `uiPreferences.{internet, agent, accessMode}`, `firstRunApiSettings`.
   - LITE settings: `liteModel`, `liteContext`, `liteReasoningBudget`.
-- Audio transcription quality: `audioQuality` (`normal` = turbo-q5_0, fast; `high` = large-v3,
-  highest accuracy, ~2x slower; default `normal`). Managed by the checkbox in the microphone menu.
   - Media: `comfyKeepAlive` (default `false`; ComfyUI runs only during media generation and holds no VRAM/RAM while idle; set `true` on LITE to keep it open between media jobs, see section 5).
 - Chats are encrypted under `chats\` with the `MAMIDLABS-CHAT-DPAPI-V2` prefix.
 - `logs\audit.jsonl`: a record of tool calls (not content; path/command identity).
@@ -372,7 +370,9 @@ python -m pytest -q          # ~320 tests, ~115 s; no extra setup needed (tests/
   model must be ready, one turn with the real worker the UI uses must answer with no
   "connection dropped"/watchdog text, and MTP must work; skippable with `-SkipUi`). `ui` runs last
   because the app stops the server on exit. Audio input (transcription) is verified through the
-  real worker's `transcript` event and `tests/test_whisper_tools.py`, not via `/completion`.
+  real worker's `transcript` event and `tests/test_qwen3_asr.py`, not via `/completion`. The engine
+  is **Qwen3-ASR-1.7B** (`agent/qwen3-asr-tools.py`, `models\qwen3-asr`); it is LLM-based and runs
+  in the imagegen venv (torch + transformers).
 - **CI:** `tests.yml` (windows-latest, Python 3.12) on every push/PR; `installer.yml` when
   package-related paths change. Merged into `master` via PR.
 
@@ -508,6 +508,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-11 | **The audio transcription engine moved from whisper.cpp to Qwen3-ASR-1.7B** (whisper fully removed). New worker `agent/qwen3-asr-tools.py` (imagegen venv: torch cu130 + transformers 5.x; PyAV decodes to 16 kHz mono float32 numpy — no librosa/soundfile; `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` for offline). 52 languages + **Turkish**, speech + singing/BGM; verified with real audio (LibriSpeech: exact match, on GPU). Installer stage `whisper` → **`asr`** (model downloaded to `models\qwen3-asr` from HF with size verification); `verify` check and UI text updated. `Invoke-TranscribeWithModelSwap` now tries `cuda→cpu`; the microphone-menu quality toggle (audioQuality) was removed (single engine). Test file `tests/test_whisper_tools.py` → `tests/test_qwen3_asr.py`. | agent/qwen3-asr-tools.py, agent/qwen-inference.ps1, qwen-desktop.ps1, scripts/install-mamidlabs.ps1, tests/test_qwen3_asr.py, tests/test_installer_pinning.py |
 | 2026-10-11 | Re-verified the 1.0.0 release gate **after** the audio/microphone changes: **MAX smoke 14/14**, **LITE smoke 13/13** (+1 expected skip: `edit`, unsupported on 8 GB), pytest **TR 332 / ENG 331**, setup built for TR/ENG (`MamidLabs_Setup.exe`). Measured: MAX 43.1→47.7 tok/s (post-media ratio 1.11), LITE 95.8→92.9 tok/s (ratio 0.97), ComfyUI closed on both; UI turn MTP 23/23. | AGENTS.md |
 | 2026-10-11 | Fixed a whisper.cpp install bug: because the archive extracts into a `Release` subfolder the "whisper-cli.exe already installed" skip never matched, so **662 MB of binaries redownloaded on every install**; `whisper-cli.exe` is now found recursively. | scripts/install-mamidlabs.ps1, tests/test_installer_pinning.py |
 | 2026-10-11 | Audio capture quality is now selectable: a **"High quality (large-v3)"** checkbox (toggle) in the microphone menu. Unchecked = normal (turbo-q5_0, fast), checked = high (large-v3, highest accuracy, ~2x slower). The choice is stored in `settings\api.json` → `audioQuality` and the worker passes the explicit model path to whisper. The installer now downloads **both** models (turbo-q5_0 + large-v3 + VAD); otherwise high quality silently fell back to turbo on a fresh install. | qwen-desktop.ps1, agent/qwen-inference.ps1, scripts/install-mamidlabs.ps1, tests/test_whisper_tools.py |
