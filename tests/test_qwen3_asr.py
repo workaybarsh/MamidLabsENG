@@ -144,6 +144,32 @@ def test_audio_turn_preempts_language_model_loading():
     assert "currentTurnAudioPaths.Count -gt 0" in send
 
 
+def test_python_tool_subprocess_is_killed_instantly_on_stop():
+    """"Stop" must cancel EVERYTHING instantly: long Python subprocesses (ASR/OCR/search) must not
+    block. Output is collected asynchronously; the wait loop polls for cancellation and kills the
+    process tree."""
+    worker = read_text("agent/qwen-inference.ps1")
+    block = worker.split("function Invoke-PythonTool")[1].split("function ")[0]
+    assert "ReadToEndAsync" in block
+    assert "$Shared.Cancel" in block
+    assert "$p.Kill($true)" in block
+    # The ASR device loop breaks on cancel (no CPU fallback); the tool loop does not treat a
+    # cancel as a tool error.
+    asr = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
+    assert "if ($Shared.Cancel) { break }" in asr
+    assert "if ($Shared.Cancel) { Emit 'cancelled'" in worker
+
+
+def test_stop_cancels_work_but_never_kills_an_in_flight_model_load():
+    """"Stop" cancels running work BUT does not touch a language-model LOAD: switchProcess is left
+    alone and the load completes in the background. (Regression guard: Cancel-Generation does not
+    reference switchProcess.)"""
+    desktop = read_text("qwen-desktop.ps1")
+    cancel = desktop.split("function Cancel-Generation {")[1].split("function Stop-LocalQwen")[0]
+    assert "switchProcess" not in cancel
+    assert "pendingModelChange" not in cancel
+
+
 @pytest.mark.skipif(not WORKER.is_file(), reason="worker missing")
 def test_worker_rejects_missing_file():
     module = load_worker()

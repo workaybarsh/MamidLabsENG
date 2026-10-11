@@ -126,21 +126,22 @@ function Invoke-ChatProbe {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     # reasoning_effort='low' + chat_template_kwargs bring it into the same shape as the real
     # generation request (Set-LowEffortRequest in qwen-inference.ps1).
-    # Without this, Lite's server-side enforced thinking budget (300 tokens) could
-    # use up max_tokens by itself and cut off before producing real content -
-    # exactly what was caught on a real machine: with max_tokens=200 the model spent
-    # all 200 tokens thinking and gave an "empty answer" error.
+    # Lite no longer uses a thinking budget (thinking is on and unlimited); thinking tokens share
+    # the OUTPUT budget. So a margin equal to the LITE server's output cap (8192, manage-qwen.ps1
+    # $predict) is left for the answer. Otherwise the model could spend the whole limit thinking
+    # and cut off before producing real content - exactly what was caught on a real machine with a
+    # small max_tokens: an "empty answer".
     $body = @{
         model = "smoke-$Profile"
         messages = @(@{ role = 'user'; content = 'Introduce yourself in one sentence.' })
-        max_tokens = 600
+        max_tokens = 8192
         reasoning_effort = 'low'
         chat_template_kwargs = @{ reasoning_effort = 'low' }
     } | ConvertTo-Json -Depth 5
     $response = Invoke-RestMethod 'http://127.0.0.1:8080/v1/chat/completions' -Method Post `
         -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 180
     $content = [string]$response.choices[0].message.content
-    if ([string]::IsNullOrWhiteSpace($content)) { throw 'The model returned an empty answer (the thinking budget may have run out).' }
+    if ([string]::IsNullOrWhiteSpace($content)) { throw 'The model returned an empty answer (the tokens reserved for the answer may have been spent thinking).' }
     $tokens = [int]$response.usage.completion_tokens
     $tps = if ($response.timings -and $response.timings.predicted_per_second) { [double]$response.timings.predicted_per_second }
            elseif ($sw.Elapsed.TotalSeconds -gt 0) { $tokens / $sw.Elapsed.TotalSeconds } else { 0 }

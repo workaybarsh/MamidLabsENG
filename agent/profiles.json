@@ -101,7 +101,7 @@
       "id": "flash",
       "label": "Qwen3.8 27B",
       "hardware": "16 GB VRAM / 32 GB RAM",
-      "summary": "Same files as MAX, shorter thinking budget. Measured speed ~23-24 tok/s.",
+      "summary": "Same files as MAX, shorter thinking effort. Measured speed ~23-24 tok/s.",
       "files": [
         {
           "label": "Language model (Qwen3.8 27B IQ4_XS)",

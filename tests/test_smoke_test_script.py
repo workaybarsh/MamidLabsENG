@@ -143,10 +143,10 @@ def test_image_and_video_jobdata_pass_root():
 
 def test_chat_check_matches_production_request_shape():
     """Caught on a real machine: the chat test called the raw /v1/chat/completions
-    without reasoning_effort='low' and with max_tokens=200. Lite's server-side enforced
-    thinking budget (300 tokens, see $liteThinkBudget in manage-qwen.ps1) used up this
-    limit by itself and cut off before producing real content - the "The model returned
-    an empty answer" error. The real generation request (Set-LowEffortRequest in
+    without reasoning_effort='low' and with max_tokens=200. Lite's thinking is now
+    unlimited (no budget); the model spent this small limit thinking and cut off before
+    producing real content - the "The model returned an empty answer" error. The real
+    generation request (Set-LowEffortRequest in
     qwen-inference.ps1) always sends reasoning_effort; the smoke test must use the same
     shape."""
     script = read_text("scripts/smoke-test.ps1")
@@ -155,7 +155,7 @@ def test_chat_check_matches_production_request_shape():
     chat_block = script.split("function Invoke-ChatProbe")[1].split("\n}\n")[0]
     assert "reasoning_effort = 'low'" in chat_block
     assert "chat_template_kwargs = @{ reasoning_effort = 'low' }" in chat_block
-    # It could use up the whole thinking budget (300) with 200 tokens; a realistic margin must be left.
+    # 200 tokens can be spent entirely on (unlimited) thinking; a realistic margin must be left.
     assert "max_tokens = 200" not in chat_block
 
 

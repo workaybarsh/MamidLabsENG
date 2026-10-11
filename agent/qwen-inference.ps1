@@ -172,9 +172,19 @@ function Invoke-PythonTool([hashtable]$payload, [string]$scriptPath = $null, [st
     try {
         $p.StandardInput.Write(($payload | ConvertTo-Json -Compress -Depth 10))
         $p.StandardInput.Close()
-        $output = $p.StandardOutput.ReadToEnd()
-        $errorText = $p.StandardError.ReadToEnd()
-        $p.WaitForExit()
+        # Collect output ASYNCHRONOUSLY so a "Stop" request can kill the subprocess IMMEDIATELY;
+        # the wait loop polls for cancellation. Long audio/OCR/search jobs no longer block Stop.
+        $outTask = $p.StandardOutput.ReadToEndAsync()
+        $errTask = $p.StandardError.ReadToEndAsync()
+        while (!$p.HasExited) {
+            if ($Shared -and $Shared.Cancel) {
+                try { $p.Kill($true) } catch { }
+                throw [OperationCanceledException]::new()
+            }
+            Start-Sleep -Milliseconds 150
+        }
+        $output = $outTask.GetAwaiter().GetResult()
+        $errorText = $errTask.GetAwaiter().GetResult()
         if ($p.ExitCode -ne 0) { return "Tool error: $errorText" }
         return $output
     } finally { $p.Dispose() }
@@ -304,8 +314,8 @@ function Wait-LocalModelStopped {
 #
 # The Qwen3.8 27B template on MAX/FLASH understands the reasoning_effort key. The Qwen3.5 9B
 # template on Lite ignores it (measured: token count did not change with low effort);
-# there the length of thinking is limited by the server-level --reasoning-budget,
-# see $liteThinkBudget in scripts/manage-qwen.ps1.
+# there thinking is ON and UNLIMITED (no --reasoning-budget is passed; see
+# scripts/manage-qwen.ps1). Compaction/empty-answer retry still ask for low effort.
 function Set-LowEffortRequest([hashtable]$body) {
     $body.reasoning_effort = 'low'
     $body.chat_template_kwargs = @{ reasoning_effort = 'low' }
@@ -413,6 +423,8 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
                 if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null; break }
                 if ($parsed -and $parsed.error) { $err = [Exception]::new([string]$parsed.error) } else { $err = [Exception]::new([string]$candidate) }
             } catch { $err = $_ }
+            # If stopped, there is no point in the CPU fallback; leave and restore the model.
+            if ($Shared.Cancel) { break }
             if ($device -eq 'cuda') { Emit 'status' 'GPU transcription failed; trying CPU…' | Out-Null }
         }
     }
@@ -1379,6 +1391,9 @@ try {
             Emit 'status' ("Could not transcribe the audio; continuing without a transcript. " + $_.Exception.Message)
         }
     }
+    # If the user STOPPED during the audio/OCR job, do not enter the language-model turn. The model
+    # is restored in the background; the chat continues on the user's next message.
+    if ($Shared.Cancel) { Emit 'cancelled' 'The request was stopped.'; return }
     # Automatic context compaction: we always produce the summary with low effort (fast mode).
     # In compactOnly mode this job runs in the background after the turn ends; by the time the
     # user writes the next message the compaction has long finished.
@@ -1696,6 +1711,8 @@ try {
                     return
                 }
             } catch {
+                # A cancellation during stop is not a tool error: go straight to the cancelled event.
+                if ($Shared.Cancel) { Emit 'cancelled' 'The request was stopped.'; return }
                 $result = "Tool error: $($_.Exception.Message)"
                 Write-AuditLog $name (if ($script:lastApprovalOutcome) { $script:lastApprovalOutcome } else { 'not_required' }) 'error' $auditDetail ''
             }

@@ -52,7 +52,7 @@ Launch: the **MamidLabs** shortcut on the desktop → `launch-qwen-desktop.vbs`
 |---|---|---|---|---|---|
 | MAX (deep) | Qwen3.8 27B IQ4_XS | 32K | `xhigh` | 8192 | ~42–58 token/s |
 | FLASH (fast) | Qwen3.8 27B IQ4_XS | 32K | `low` | 4096 | ~42–58 token/s |
-| LITE (8 GB) | Huihui-Qwen3.5 9B Q5_K_M | 32K | `low` | 3072 | ~97 token/s (on 16 GB) |
+| LITE (8 GB) | Huihui-Qwen3.5 9B Q5_K_M | 32K | `low` | 8192 | ~97 token/s (on 16 GB) |
 
 MAX and FLASH share the same 27B file: 32K context, `--gpu-layers 99`, flash-attn on, KV cache q4_0,
 the image projector (mmproj) on the CPU (`--no-mmproj-offload`; on the GPU it did not fit on a 16 GB
@@ -99,7 +99,7 @@ media pipeline:
 | Image reading (mmproj) | F16, on the CPU | Q8_0, on the GPU |
 | Image generation | Krea-2 Turbo (fp8, ~13.1 GB) | Krea-2 Turbo GGUF Q4_K_M (~7.5 GB, with the `ComfyUI-GGUF` custom node) |
 | Style reference / realism | With LoRA | With LoRA (the same files as MAX/FLASH) |
-| Thinking budget | unlimited | **300 tokens** (thinking on, short) |
+| Thinking | unlimited | unlimited (thinking on, no budget) |
 | Video | 832×480, up to 5 s | 832×480 cap, 3 s cap |
 | ComfyUI | normal | `--lowvram` (weights stream layer by layer from RAM) |
 
@@ -109,11 +109,10 @@ fit check marks this as "does not fully fit", but since `--gpu-layers 99` is for
 loads anyway), generation **~35 tok/s**, prefill ~270 tok/s. If you want a more comfortable margin
 you can go back to Q4_K_M with the `liteModel` setting below (~40 tok/s, ~1.7 GB of VRAM stays free).
 
-**Thinking budget.** The Qwen3.5 template ignores the `--reasoning-effort` value; the length of
-thinking can only be tuned with the `--reasoning-budget` enforced by llama.cpp. Measurement for the
-same simple request: 1451–2391 tokens and ~50 s unlimited, **408–429 tokens and ~10 s with a
-300-token budget** (answer quality preserved). That is why Lite ships with 300. It can be changed
-with `liteReasoningBudget` in `settings/api.json`: `-1` unlimited, `0` turns thinking off. If you
+**Thinking (unlimited).** The Qwen3.5 template ignores the `--reasoning-effort` value; thinking
+stays ON (`--reasoning on`, `--reasoning-format deepseek`) and **no thinking budget is imposed** —
+LITE thinks as long as needed (measured unlimited: 1451–2391 tokens, ~50 s). The system prompt also
+tells the model to think deeply and not to cap its thinking time. If you
 want a more comfortable VRAM margin, write `liteModel:
 "Huihui-Qwen3.5-9B-abliterated.i1-Q4_K_M.gguf"` into `%LOCALAPPDATA%\Programs\MamidLabs\settings\api.json`, download the
 file manually from the same Hugging Face repository
@@ -271,7 +270,8 @@ prefill and generation speed, and shows the reprocessing traces in the server lo
 | generation < ~12 token/s | VRAM overflow (Windows shared memory) is very likely |
 | VRAM 95%+ | Lower `--ctx-size` or reduce `--image-min-tokens` |
 
-If the thinking budget runs out and the answer stays empty, a single low-effort retry is made. The
+If the answer stays empty (thinking alone may have used up the tokens reserved for the answer), a
+single low-effort retry is made. The
 earlier tool results and the working notes of the last turn are carried over into this retry; the
 start and end of long notes are kept so that room for the answer is left in the context. If it stays
 empty again, an explanation is shown instead of completing silently.

@@ -1744,6 +1744,10 @@ function Stop-ModelSwitchForAudio {
     $script:activeModel = $null
 }
 
+# "Stop": whatever is running right now (the language-model answer, ASR/OCR/tool subprocesses,
+# media generation) is stopped INSTANTLY. The ONE exception: a language-model LOAD is not cut
+# (switchProcess is left alone); the load finishes in the background and chat resumes on the next
+# message.
 function Cancel-Generation {
     Stop-BackgroundCompaction
     if ($script:sharedMedia) {
@@ -2143,12 +2147,12 @@ function Get-SystemPrompt {
     $lines = @()
     $lines += 'You are the MamidLabs assistant. Reply in the language the user writes in (English by default), directly and clearly. The chat model may be local or an API; tools run on the user''s computer.'
     $lines += "Today's date: $(Get-Date -Format 'yyyy-MM-dd')."
-    # LITE (small 9B model): thinking is on but budget-limited. This encourages deep,
-    # step-by-step reasoning instead of a fast/short answer, to reach a more accurate
-    # result within the same budget. The line is fixed per profile, so the prompt prefix
-    # (and thus the KV cache) is not broken (added only for the LITE profile).
+    # LITE (small 9B model): thinking is ON and UNLIMITED (no server budget). This encourages
+    # deep, step-by-step reasoning and tells the model not to cap its thinking time; it should
+    # think as long as needed. The line is fixed per profile, so the prompt prefix (and thus the
+    # KV cache) is not broken (added only for the LITE profile).
     if ([string]$script:apiSettings.localProfile -eq 'lite') {
-        $lines += 'Think deeply and carefully: before answering, break the problem down, reason step by step, bound your assumptions and aim for the most correct conclusion. For math, logic, planning, code and multi-step problems, target the CORRECT answer instead of a fast one; when needed, try more than one approach and verify the result. Lay out your reasoning briefly, then give a clear and complete answer.'
+        $lines += 'Think deeply and carefully: before answering, break the problem down, reason step by step, bound your assumptions and aim for the most correct conclusion. For math, logic, planning, code and multi-step problems, target the CORRECT answer instead of a fast one. Do NOT cap your thinking time: think for as long and as deeply as needed; if necessary, try more than one approach, check intermediate results and assumptions, and go back and fix mistakes. Once confident, lay out your reasoning briefly and give a clear, complete and correct answer.'
     }
     if ($netChip.Checked) { $lines += 'You have internet access: use the search_web and fetch_page tools when up-to-date information is needed.' }
     else { $lines += 'Your internet access is OFF; you cannot search the web.' }

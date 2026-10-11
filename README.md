@@ -58,7 +58,7 @@ web search and optional API providers.
 |---|---|---|---|
 | Target hardware | 16 GB VRAM · 32 GB RAM | 16 GB VRAM · 32 GB RAM | 8 GB VRAM · 16 GB RAM |
 | Language model | Qwen3.8 27B IQ4_XS | Qwen3.8 27B IQ4_XS | Qwen3.5 9B Q5_K_M |
-| Thinking | Deep | Short | Short, 300-token budget |
+| Thinking | Deep | Short | Deep, unlimited (no budget) |
 | Image model | Krea-2 Turbo fp8 | Krea-2 Turbo fp8 | Krea-2 Turbo GGUF Q4_K_M |
 | Model download | ~52 GB (shared with FLASH) | ~52 GB | ~36 GB |
 | Measured chat speed | ~42–58 tok/s | ~42–58 tok/s | ~97 tok/s (on 16 GB) |

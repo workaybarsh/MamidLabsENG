@@ -169,21 +169,22 @@ def test_desktop_resolves_profile_through_alias_helper():
     assert "'builtin-lite' { 'lite'; break }" in desktop
 
 
-def test_lite_bounds_thinking_with_a_server_enforced_budget():
-    """The Qwen3.5 template ignores --reasoning-effort, so effort can only be tuned
-    with a server-enforced token budget.
-
-    Measured on an RTX 4060, the same request:
-      unlimited   -> 1451-2391 tokens, ~50 s
-      budget 300  ->  408-429 tokens, ~10 s (answer quality preserved)
-      budget 0    ->  175 tokens, ~4 s (thinking fully off)
-    """
+def test_lite_thinks_without_a_reasoning_budget():
+    """The Qwen3.5 template ignores --reasoning-effort; LITE no longer gets a thinking BUDGET
+    (user request): `--reasoning-budget` is not passed, so the model thinks as long as needed.
+    Thinking stays on (--reasoning on, deepseek format) and the system prompt tells the model to
+    think deeply and not to cap its thinking time."""
     manager = read_text("scripts/manage-qwen.ps1")
+    desktop = read_text("qwen-desktop.ps1")
 
-    assert "$liteThinkBudget = '300'" in manager
-    assert "'--reasoning-budget', $liteThinkBudget," in manager
-    # It must be changeable from the settings.
-    assert "$settings.liteReasoningBudget" in manager
+    assert "--reasoning-budget" not in manager
+    assert "$liteThinkBudget" not in manager
+    assert "$settings.liteReasoningBudget" not in manager
+    # Thinking remains on, in deepseek format.
+    assert "'--reasoning', 'on'" in manager
+    assert "'--reasoning-format', 'deepseek'" in manager
+    # Deep-thinking instruction and the "do not cap thinking time" emphasis.
+    assert "Do NOT cap your thinking time" in desktop
 
 
 def test_mtp_speculative_decoding_is_enabled_when_model_has_mtp_layers():
@@ -206,7 +207,7 @@ def test_mtp_speculative_decoding_is_enabled_when_model_has_mtp_layers():
 
 
 def test_thinking_is_never_switched_off_in_requests():
-    """Thinking is a product decision: the budget limits its length, it does not turn the feature off."""
+    """Thinking is a product decision: requests only tune the effort (reasoning_effort), they never turn the feature off."""
     inference = read_text("agent/qwen-inference.ps1")
 
     assert "enable_thinking" not in inference
@@ -219,8 +220,8 @@ def test_thinking_is_never_switched_off_in_requests():
 def test_lite_system_prompt_encourages_deep_reasoning():
     """The LITE system prompt gets a deep, step-by-step reasoning instruction; the line
     is only present for the lite profile (the prefix is fixed per profile, so the KV
-    cache is not broken) and steers toward a more accurate result within the thinking
-    budget."""
+    cache is not broken) and steers toward a more accurate result during its unlimited
+    thinking time."""
     desktop = read_text("qwen-desktop.ps1")
 
     assert "Think deeply and carefully" in desktop

@@ -47,8 +47,10 @@ def test_idle_comfy_policy_is_profile_aware():
     assert "[void](Stop-ComfyLeaks)" in manager
     # Default off -> MAX/FLASH and LITE close; only opt-in (true) + LITE stays open.
     assert "if (!$comfyKeepAlive -or $Profile -ne 'lite') { [void](Stop-IdleComfy) }" in manager
-    # If the budget fails, close and retry (safety net preserved).
-    assert "if ((Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector } else { throw }" in manager
+    # If the budget fails, close and retry (safety net preserved); WDDM may release VRAM late
+    # after ASR/OCR, so the check is retried a bounded number of times (fails on the last one).
+    assert "if ($attempt -eq 1 -and (Stop-IdleComfy)) { continue }" in manager
+    assert "if (!$budgetOk) { throw $lastBudgetError }" in manager
 
 
 def test_idle_comfy_is_only_stopped_when_its_queue_is_empty():

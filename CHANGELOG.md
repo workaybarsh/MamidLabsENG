@@ -3,23 +3,6 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
-## [1.0.1] - 2026-10-11
-
-### Fixed
-- **Microphone (audio recording) flow fixed:** clicking the **red microphone button** while
-  recording now **finishes and sends** the recording (before it only opened the menu and nothing was
-  sent). **"Cancel"** now really cancels the recording (the file is deleted and nothing is sent);
-  **right-clicking** the microphone button opens the menu so it can be cancelled while recording.
-  Pressing **Send** while recording also finishes and sends the recording.
-- **"Stop" works properly after audio is sent:** transcription and the language-model restore wait
-  now honor the cancel request; the UI no longer stays in "Stopping" for a long time.
-
-### Added
-- **ASR preempts the language-model load:** when a message with an audio attachment is sent while
-  the language model is not ready, the job starts immediately; the in-flight model load is
-  abandoned, the audio is transcribed with Qwen3-ASR, then the language model (per the selected
-  profile) is restored. So there is no need to wait for the model to load before sending audio.
-
 ## [1.0.0] - 2026-10-10
 
 First release. A fully local multimodal AI workspace for Windows: a single WinForms window offers
@@ -46,6 +29,10 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   restored. A **microphone** button left of Send (**live recording from the Windows default input
   device**, dependency-free) and **Add audio** in the "+" menu. The model is downloaded into
   `models\qwen3-asr` during installation.
+- **ASR preempts the language-model load:** when a message with an audio attachment is sent while
+  the language model is not ready, the job starts immediately; the in-flight model load is
+  abandoned, the audio is transcribed with Qwen3-ASR, then the language model (per the selected
+  profile) is restored. So there is no need to wait for the model to load before sending audio.
 - **Dependency-free chart generation:** the `generate_chart` chat tool + `agent/chart-run.ps1`
   (bundled pwsh + System.Drawing; bar/line/pie/scatter/function charts; a safe expression evaluator,
   no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`.
@@ -65,7 +52,28 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   marketing the Software is prohibited. Unauthorized use may carry civil and criminal liability;
   disclaimer and limitation of liability, termination and governing law/jurisdiction are included.
 
+### Changed
+- **LITE no longer uses a thinking budget (unlimited):** `--reasoning-budget` is never passed;
+  thinking stays on and the model thinks as long as it needs. The system prompt tells it to think
+  deeply and not to cap its thinking time. The former 300-token budget was removed.
+
 ### Fixed
+- **"Stop" now cancels EVERYTHING running at that moment instantly:** answer generation, long
+  **subprocess work such as ASR/OCR/search** (Python subprocesses are killed immediately) and media
+  generation stop without waiting; the language model is then loaded in the background and chat
+  continues on the next message. **The one exception:** if the language model is **loading**, the
+  load is not cut (it completes in the background).
+- **Model-restore race after audio/OCR (8 GB LITE):** after the transcription/PaddleOCR subprocess
+  exits, WDDM may release its VRAM late, so a language model started immediately could be rejected
+  for "not enough memory" and stay down. The memory check is now retried a bounded number of times
+  with short waits (~5 s); a single delayed release no longer takes the model down.
+- **Microphone (audio recording) flow fixed:** clicking the **red microphone button** while
+  recording now **finishes and sends** the recording (before it only opened the menu and nothing was
+  sent). **"Cancel"** now really cancels the recording (the file is deleted and nothing is sent);
+  **right-clicking** the microphone button opens the menu so it can be cancelled while recording.
+  Pressing **Send** while recording also finishes and sends the recording.
+- **"Stop" works properly after audio is sent:** transcription and the language-model restore wait
+  now honor the cancel request; the UI no longer stays in "Stopping" for a long time.
 - **Profile-aware ComfyUI lifecycle:** on MAX/FLASH (27B) profiles, ComfyUI is always closed before the
   language model loads (otherwise on a 16 GB card the MTP draft spills and chat intermittently drops to
   ~6-7 tok/s); on LITE ComfyUI stays open with no reopen between media jobs.

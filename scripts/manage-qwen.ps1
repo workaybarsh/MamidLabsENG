@@ -37,17 +37,13 @@ if ($Profile -eq 'lite') {
     # (the file itself exceeds the free VRAM).
     $liteFile = 'Huihui-Qwen3.5-9B-abliterated.i1-Q5_K_M.gguf'
     $liteCtx = '32768'
-    # Thinking stays on; this only limits how many tokens are spent thinking.
-    # -1 unlimited, 0 ends thinking immediately, N>0 token budget.
-    #
-    # Why it is needed: the Qwen3.5 template ignores --reasoning-effort, so effort can
-    # only be tuned with this server-enforced budget. On an RTX 4060 the same simple
-    # request took 1451-2391 tokens and ~50 s unlimited; with a 300-token budget it took
-    # 408-429 tokens and ~10 s, and the answer quality was preserved.
-    $liteThinkBudget = '300'
+    # Thinking is ON and UNLIMITED: no thinking budget is imposed on LITE, so it thinks as
+    # long as needed. No thinking-budget flag is passed at all anymore (a former 300-token
+    # budget was fast but cut some questions short; removed at the user's request). The
+    # Qwen3.5 template ignores --reasoning-effort, but deepseek reasoning format keeps it on;
+    # the UI request still sends `reasoning_effort` (the LITE template ignores it).
     if ($settings -and $settings.liteModel) { $liteFile = [string]$settings.liteModel }
     if ($settings -and $settings.liteContext) { $liteCtx = [string][int]$settings.liteContext }
-    if ($settings -and $null -ne $settings.liteReasoningBudget) { $liteThinkBudget = [string][int]$settings.liteReasoningBudget }
     $model = Join-Path $liteDir $liteFile
     # Lite's image projector (mmproj Q8_0) is downloaded as a separate file from the catalog;
     # if it is not in the folder Lite runs text-only and images are read only via OCR.
@@ -289,16 +285,35 @@ try {
     if (!$comfyKeepAlive -or $Profile -ne 'lite') { [void](Stop-IdleComfy) }
     # The previous process was already stopped above; free VRAM is measured here so the
     # memory freed by the old process is counted too.
+    #
+    # After an ASR/OCR restore (especially on an 8 GB LITE card) there is a genuine RACE:
+    # the transcription/PaddleOCR subprocess exits but WDDM does not release its VRAM
+    # immediately, so a language model started right away is rejected for "not enough
+    # memory" and stays down. So the memory check is retried a bounded number of times with
+    # short waits.
     if (!$SkipMemoryCheck) {
-        try { Test-MemoryBudget $model $Profile $projector }
-        catch {
-            # Not enough memory (ComfyUI open): close it if idle and retry; else fail.
-            if ((Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector } else { throw }
+        $budgetOk = $false
+        $lastBudgetError = $null
+        $attempts = 6
+        for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+            try { Test-MemoryBudget $model $Profile $projector; $budgetOk = $true; break }
+            catch {
+                $lastBudgetError = $_
+                # On the first attempt ComfyUI may be open: close it if idle and retry at once.
+                if ($attempt -eq 1 -and (Stop-IdleComfy)) { continue }
+                # Let the ASR/OCR subprocess's VRAM be released (about 5 s total).
+                if ($attempt -lt $attempts) { Start-Sleep -Milliseconds 1000 }
+            }
         }
+        if (!$budgetOk) { throw $lastBudgetError }
     }
     New-Item -ItemType Directory -Path $logs -Force | Out-Null
 
-    $predict = switch ($Profile) { 'lite' { '3072' } 'flash' { '4096' } default { '8192' } }
+    # LITE output cap 8192: thinking is ON and UNLIMITED (no server-side thinking budget), so
+    # thinking tokens share this output budget; 3072 was too small and even a simple request could
+    # be cut off with NO visible answer ("empty answer"). The UI request already sends
+    # max_tokens=8192 for LITE, and the server must accommodate it.
+    $predict = switch ($Profile) { 'lite' { '8192' } 'flash' { '4096' } default { '8192' } }
     # The model names are max/flash/lite; the corresponding reasoning values for the
     # llama.cpp template are still sent as low/xhigh.
     $reasoningEffort = if ($Profile -eq 'max') { 'xhigh' } else { 'low' }
@@ -315,7 +330,6 @@ try {
             '--cache-type-v', 'q4_0', '--cache-reuse', '256', '--batch-size', '256', '--ubatch-size', '128',
             '--threads', '4', '--threads-batch', '8', '--jinja', '--reasoning', 'on',
             '--reasoning-effort', $reasoningEffort, '--reasoning-format', 'deepseek',
-            '--reasoning-budget', $liteThinkBudget,
             '--metrics', '--no-context-shift'
         )
         # The projector is added only if it is in the folder; otherwise Lite runs text-only.
