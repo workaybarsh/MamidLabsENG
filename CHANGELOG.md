@@ -31,7 +31,9 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   (bundled pwsh + System.Drawing; bar/line/pie/scatter/function charts; a safe expression evaluator,
   no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`.
 - **Math rendering:** LaTeX answers are turned into readable Unicode (∫, ∞, π, √, ∑, →, ≠, Greek
-  letters; fractions → a/b; exponents/subscripts → Unicode). A currency `$` is kept.
+  letters; fractions → a/b; exponents/subscripts → Unicode). Also **chemistry/general-science**
+  glyphs: equilibrium arrow ⇌, ↔ ⟷ ⟹ ↪ ↑ ↓ ↕, and **mhchem `\ce{...}`/`\pu{...}`** (element numbers
+  become subscripts, arrows become arrows). A currency `$` is kept.
 - **Web and local management:** web search and page reading tools; browser-accessible local
   management server (localhost only, password-protected session).
 - **Installation and updates:** Inno Setup wizard; pinned infrastructure (PowerShell 7.6.6, llama.cpp

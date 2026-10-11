@@ -375,6 +375,20 @@ function Convert-MathText([string]$text) {
         $s = $s -replace '\\sqrt\s*\{([^{}]*)\}', '√($1)'
         $s = $s -replace '\\boxed\s*\{([^{}]*)\}', '[ $1 ]'
     }
+    # Chemistry (mhchem) and physics units: make \ce{...} / \pu{...} readable.
+    # Arrows (<->, <=>, ->, <-) and element numbers (H2O) are converted only inside \ce,
+    # so text like '->' in code blocks is not corrupted.
+    $s = [regex]::Replace($s, '\\(?:ce|pu)\s*\{([^{}]*)\}', {
+        param($m)
+        $inner = $m.Groups[1].Value
+        $inner = $inner -replace '<=>', '⇌' -replace '<->', '↔' -replace '->', '→' -replace '<-', '←'
+        $inner = [regex]::Replace($inner, '(?<=[A-Za-z\)])(\d+)', {
+            param($d)
+            $r = Convert-ToSubscript $d.Groups[1].Value
+            if ($r) { $r } else { $d.Value }
+        })
+        return $inner
+    })
     # Text wrappers: keep content
     $s = $s -replace '\\(text|mathrm|mathbf|mathit|operatorname|mbox)\s*\{([^{}]*)\}', '$2'
     # Drop sizing/paren commands
@@ -421,6 +435,20 @@ function Convert-MathText([string]$text) {
 \leftarrow=←
 \Rightarrow=⇒
 \Leftrightarrow=⇔
+\rightleftharpoons=⇌
+\leftrightharpoons=⇋
+\rightleftarrows=⇄
+\leftrightarrows=⇆
+\longleftrightarrow=⟷
+\Longleftrightarrow=⟺
+\Longrightarrow=⟹
+\implies=⟹
+\hookrightarrow=↪
+\hookleftarrow=↩
+\upharpoonright=↾
+\uparrow=↑
+\downarrow=↓
+\updownarrow=↕
 \mapsto=↦
 \notin=∉
 \in=∈
