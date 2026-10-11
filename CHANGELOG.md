@@ -26,7 +26,8 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   findings are given to the language model (the OCR/mmproj pattern). Model **large-v3-turbo-q5_0 +
   Silero VAD** (hallucination suppressed). Measured: 2 min audio ~53 s on CPU, ~2.5 s on GPU (CUDA).
   On the local provider the language model is unloaded from VRAM, the transcript is taken, then it is
-  restored. A **microphone** button left of Send and **Add audio** in the "+" menu.
+  restored. A **microphone** button left of Send (**live recording from the Windows default input
+  device**, dependency-free) and **Add audio** in the "+" menu.
 - **Dependency-free chart generation:** the `generate_chart` chat tool + `agent/chart-run.ps1`
   (bundled pwsh + System.Drawing; bar/line/pie/scatter/function charts; a safe expression evaluator,
   no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`.

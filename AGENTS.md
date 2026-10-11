@@ -506,6 +506,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-11 | Added dependency-free microphone recording: winmm `mciSendString` records the Windows **default** input device (WAVE_MAPPER); the microphone button toggles start/stop. The recording is attached as audio and sent automatically (transcript + answer). | qwen-desktop.ps1, tests/test_whisper_tools.py |
 | 2026-10-11 | Made the ComfyUI lifecycle **profile-aware**: on MAX/FLASH (27B, at the card's limit on 16 GB) an idle ComfyUI is **always closed** before loading — otherwise the MTP draft context moves to the CPU and chat drops **intermittently to ~6-7 tok/s** (measured: the post-media switch step once gave a 0.18 ratio). LITE (9B) runs with ComfyUI (ratio 1.04) and **keeps it open**. This removes the "ComfyUI open + 27B" flakiness. | scripts/manage-qwen.ps1, tests/test_memory_admission.py |
 | 2026-10-11 | Added a smoke test `ui_chat` step (drives the real window like a user: type + Send, a response must arrive); fixed a `$pid` automatic-variable clash. | scripts/smoke-test.ps1, tests/test_smoke_test_script.py |
 | 2026-10-11 | Added **chemistry/general-science** glyphs to the math renderer (`Convert-MathText`): equilibrium arrow ⇌ plus ⇋ ⇄ ⇆ ↔ ⟷ ⟹ ↪ ↑ ↓ ↕ and **mhchem `\ce{...}`/`\pu{...}`** support (content made readable: element numbers become subscripts `H2O`→H₂O, arrows `->`/`<=>`→→/⇌). `->`/`<-` are converted only inside `\ce`; `->` in code blocks is not corrupted. | qwen-desktop.ps1, tests/test_math_render.py |

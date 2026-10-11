@@ -110,6 +110,7 @@ $script:previousUserImage = $null
 $script:currentTurnHasImage = $false
 $script:currentTurnImagePaths = @()
 $script:currentTurnAudioPaths = @()
+$script:micRecording = $false
 $script:currentTurnMultiImageOcr = $false
 $script:multiImageOcrMode = $false
 $script:selectedVideos = New-Object System.Collections.Generic.List[string]
@@ -1415,8 +1416,54 @@ function Pick-AudioFile {
     finally { $dlg.Dispose() }
 }
 # Microphone capture (whisper.cpp stream) is a later step; for now guide the user.
+# Microphone capture (dependency-free): records via winmm mciSendString. `open new type
+# waveaudio` uses the Windows DEFAULT recording device (WAVE_MAPPER) — no device selection needed. Toggle: first click starts recording, second stops it; the WAV is attached as
+# an audio attachment and sent automatically (transcript + language-model answer). The recording
+# format is the device default; whisper-tools.py converts it to 16 kHz mono WAV.
 function Start-MicrophoneCapture {
-    $metric.Text = 'Microphone capture is coming soon (whisper.cpp). For now use "Add audio" from the "+" menu on the left.'
+    if (-not ([System.Management.Automation.PSTypeName]'MamidMci').Type) {
+        Add-Type @'
+using System; using System.Text; using System.Runtime.InteropServices;
+public static class MamidMci {
+  [DllImport("winmm.dll", CharSet=CharSet.Unicode)] public static extern int mciSendString(string c, StringBuilder r, int n, IntPtr h);
+}
+'@
+    }
+    $alias = 'mamidmic'
+    if ($script:micRecording) {
+        try {
+            [void][MamidMci]::mciSendString("stop $alias", $null, 0, [IntPtr]::Zero)
+            $dir = Join-Path $root 'outputs\input'
+            if (!(Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $wav = Join-Path $dir ('microphone-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.wav')
+            [void][MamidMci]::mciSendString('save ' + $alias + ' "' + $wav + '"', $null, 0, [IntPtr]::Zero)
+            [void][MamidMci]::mciSendString("close $alias", $null, 0, [IntPtr]::Zero)
+        } finally {
+            $script:micRecording = $false
+            $micBtn.BackColor = [System.Drawing.Color]::FromArgb(60, 64, 76)
+        }
+        if (Test-Path -LiteralPath $wav -PathType Leaf) {
+            Add-SelectedAudio $wav
+            $metric.Text = 'Microphone recording attached; transcribing…'
+            if (!$script:busy -and !$script:pendingSend -and !$script:imageBusy) { $send.PerformClick() }
+        } else {
+            $metric.Text = 'Microphone recording was not created (no device or access denied).'
+        }
+        return
+    }
+    try {
+        [void][MamidMci]::mciSendString("close $alias", $null, 0, [IntPtr]::Zero)
+        $openCode = [MamidMci]::mciSendString("open new type waveaudio alias $alias", $null, 0, [IntPtr]::Zero)
+        if ($openCode -ne 0) { throw ('mci open: ' + $openCode) }
+        $recCode = [MamidMci]::mciSendString("record $alias", $null, 0, [IntPtr]::Zero)
+        if ($recCode -ne 0) { throw ('mci record: ' + $recCode) }
+        $script:micRecording = $true
+        $micBtn.BackColor = [System.Drawing.Color]::FromArgb(180, 60, 60)
+        $metric.Text = 'Recording started — click the microphone button again to stop.'
+    } catch {
+        $script:micRecording = $false
+        $metric.Text = 'Could not open the microphone: ' + $_.Exception.Message
+    }
 }
 function Add-SelectedFile([string]$path) {
     if (!$path -or !(Test-Path -LiteralPath $path -PathType Leaf)) { return $false }

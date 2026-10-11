@@ -68,6 +68,18 @@ def test_desktop_pipes_audio_to_worker_and_shows_transcript():
     assert "'transcript' {" in desktop
 
 
+def test_microphone_capture_uses_default_device_via_mci():
+    """Mikrofon kaydi bagimliliksiz: winmm mciSendString. `open new type waveaudio` Windows
+    VARSAYILAN kayit cihazini (WAVE_MAPPER) kullanir — cihaz secimi/hardcode yok. Kayit
+    toggle ile baslar/durur ve ses eki olarak eklenip otomatik gonderilir."""
+    desktop = read_text("qwen-desktop.ps1")
+    assert "function Start-MicrophoneCapture" in desktop
+    assert "mciSendString" in desktop
+    assert "open new type waveaudio alias" in desktop  # WAVE_MAPPER = default device
+    assert "Add-SelectedAudio" in desktop
+    assert "script:micRecording" in desktop
+
+
 def test_transcription_uses_model_swap_for_local_provider():
     """OCR ile ayni desen: yerel saglayicida dil modeli bosaltilir (GPU whisper'a kalir),
     dökum alinir, model geri yuklenir."""
