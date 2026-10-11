@@ -357,10 +357,13 @@ python -m pytest -q          # ~320 tests, ~115 s; no extra setup needed (tests/
   `draft-mtp`, the `/completion` response's `timings.draft_n_accepted` must be > 0; 0 means the head is
   ineffective; skippable with `-SkipMtp`), `ocr`, `image`, `edit`,
   `post_media_switch` (the speed
-  ratio after an image must be ≥ 0.7), `video`, `ui` (launches the real desktop app; the window +
+  ratio after an image must be ≥ 0.7), `video`, `ui_chat` (drives the real window like a user:
+  types into the prompt box + clicks Send; a response must arrive), `ui` (launches the real desktop
+  app; the window +
   model must be ready, one turn with the real worker the UI uses must answer with no
   "connection dropped"/watchdog text, and MTP must work; skippable with `-SkipUi`). `ui` runs last
-  because the app stops the server on exit.
+  because the app stops the server on exit. Audio input (transcription) is verified through the
+  real worker's `transcript` event and `tests/test_whisper_tools.py`, not via `/completion`.
 - **CI:** `tests.yml` (windows-latest, Python 3.12) on every push/PR; `installer.yml` when
   package-related paths change. Merged into `master` via PR.
 
