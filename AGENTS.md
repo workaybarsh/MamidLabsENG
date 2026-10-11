@@ -1,4 +1,4 @@
-# MamidLabs · Infrastructure guide for developers and AI agents
+﻿# MamidLabs · Infrastructure guide for developers and AI agents
 
 This file is the single source of truth for developers and AI agents (Claude, Codex, Gemini,
 Copilot…) working on MamidLabs. It explains how the codebase starts, how the parts talk to each
@@ -137,20 +137,20 @@ Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFil
 the full catalog (`Get-ProfileCatalog`).
 
 **VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + **600 MiB**
-(300 MiB on LITE). **ComfyUI lifecycle:** ComfyUI is **kept OPEN** between media jobs (default;
-closable via `comfyKeepAlive=false`), avoiding a ~27 s reopen per media job. **A single healthy
-ComfyUI and MAX 32K run together fine:** measured, after a real image job MAX loaded WITHOUT closing
-ComfyUI and ran at **62 tok/s** (~2 tok/s slower than clean); independent run 61 tok/s / 192 MiB
-free. A spill happens only with a **leaked/duplicate ComfyUI instance**. Critical subtlety: ComfyUI is
-a process **pair** (a venv launcher + its base-python child), so process **count** cannot decide
-"leak" — a single healthy instance is already 2 processes. Instances are counted by **roots**
-(a matching process whose parent is not itself a match; `Get-ComfyInstanceRoots`); `Stop-ComfyLeaks`
-closes only extra roots and **keeps the instance listening on :8188** (`Test-ComfyUnderRoot`). So a
-single ComfyUI is not closed before loading; a leftover copy (e.g. a `--list` from the smoke test) is
-closed. The old `Select-Object -First 1` closed only one half and left the rest. Measured: two
-ComfyUI instances -> 27B spilled to **0.89 tok/s**; a single instance -> **61-62 tok/s**. If the budget
-fails ComfyUI is closed and measured again (safety net). External cleanup: `manage-qwen.ps1`
-`-Action closecomfy`. Reopening ComfyUI costs ~27 s per media job (measured: cold 55 s, warm 28 s).
+(300 MiB on LITE). **ComfyUI lifecycle (profile-aware):** on **MAX/FLASH (27B)** profiles an idle
+ComfyUI is **always closed** before the language model loads — the 27B sits at the card's limit on
+16 GB, so the ComfyUI context plus the desktop can push the MTP draft context onto the CPU and chat
+drops **intermittently to ~6-7 tok/s** (measured: the "post-media switch" step once hit a 0.18
+ratio). **LITE (9B)** runs together with ComfyUI (measured ratio 1.04) and **keeps it open** (no
+~27 s reopen per media job). `comfyKeepAlive=false` also closes it on LITE. A **leaked/duplicate**
+ComfyUI instance is cleaned in every profile first: ComfyUI is a process **pair** (a venv launcher +
+its base-python child), so process **count** cannot decide "leak" — a single healthy instance is
+already 2 processes. Instances are counted by **roots** (a matching process whose parent is not
+itself a match; `Get-ComfyInstanceRoots`); `Stop-ComfyLeaks` closes only extra roots and **keeps the
+instance listening on :8188** (`Test-ComfyUnderRoot`). Measured: two ComfyUI instances -> 27B spilled
+to **0.89 tok/s**. If the budget fails ComfyUI is closed and measured again (safety net). External
+cleanup: `manage-qwen.ps1` `-Action closecomfy`. Reopening ComfyUI costs ~27 s per media job
+(measured: cold 55 s, warm 28 s).
 Measured: on a clean GPU with 15244 MiB free the 27B model loaded and ran at
 ~45 tok/s (file 14,600 MiB → real margin ~600 MiB).
 The 800/1000 MiB margins of 1.0.4–1.0.7 (threshold 15400/15600) wrongly rejected that working
@@ -334,7 +334,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
     `videoProvider`, `externalMediaModels`.
   - UI: `uiPreferences.{internet, agent, accessMode}`, `firstRunApiSettings`.
   - LITE settings: `liteModel`, `liteContext`, `liteReasoningBudget`.
-  - Media: `comfyKeepAlive` (default `true`; ComfyUI stays open between media jobs, see section 5).
+  - Media: `comfyKeepAlive` (default `true`; on LITE ComfyUI stays open between media jobs; on MAX/FLASH it is closed before loading because of the 27B, see section 5).
 - Chats are encrypted under `chats\` with the `MAMIDLABS-CHAT-DPAPI-V2` prefix.
 - `logs\audit.jsonl`: a record of tool calls (not content; path/command identity).
 
@@ -412,10 +412,7 @@ has no LoRA.
 7. **The VRAM margin is profile-based** (MAX/FLASH 600 MiB, LITE 300 MiB) and the tolerance is
    LITE 1024 / MAX/FLASH 0. On a 16 GB card a margin that is too large keeps MAX from
    ever starting, while too small lets the 27B model spill into shared memory and drop to ~6 tok/s.
-   **ComfyUI** stays open between media jobs; a single healthy instance runs together with MAX 32K
-   (61-62 tok/s). A spill happens only with a **leaked/duplicate instance** (ComfyUI is a process
-   pair, so instance roots — not process count — decide); before loading only leaks are closed
-   (section 5). A leaked instance spills the 27B to 0.89 tok/s. On MAX/FLASH the mmproj runs on the CPU
+   **ComfyUI** lifecycle is profile-aware: on MAX/FLASH (27B, at the card's limit) it is **always** closed before loading (otherwise the MTP draft context moves to the CPU and chat drops intermittently to ~6-7 tok/s); on LITE it stays open (9B runs together with ComfyUI). A leaked/duplicate instance is cleaned in every profile (ComfyUI is a process pair, so instance roots - not process count - decide). A leaked instance spills the 27B to 0.89 tok/s. On MAX/FLASH the mmproj runs on the CPU
    (`--no-mmproj-offload`). On the GPU it spills
    ~420 MiB into shared memory and speed drops from 25 to 19 tok/s.
 8. **Single image rule:** only one image at a time goes to chat (multiple images only in the
@@ -502,6 +499,8 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-11 | Made the ComfyUI lifecycle **profile-aware**: on MAX/FLASH (27B, at the card's limit on 16 GB) an idle ComfyUI is **always closed** before loading — otherwise the MTP draft context moves to the CPU and chat drops **intermittently to ~6-7 tok/s** (measured: the post-media switch step once gave a 0.18 ratio). LITE (9B) runs with ComfyUI (ratio 1.04) and **keeps it open**. This removes the "ComfyUI open + 27B" flakiness. | scripts/manage-qwen.ps1, tests/test_memory_admission.py |
+| 2026-10-11 | Added a smoke test `ui_chat` step (drives the real window like a user: type + Send, a response must arrive); fixed a `$pid` automatic-variable clash. | scripts/smoke-test.ps1, tests/test_smoke_test_script.py |
 | 2026-10-11 | Added **chemistry/general-science** glyphs to the math renderer (`Convert-MathText`): equilibrium arrow ⇌ plus ⇋ ⇄ ⇆ ↔ ⟷ ⟹ ↪ ↑ ↓ ↕ and **mhchem `\ce{...}`/`\pu{...}`** support (content made readable: element numbers become subscripts `H2O`→H₂O, arrows `->`/`<=>`→→/⇌). `->`/`<-` are converted only inside `\ce`; `->` in code blocks is not corrupted. | qwen-desktop.ps1, tests/test_math_render.py |
 | 2026-10-11 | Added audio transcription (whisper.cpp): attached audio is transcribed automatically and the findings are given to the language model (OCR/mmproj pattern). `agent/whisper-tools.py` converts to 16 kHz mono WAV and runs `whisper-cli`; **turbo-q5_0 + Silero VAD** (measured: 2 min audio 53 s CPU / 2.5 s GPU; VAD removes hallucination). `Invoke-TranscribeWithModelSwap` unloads the local model (leaving the GPU to whisper) and restores it, like OCR. UI: a **microphone** button left of Send (Use microphone), **Add audio** in the "+" menu, and a right-click **Paste** (media/text) menu in the prompt box. Also **passed `custom` baseUrl to the worker** (the base address was empty in the worker → the custom provider did not work in chat; found in a real end-to-end test, fixed). | agent/whisper-tools.py, agent/qwen-inference.ps1, qwen-desktop.ps1, tests/test_whisper_tools.py, tests/test_qwen_contracts.py |
 | 2026-10-11 | Provider **maximum context auto-detection**: when the key is verified, `context_length` is read from the model list endpoint and the context window is applied automatically (commandcode: 1,000,000). `Get-ProviderModelContexts` (api-providers.ps1) + api-settings integration. API effort is default; `custom` verified end to end (text + image). | agent/api-providers.ps1, agent/api-settings.ps1, tests/test_api_providers.py |

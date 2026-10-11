@@ -40,6 +40,9 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   b10998 CUDA 13.4, ComfyUI b0f4b7b); in-app update check; full uninstall.
 
 ### Fixed
+- **Profile-aware ComfyUI lifecycle:** on MAX/FLASH (27B) profiles, ComfyUI is always closed before the
+  language model loads (otherwise on a 16 GB card the MTP draft spills and chat intermittently drops to
+  ~6-7 tok/s); on LITE ComfyUI stays open with no reopen between media jobs.
 - **The `custom` (OpenAI-compatible endpoint) provider did not work in chat:** the base address only
   lived in the UI settings; the worker does not read settings, so `custom` requests stopped with
   "enter a base address" (only verification in the settings window worked). The desktop now passes

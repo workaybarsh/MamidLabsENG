@@ -32,25 +32,22 @@ def test_memory_budget_function_exists_and_is_called_before_start():
     assert idx_comfy < idx_check < idx_start
 
 
-def test_idle_comfy_is_kept_open_but_leaks_are_cleaned():
-    """ComfyUI stays OPEN between media jobs (default), but before the language model loads
-    ONLY a duplicate/leaked ComfyUI is cleaned. Measured on the real machine: a single (fresh)
-    ComfyUI with MAX 32K ran together at 61 tok/s; with TWO ComfyUI instances the 27B spilled
-    and dropped to 0.89 tok/s. ComfyUI is a process PAIR (launcher + base-python child), so
-    process COUNT cannot decide "leak": a single instance may be 2 processes (closing it would
-    close ComfyUI on every load). Instances are counted by roots; the instance on :8188 is kept."""
+def test_idle_comfy_policy_is_profile_aware():
+    """ComfyUI lifecycle is profile-aware: MAX/FLASH (27B, at the card's limit on 16 GB) does not
+    run reliably with ComfyUI — the remaining headroom plus the ComfyUI context and desktop can push
+    the MTP draft context onto the CPU and chat drops intermittently to ~6-7 tok/s (measured: the
+    post-media step once hit a 0.18 ratio). So on 27B profiles an idle ComfyUI is ALWAYS closed
+    before loading; LITE (9B) runs together with ComfyUI (measured ratio 1.04) and keeps it open.
+    A leaked/duplicate ComfyUI is cleaned in every profile first."""
     manager = read_text("scripts/manage-qwen.ps1")
-    # The setting is back and defaults to open (avoids the ~27 s reopen between media jobs).
     assert "$comfyKeepAlive = $true" in manager
     assert "$settings.comfyKeepAlive" in manager
-    # Leak detection is based on instance roots, not process count.
     assert "function Get-ComfyInstanceRoots" in manager
     assert "function Stop-ComfyLeaks" in manager
-    assert "Get-NetTCPConnection -LocalPort 8188" in manager
-    # Only leaks are cleaned before loading; a single instance is kept.
     assert "[void](Stop-ComfyLeaks)" in manager
-    assert "@(Get-ComfyProcesses).Count -gt 1" not in manager
-    # If the budget fails, close and retry (fallback preserved).
+    # Profile-aware close: MAX/FLASH always, LITE defers to the setting.
+    assert "if (!$comfyKeepAlive -or $Profile -ne 'lite') { [void](Stop-IdleComfy) }" in manager
+    # If the budget fails, close and retry (safety net preserved).
     assert "if ((Stop-IdleComfy)) { Test-MemoryBudget $model $Profile $projector } else { throw }" in manager
 
 

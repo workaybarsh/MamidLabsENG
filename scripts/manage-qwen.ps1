@@ -275,18 +275,17 @@ try {
     if (!(Test-Path -LiteralPath $model -PathType Leaf)) { throw "Model not found: $model" }
     # The Lite profile also runs without an image projector; on the others mmproj is mandatory.
     if (!$custom -and $Profile -ne 'lite' -and !(Test-Path -LiteralPath $projector -PathType Leaf)) { throw "Image projector not found: $projector" }
-    # ComfyUI lifecycle. Default: kept OPEN between media jobs (no ~27 s reopen). On the real
-    # machine a SINGLE (fresh) ComfyUI with MAX 32K runs fine together: 61 tok/s, 192 MiB free.
-    # A spill happens only with a DUPLICATE/leaked ComfyUI process (ComfyUI is a process pair;
-    # a leftover copy overshoots VRAM -> 0.89 tok/s measured). So before loading we clean any
-    # leak/duplicate, then measure the budget; if memory is short the idle ComfyUI is closed
-    # and measured again.
+    # ComfyUI lifecycle. MAX/FLASH (27B, at the card's limit on 16 GB) does NOT run reliably
+    # together with ComfyUI: the remaining headroom plus the ComfyUI context and the desktop can
+    # push the MTP draft context onto the CPU and chat intermittently drops to ~6-7 tok/s
+    # (measured: the post-media step hit a 0.18 ratio once on this machine). So on 27B profiles
+    # an idle ComfyUI is ALWAYS closed before loading; it is reopened on demand (~27 s). LITE
+    # (9B) runs together with ComfyUI even on 8 GB (measured ratio 1.04) and keeps it open. A
+    # leaked/duplicate ComfyUI is cleaned in every profile first.
     $comfyKeepAlive = $true
     if ($settings -and $null -ne $settings.comfyKeepAlive) { $comfyKeepAlive = [bool]$settings.comfyKeepAlive }
-    # Leak/duplicate detection: only LEAKS are closed; a single healthy instance (with its
-    # pair) is kept (see Stop-ComfyLeaks). This keeps ComfyUI open between media jobs.
     [void](Stop-ComfyLeaks)
-    if (!$comfyKeepAlive) { [void](Stop-IdleComfy) }
+    if (!$comfyKeepAlive -or $Profile -ne 'lite') { [void](Stop-IdleComfy) }
     # The previous process was already stopped above; free VRAM is measured here so the
     # memory freed by the old process is counted too.
     if (!$SkipMemoryCheck) {
