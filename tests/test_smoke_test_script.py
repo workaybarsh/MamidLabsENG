@@ -49,6 +49,17 @@ def test_ui_step_restores_settings_and_stops_the_server():
     assert "& $manage -Action stop" in script
 
 
+def test_smoke_test_has_ui_chat_step():
+    """A step that drives the UI LIKE A USER: types into the prompt box, clicks Send and
+    verifies a response arrived (Send->Stop->Send transition). The existing 'ui' step calls
+    the worker directly; this step exercises the UI's real user path."""
+    script = read_text("scripts/smoke-test.ps1")
+    assert "Write-Section 'UI chat" in script
+    assert "Report 'ui_chat'" in script
+    assert "ValuePattern" in script  # types into the prompt box
+    assert "0x00F5" in script        # BM_CLICK (Send)
+
+
 def test_smoke_test_closes_leftover_comfyui():
     """The image/video steps leave ComfyUI open; the UI step force-kills the app so
     Shutdown-All does not run. At the end of the test (and in the UI step's finally) any

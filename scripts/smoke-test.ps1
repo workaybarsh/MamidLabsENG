@@ -635,6 +635,87 @@ if ($SkipVideo) {
     }
 }
 
+# ------------------------------------------------------------------ UI chat
+# Drives the real desktop window LIKE A USER: types a message into the prompt box, clicks
+# Send (Win32 BM_CLICK; UIA Invoke can lock on a modal window) and verifies a response
+# arrived (Gonder -> Durdur -> Gonder transition). The existing 'ui' step calls the worker
+# directly; this step exercises the UI's real user path.
+Write-Section 'UI chat (real window)'
+if ($SkipUi) {
+    Write-Host '   [skip] -SkipUi given'
+} else {
+    $appProcess = $null
+    try {
+        Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing, System.Windows.Forms -ErrorAction Stop
+        Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class Smk { [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, IntPtr l); }
+'@
+        $AE = [Windows.Automation.AutomationElement]; $TS = [Windows.Automation.TreeScope]
+        function Find-UiWin([int]$pid, [int]$timeoutSec) {
+            $end = (Get-Date).AddSeconds($timeoutSec)
+            while ((Get-Date) -lt $end) {
+                $cond = New-Object Windows.Automation.PropertyCondition($AE::ProcessIdProperty, $pid)
+                foreach ($w in $AE::RootElement.FindAll($TS::Children, $cond)) { if ($w.Current.Name -like '*MamidLabs*') { return $w } }
+                Start-Sleep -Milliseconds 500
+            }
+            return $null
+        }
+        function Find-UiEl($root, [string]$name, [string]$type) {
+            foreach ($e in $root.FindAll($TS::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+                $c = $e.Current
+                if ($c.IsOffscreen -or !$c.IsEnabled) { continue }
+                if ($type -and $c.ControlType.ProgrammaticName -ne "ControlType.$type") { continue }
+                if ($c.Name -like $name) { return $e }
+            }
+            return $null
+        }
+        function Click-UiBtn($el) {
+            $h = [IntPtr]$el.Current.NativeWindowHandle
+            if ($h -ne [IntPtr]::Zero) { [void][Smk]::SendMessage($h, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero); Start-Sleep -Milliseconds 700 }
+            else { $p = $null; if ($el.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$p)) { $p.Invoke() } }
+        }
+
+        Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like '*qwen-desktop.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        & $manage -Action stop | Out-Null
+        & $manage -Action closecomfy | Out-Null
+
+        $appPwsh = Join-Path $Root 'runtime\pwsh\pwsh.exe'
+        $appProcess = Start-Process -FilePath $appPwsh -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', (Join-Path $Root 'qwen-desktop.ps1'))
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $win = $null; $end = (Get-Date).AddSeconds(120)
+        while ((Get-Date) -lt $end -and !$win) { if ($appProcess.HasExited) { throw "App window closed before opening (code $($appProcess.ExitCode))." }; $win = Find-UiWin $appProcess.Id 5 }
+        if (!$win) { throw 'UI window not found within 120 s.' }
+        if (!(Wait-ForHealth 180)) { throw 'UI opened but the model did not become ready.' }
+
+        $promptBox = Find-UiEl $win '*' 'Edit'
+        if (!$promptBox) { throw 'Prompt box (Edit) not found.' }
+        $msg = 'Introduce yourself in one sentence.'
+        try { $promptBox.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue($msg) }
+        catch { [void][Smk]::SendMessage([IntPtr]$promptBox.Current.NativeWindowHandle, 0x000C, [IntPtr]::Zero, [IntPtr]::Zero) }
+        Start-Sleep -Milliseconds 500
+        $send = Find-UiEl $win 'Send' 'Button'
+        if (!$send) { throw 'Send button not found.' }
+        Click-UiBtn $send
+
+        $sawBusy = $false; $end = (Get-Date).AddSeconds(180); $ok = $false
+        while ((Get-Date) -lt $end) {
+            if (Find-UiEl $win 'Stop' 'Button') { $sawBusy = $true }
+            if ($sawBusy -and (Find-UiEl $win 'Send' 'Button')) { $ok = $true; break }
+            Start-Sleep -Milliseconds 1200
+        }
+        $sw.Stop()
+        if (!$ok) { throw 'UI response timed out.' }
+        Report 'ui_chat' $true "message typed + Send clicked; response received ($([int]$sw.Elapsed.TotalSeconds) s)"
+    } catch {
+        Report 'ui_chat' $false $_.Exception.Message
+    } finally {
+        if ($appProcess -and !$appProcess.HasExited) { try { Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue } catch { } }
+        & $manage -Action stop | Out-Null
+        & $manage -Action closecomfy | Out-Null
+    }
+}
+
 # -------------------------------------------------------------------- UI
 # Launches the real desktop app (qwen-desktop.ps1); verifies the window and the language model
 # are ready. Then runs one turn with the real inference worker the UI uses
