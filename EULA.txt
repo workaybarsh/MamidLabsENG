@@ -90,7 +90,8 @@ The User is solely responsible for any use of those models for malicious, unlawf
 purposes, or in a manner that infringes the rights of third parties. The User agrees to use those
 models in compliance with applicable law and the rights of third parties. The Owner shall not be
 liable for any direct or indirect damage, nor for any civil or criminal liability, arising or
-that may arise from the use of those models.
+that may arise from the use of those models. The User is obliged to comply with the legislation
+of their own country/jurisdiction when using those models.
 
 12) ACCEPTANCE
 Installing, copying or using the Software indicates that you have read and accept all of the
