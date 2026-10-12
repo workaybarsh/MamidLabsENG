@@ -9,8 +9,8 @@ are enabled by default. Output is chronological and timestamp-free:
     Speaker: Yes, a bit late.
 
 UI/worker contract: reads JSON on stdin, writes JSON on stdout.
-    request: {"action":"transcribe","path":...,"device":"auto|cuda|cpu","need_swap":bool,"language":"auto", ...}
-    request: {"action":"plan","local_model_loaded":bool}  -> {"device":..,"need_swap":..}
+    request: {"action":"transcribe","path":...,"device":"auto|cuda|cpu","need_swap":bool,"profile":"lite|pro","language":"auto", ...}
+    request: {"action":"plan","local_model_loaded":bool,"profile":"lite|pro"}  -> {"device":..,"need_swap":..}
     reply:   {"text":..., "model":..., "chars":..., "events":N, "diarized":bool} or {"error":...}
 """
 from __future__ import annotations
@@ -34,13 +34,16 @@ from transcriber import config, main as transcriber_main  # noqa: E402
 
 
 def _profile(req: dict):
-    if req.get('profile'):
-        total = 20000 if str(req['profile']).lower() == 'pc2' else 8000
-        return config.select_profile(total_mib=total)
+    """The audio-pipeline tier comes from the SELECTED profile name: 'lite', 'pro' ('max'/'flash'),
+    or the old names 'pc1'/'pc2'. When the name is absent/unknown the machine's total VRAM decides
+    the tier (see config.select_profile_for)."""
     language = str(req.get('language') or '').strip()
     overrides = {}
     if language:
         overrides['language'] = language
+    name = req.get('profile')
+    if name:
+        return config.select_profile_for(name, **overrides)
     return config.select_profile(**overrides) if overrides else config.select_profile()
 
 

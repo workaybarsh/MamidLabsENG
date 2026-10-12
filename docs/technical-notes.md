@@ -518,13 +518,19 @@ pipeline lives in the `agent/transcriber/` package and runs in `venv\asr`:
   **"Non-speech sounds"** checkbox (`api.json -> audioEvents`).
 - **Speaker diarization:** pyannote (needs a HF token; skipped without one).
 - **Output** is chronological and timestamp-free: `(footsteps)` / `Speaker: ...` lines.
-- **Profiles:** `config.py` reads total GPU VRAM. **PC2 (>= 14 GB):** `float16`, models resident
-  together. **PC1 (< 14 GB):** `int8_float16`, models loaded sequentially and long recordings split
-  into 30-minute chunks (`torch.cuda.empty_cache()` after each model).
-- **CPU / GPU choice:** a GPU transcription requires unloading and restoring the local language model
-  (swap). So short recordings are cheaper on the CPU and long ones on the GPU; the threshold is
-  measured and set via `DEFAULT_CPU_MAX_SECONDS` in `agent/transcriber/config.py` (see AGENTS
-  section 5 and the AR-GE note below).
+- **Profiles (tier):** `config.py` now chooses the tier from the **selected language-model
+  profile** (`select_profile_for`): **pro** (MAX/FLASH) → `float16`, models resident together;
+  **lite** → `int8_float16`, models loaded sequentially and long recordings split into 30-minute
+  chunks (`torch.cuda.empty_cache()` after each model). The old hardware names (`pc1`/`pc2`) and the
+  UI names (`max`/`flash`) are aliases (`TIER_ALIASES`). Total VRAM is only a fallback metric when no
+  profile name is given (CLI, no `--profile` → `select_profile`) (>= 14 GB → pro, otherwise lite).
+- **CPU / GPU choice:** a GPU transcription requires unloading and restoring the local language
+  model (swap). The device/swap decision is not made from the tier name but from the **measured real
+  free VRAM + system RAM and the recording's duration** when the audio job starts (`choose_plan`): if
+  Whisper + AST fit together with the language model in free VRAM, GPU (no swap); if not and the
+  recording is shorter than the threshold, CPU (no swap); otherwise GPU + mandatory swap. Threshold
+  **pro ~20 s**, **lite ~15 s** (`agent/transcriber/config.py` → `DEFAULT_CPU_MAX_SECONDS` /
+  `Profile.cpu_max_seconds`).
 
 ## Verifying the fixes
 

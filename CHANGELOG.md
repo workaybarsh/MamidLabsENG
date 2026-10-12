@@ -67,6 +67,12 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   **deleted** with "Delete language edition".
 
 ### Changed
+- **Audio-transcription tier is now based on the selected profile:** the level of the local ASR
+  pipeline (LITE: `int8_float16` + sequential loading + 15 s CPU/GPU threshold; PRO (MAX/FLASH):
+  `float16` + parallel + 20 s) is now determined by the **selected language-model profile**;
+  previously only total VRAM was considered. Total VRAM is now only a fallback metric when no
+  profile name is given (CLI). The device/swap decision is still made from the measured real free
+  VRAM + system RAM and the recording's duration.
 - **Audio transcription CPU/GPU choice is now measurement-based:** the device is chosen
   automatically from the real free VRAM + system RAM + the recording **duration**. Measured
   threshold **PRO ~20 s**, **LITE ~15 s**; shorter recordings use the CPU, longer ones the GPU
@@ -87,6 +93,10 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **`EULA.txt` was not copied by script-based updates:** the `install-mamidlabs.ps1` upper-file
+  list (`qwen-desktop.ps1`, `launch-qwen-desktop.vbs`, `README.md`, `LICENSE`) is copied to the root
+  and to the `setup-source` package; because `EULA.txt` was not in the list, the license file was
+  missing from installs updated by script (without the wizard). It was added to the list.
 - **The transcript wrapper leaked on a silent/empty recording:** the Qwen3-ASR output parser
   (`_extract_text`) sent the raw `language None<asr_text>` text to the model as the transcript when a
   short recording contained no speech, so the model replied "the transcript looks empty". The

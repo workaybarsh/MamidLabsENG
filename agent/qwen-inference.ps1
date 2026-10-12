@@ -397,10 +397,12 @@ function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = 
     return $ocrResponse
 }
 
-# Audio transcription (faster-whisper large-v3). The device and swap decision is made from
-# the REAL free VRAM and system RAM measured when the audio job starts, NOT from the profile
-# name: the LITE profile runs on both 8 GB (target machine) and 16 GB cards, so "lite" alone
-# cannot decide. Priority order (see config.choose_plan):
+# Audio transcription (faster-whisper large-v3). The TIER comes from the SELECTED
+# language-model profile: a selected lite profile -> 'lite', max/flash -> 'pro' is passed to
+# the worker (Get-AsrProfileName); so LITE and PRO run separately (compute_type
+# int8_float16/float16, loading sequential/parallel, CPU/GPU threshold 15/20 s). The DEVICE
+# and SWAP decision is made from the tier's memory thresholds + the REAL free VRAM + system
+# RAM measured when the audio job starts and the recording DURATION (see config.choose_plan):
 #   1) Whisper + AST fit in free VRAM ALONGSIDE the language model -> GPU, NO swap.
 #   2) They do not fit, but the recording is SHORT (swap cost outweighs the gain) and the
 #      pipeline fits in system RAM on the CPU -> CPU, NO swap (slower, but the language
@@ -409,12 +411,32 @@ function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = 
 #      (unload the language model, run Whisper on the GPU, then reload the language model).
 # The plan is requested from the worker (venv python); if the chosen device fails it falls
 # back to the CPU; the cancel (Stop) behavior is preserved.
+function Get-AsrProfileName {
+    # Maps the SELECTED language-model profile to the audio-pipeline tier name: lite -> 'lite',
+    # max/flash -> 'pro'. Valid ONLY on the LOCAL provider: in API mode no local model is loaded
+    # and $JobData.profile may come from the default 'max' rather than the selected local profile
+    # (even if the user's saved localProfile is 'lite'); so on a non-local provider it returns
+    # $null and the worker picks the tier from the machine's total VRAM (config.select_profile).
+    # It also returns $null when the profile is missing/unreadable. The old 'pc1'/'pc2' names are
+    # also accepted.
+    if ($provider -ne 'local') { return $null }
+    $p = ([string]$JobData.profile).Trim().ToLowerInvariant()
+    if (!$p) { return $null }
+    if ($p -eq 'lite' -or $p -eq 'pc1') { return 'lite' }
+    return 'pro'
+}
+
 function Get-AudioTranscriptionPlan([string]$path) {
     # If it cannot be measured, the SAFE side: swap on the local provider; on API the GPU is free.
     $fallback = [pscustomobject]@{ device = 'cuda'; need_swap = ($provider -eq 'local') }
     try {
         $whisperPy = Get-WhisperPyPath; $asrPy = Get-AsrPythonExe
-        $raw = Invoke-PythonTool @{ action = 'plan'; local_model_loaded = ($provider -eq 'local'); path = $path } $whisperPy $asrPy
+        # The tier comes from the selected language-model profile (lite/pro); without a profile
+        # the worker picks the tier from the machine's total VRAM.
+        $planPayload = @{ action = 'plan'; local_model_loaded = ($provider -eq 'local'); path = $path }
+        $asrProfile = Get-AsrProfileName
+        if ($asrProfile) { $planPayload.profile = $asrProfile }
+        $raw = Invoke-PythonTool $planPayload $whisperPy $asrPy
         $plan = $null
         try { $plan = $raw | ConvertFrom-Json -ErrorAction Stop } catch { }
         if ($plan -and $plan.device) {
@@ -444,8 +466,11 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
         $whisperPy = Get-WhisperPyPath; $asrPy = Get-AsrPythonExe
         # Non-speech audio events (AST) setting: the microphone-menu checkbox.
         $audioEvents = if ($null -eq $JobData.audioEvents) { $true } else { [bool]$JobData.audioEvents }
-        # The device/swap plan was decided above (free VRAM + RAM); pass it to the worker as-is.
+        # The device/swap plan was decided above (free VRAM + RAM); the tier comes from the
+        # selected profile (lite/pro); pass them to the worker as-is.
         $payloadBase = @{ action = 'transcribe'; path = $path; language = 'auto'; events = $audioEvents; device = $device; need_swap = $needSwap }
+        $asrProfile = Get-AsrProfileName
+        if ($asrProfile) { $payloadBase.profile = $asrProfile }
         try {
             Emit 'status' ("Transcribing audio with large-v3 (" + $device + ")…") | Out-Null
             $candidate = Invoke-PythonTool $payloadBase $whisperPy $asrPy

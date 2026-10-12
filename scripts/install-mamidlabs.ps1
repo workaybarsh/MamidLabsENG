@@ -276,7 +276,9 @@ function Invoke-Layout {
         $_.CommandLine -and $_.CommandLine.IndexOf($app, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
     if ($running) { throw 'MamidLabs is open; the program files are locked. Close the app and run the installation again.' }
 
-    foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE')) {
+    # EULA.txt is shown on the wizard's license page and the .iss [Files] embeds it into the
+    # source package; a script-based install must copy it to the root (and to setup-source) too.
+    foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE', 'EULA.txt')) {
         $from = Join-Path $Source $file
         if (Test-Path -LiteralPath $from -PathType Leaf) {
             Copy-Item -LiteralPath $from -Destination (Join-Path $Root $file) -Force
@@ -296,7 +298,8 @@ function Invoke-Layout {
     # same [Files] set. It is not created for a script-based install (folder absent).
     $setupSource = Join-Path $Root 'setup-source'
     if (Test-Path -LiteralPath $setupSource -PathType Container) {
-        foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE')) {
+        # The same top-level file list (including EULA.txt) is also written to the source package.
+        foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE', 'EULA.txt')) {
             $from = Join-Path $Source $file
             if (Test-Path -LiteralPath $from -PathType Leaf) { Copy-Item -LiteralPath $from -Destination $setupSource -Force }
         }

@@ -31,3 +31,15 @@ def test_layout_creates_source_package_only_when_it_exists():
     block = script[start:end]
     assert "Test-Path -LiteralPath $setupSource -PathType Container" in block
     assert "New-Item -ItemType Directory -Path $setupSource" not in block
+
+
+def test_layout_copies_eula_to_root_and_source_package():
+    """EULA.txt is shown on the wizard's license page and the .iss [Files] puts it into the
+    source package; a script-based update must copy it both to the root and to setup-source.
+    Otherwise the EULA only exists in a wizard install and is lost on a script update."""
+    script = read_text("scripts/install-mamidlabs.ps1")
+    # Both top-level file lists (root + setup-source) must contain EULA.txt.
+    assert script.count("'LICENSE', 'EULA.txt')") == 2
+    # The .iss must match the same set.
+    iss = read_text("packaging/windows/mamidlabs.iss")
+    assert 'Source: "..\\..\\EULA.txt"; DestDir: "{app}\\setup-source"' in iss

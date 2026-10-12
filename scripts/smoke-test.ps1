@@ -767,10 +767,16 @@ if ($SkipUi) {
         }
 
         # One turn with the real worker the UI uses: no error and no watchdog text.
+        # maxTokens must be the SAME as the real UI (qwen-desktop.ps1: 8192; server --predict 8192;
+        # see the chat probe). In LITE thinking is UNLIMITED (no --reasoning-budget and
+        # `reasoning_effort=low` is ignored by the Qwen3.5 9B template), so thinking tokens share
+        # the OUTPUT budget. With 300 the model thinks everything away and is cut off WITHOUT
+        # producing a visible answer, and the worker raises "The model produced no answer text.";
+        # that is a test-run mismatch, not an application bug.
         $jobData = @{
             root = $Root; messages = @(@{ role = 'user'; content = 'Hello, introduce yourself in one sentence.' })
             provider = 'local'; model = "smoke-ui-$Profile"; profile = $Profile
-            maxTokens = 300; contextLimit = 32768; boundFolder = $null
+            maxTokens = 8192; contextLimit = 32768; boundFolder = $null
             consultProviders = @{}; attachedDocuments = @(); currentImagePaths = @()
             hasCurrentImage = $false; multiImageOcr = $false; multiImageOcrMode = $false
             internet = $false; agent = $false; office = $false; documentCreate = $false; effort = 'low'

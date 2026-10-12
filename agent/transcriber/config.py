@@ -1,10 +1,15 @@
-"""Runtime profile: picks PC1 (8 GB) / PC2 (16 GB) from total GPU VRAM.
+"""Runtime profile: maps the SELECTED language-model profile ('lite' / 'pro') to an audio tier.
 
-One codebase, two hardware profiles. The only differences are Whisper's compute_type and
-whether models are held in memory at once (parallel) or loaded one at a time (sequential).
+One codebase, two profiles. The only differences are Whisper's compute_type and whether models
+are held in memory at once (parallel) or loaded one at a time (sequential).
 
-- PC2 (>= 14 GB): float16, models stay resident together.
-- PC1 (< 14 GB): int8_float16, models run sequentially; long recordings are chunked.
+- pro (MAX/FLASH): float16, models stay resident together.
+- lite: int8_float16, models run sequentially; long recordings are chunked.
+
+The UI passes the SELECTED profile to the worker (`select_profile_for`), so LITE and PRO behave
+differently. Only outside the UI (CLI), when no profile name is given, does the machine's total
+VRAM decide the tier (`select_profile`). The device/swap decision is still made from the REAL
+free VRAM and system RAM (`choose_plan`).
 """
 from __future__ import annotations
 
@@ -12,9 +17,18 @@ import os
 import subprocess
 from dataclasses import dataclass, replace
 
-PC1 = 'pc1'
-PC2 = 'pc2'
+# Tier names now match the SELECTED profile: 'lite' and 'pro'. The old hardware names
+# ('pc1'/'pc2') and the UI profile names ('max'/'flash') are equivalent aliases, so old calls
+# (CLI `--profile pc2`) keep working.
+PC1 = 'lite'
+PC2 = 'pro'
 VRAM_THRESHOLD_MIB = 14000
+# UI profile name -> tier. The profile NAME decides the tier; VRAM is only the fallback when
+# the name is absent.
+TIER_ALIASES = {
+    'lite': PC1, 'pc1': PC1,
+    'pro': PC2, 'max': PC2, 'flash': PC2, 'pc2': PC2,
+}
 
 # --- Automatic device selection (CPU / GPU) ----------------------------------
 # Transcribing on the GPU requires unloading the local language model from VRAM and
@@ -30,7 +44,7 @@ VRAM_THRESHOLD_MIB = 14000
 #   CPU(d)  = 5.0  + 0.908*d   (model load 5 s; transcription ~real time)
 #   GPU(d)  = 14.0 + 3.3 + 0.079*d   (swap = unload 3 + restore 11; model load 3.3)
 #   Break-even: d = (14 + 3.3 - 5.0) / (0.908 - 0.079) ~= 15 s
-# 20 s was chosen for a safety margin + the first-job CUDA context (PC2). LITE's swap was
+# 20 s was chosen for a safety margin + the first-job CUDA context (pro; old name PC2). LITE's swap was
 # measured shorter (unload 3 + restore 6 = ~9 s) and the 9B model loads in ~6 s, so LITE keeps
 # a slightly lower threshold (Profile.cpu_max_seconds = 15; see PROFILES). Both profiles use
 # the "short -> CPU, long -> GPU + swap" logic.
@@ -49,7 +63,7 @@ DEFAULT_EVENTS_MODEL = 'MIT/ast-finetuned-audioset-10-10-0.4593'
 #
 # `audio_vram_mib`: worst-case margin for Whisper large-v3 + AST + the torch/CUDA
 # context. Measured: int8_float16 large-v3 ~1.5-2.5 GB, AST (fp32) ~0.4 GB, the
-# torch/CUDA context ~0.3-0.5 GB; on PC2 float16 Whisper grows to ~2.9 GB.
+# torch/CUDA context ~0.3-0.5 GB; on pro (old name PC2) float16 Whisper grows to ~2.9 GB.
 DEFAULT_AUDIO_VRAM_MIB = 4096
 # `audio_ram_mib`: worst-case system RAM the pipeline holds on the CPU path (no
 # swap): Whisper int8 (~2 GB) + AST (fp32 ~0.4 GB) + torch/Python (~0.8 GB) + the
@@ -92,7 +106,7 @@ PROFILES = {
 
 
 def total_vram_mib() -> int:
-    """Total VRAM (MiB) of the largest GPU via nvidia-smi. 0 when unavailable (-> PC1)."""
+    """Total VRAM (MiB) of the largest GPU via nvidia-smi. 0 when unavailable (-> lite (old name PC1))."""
     try:
         out = subprocess.run(
             ['nvidia-smi', '--query-gpu=memory.total', '--format=csv,noheader,nounits'],
@@ -154,9 +168,28 @@ def available_ram_mib() -> int:
 
 
 def select_profile(total_mib: int | None = None, **overrides) -> Profile:
-    """Selects a profile by VRAM; individual fields can be overridden."""
+    """Selects a profile by total VRAM (only when no profile name is given / CLI fallback)."""
     total = total_vram_mib() if total_mib is None else int(total_mib)
     profile = PROFILES[PC2] if total >= VRAM_THRESHOLD_MIB else PROFILES[PC1]
+    clean = {k: v for k, v in overrides.items() if v is not None and hasattr(profile, k)}
+    return replace(profile, **clean) if clean else profile
+
+
+def resolve_tier(name: str | None) -> str | None:
+    """Maps a profile name to a tier key ('lite'/'pro'); None when unknown."""
+    return TIER_ALIASES.get((name or '').strip().lower())
+
+
+def select_profile_for(name: str | None, **overrides) -> Profile:
+    """Selects a tier from the app's SELECTED profile name; the name wins.
+
+    'lite' -> LITE, 'pro'/'max'/'flash' -> PRO. When the name is unknown (or empty) it falls
+    back to `select_profile`, which decides the tier from the machine's total VRAM.
+    """
+    tier = resolve_tier(name)
+    if tier is None:
+        return select_profile(**overrides)
+    profile = PROFILES[tier]
     clean = {k: v for k, v in overrides.items() if v is not None and hasattr(profile, k)}
     return replace(profile, **clean) if clean else profile
 
@@ -175,9 +208,8 @@ def choose_device(duration_seconds: float | None, profile: Profile, need_swap: b
     Threshold: `cpu_max_seconds` if given, else `profile.cpu_max_seconds`, else
     `DEFAULT_CPU_MAX_SECONDS`. If the duration is unknown (None) the safe default is 'cuda'.
 
-    NOTE: the app path (UI/worker) no longer uses this function; the device and swap
-    decision is made by `choose_plan` from the REAL free VRAM/system RAM (instead of the
-    profile name). This function is kept only for the CLI's `--device auto` flow.
+    NOTE: the app path (UI/worker) makes the device/swap decision with `choose_plan`; this
+    function is kept only for the CLI's `--device auto` flow.
     """
     if not need_swap:
         return 'cuda'
@@ -197,9 +229,9 @@ def choose_plan(profile: Profile, duration_seconds: float | None = None,
                 cpu_max_seconds: float | None = None) -> tuple[str, bool]:
     """Returns the (device, need_swap) plan for the audio pipeline, in PRIORITY order.
 
-    The profile name is NOT used; real free VRAM + system RAM AND the recording DURATION
-    decide (LITE runs on both 8 GB and 16 GB cards; plus the "short -> CPU, long -> GPU"
-    economy):
+    The tier (`profile`) comes from the SELECTED profile name (lite/pro); the device/swap
+    decision is made from the tier's memory thresholds + REAL free VRAM + system RAM and the
+    recording DURATION (the "short -> CPU, long -> GPU" economy):
 
       1) Whisper + AST fit in free VRAM ALONGSIDE the local language model
          (`audio_vram_mib`) -> ('cuda', False): GPU transcription, NO swap (fastest, free).

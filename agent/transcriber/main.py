@@ -7,8 +7,10 @@ Iki kullanim:
 With `device='auto'` the device (cuda/cpu) is chosen from the recording duration (see
 config.choose_device).
 
-PC1 (LITE) profilinde modeller SIRAYLA yuklenir ve aralarinda bellek bosaltilir;
-PC2 (PRO) profilinde ayni anda kalabilir. Fark yalnizca config profilindedir.
+In the LITE (old name PC1) profile models are loaded SEQUENTIALLY and memory is freed between
+them; in the PRO (MAX/FLASH; old name PC2) profile they can stay resident together. The only
+difference is in the config profile; the selected profile name is passed from the UI in the
+`profile` field (see config.select_profile_for).
 """
 from __future__ import annotations
 
@@ -128,7 +130,7 @@ def main(argv=None) -> int:
     parser.add_argument('path', nargs='?', help='ses/video dosyasi')
     parser.add_argument('--stdin', action='store_true', help='JSON istegi stdin\'den oku')
     parser.add_argument('--device', default='auto', choices=['auto', 'cuda', 'cpu'])
-    parser.add_argument('--profile', default=None, choices=['pc1', 'pc2'])
+    parser.add_argument('--profile', default=None, choices=['lite', 'pro', 'pc1', 'pc2', 'max', 'flash'])
     parser.add_argument('--prompt', default=None, help='initial_prompt (ozel isim/terim)')
     parser.add_argument('--no-events', action='store_true')
     parser.add_argument('--no-diarize', action='store_true')
@@ -144,8 +146,7 @@ def main(argv=None) -> int:
             return 0
         profile = None
         if request.get('profile'):
-            total = 20000 if str(request['profile']).lower() == 'pc2' else 8000
-            profile = config.select_profile(total_mib=total)
+            profile = config.select_profile_for(str(request['profile']))
         try:
             result = run(
                 str(request.get('path') or ''),
@@ -172,7 +173,7 @@ def main(argv=None) -> int:
         parser.error('ses dosyasi gerekli')
     profile = None
     if args.profile:
-        profile = config.select_profile(total_mib=(20000 if args.profile == 'pc2' else 8000))
+        profile = config.select_profile_for(args.profile)
     result = run(args.path, profile=profile, device=args.device, initial_prompt=args.prompt,
                  events=not args.no_events if args.no_events else None,
                  diarize_enabled=not args.no_diarize if args.no_diarize else None,

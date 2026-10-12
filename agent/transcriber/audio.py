@@ -1,7 +1,7 @@
 """Audio preparation: converts any audio/video file to a 16 kHz mono PCM WAV.
 
-Uses PyAV (no ffmpeg binary needed). Long recordings (PC1) are split into chunks with the
-`wave` module so 16 GB of system RAM does not swell.
+Uses PyAV (no ffmpeg binary needed). Long recordings (lite tier; chunk_minutes>0) are split into
+chunks with the `wave` module so 16 GB of system RAM does not swell.
 """
 from __future__ import annotations
 

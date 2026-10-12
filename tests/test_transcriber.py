@@ -5,6 +5,8 @@ Qwen3-ASR and whisper.cpp were fully removed. Heavy tests are skipped when the m
 environment is unavailable; the contracts are always checked.
 """
 import importlib.util
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,16 +39,43 @@ def test_package_modules_exist():
 
 
 def test_config_selects_profile_by_vram():
+    """When no name is given (CLI) the total VRAM decides the tier: >=14000 MiB -> 'pro',
+    below -> 'lite'."""
     from transcriber import config
 
-    pc2 = config.select_profile(total_mib=16311)
-    assert pc2.name == "pc2" and pc2.compute_type == "float16" and pc2.load_mode == "parallel"
-    pc1 = config.select_profile(total_mib=8000)
-    assert pc1.name == "pc1" and pc1.compute_type == "int8_float16" and pc1.load_mode == "sequential"
-    assert pc1.chunk_minutes > 0 and pc2.chunk_minutes == 0
+    pro = config.select_profile(total_mib=16311)
+    assert pro.name == "pro" and pro.compute_type == "float16" and pro.load_mode == "parallel"
+    lite = config.select_profile(total_mib=8000)
+    assert lite.name == "lite" and lite.compute_type == "int8_float16" and lite.load_mode == "sequential"
+    assert lite.chunk_minutes > 0 and pro.chunk_minutes == 0
     # English edition: standard large-v3, automatic language detection.
-    assert pc2.language == "auto"
-    assert "faster-whisper-large-v3" in pc2.whisper_model
+    assert pro.language == "auto"
+    assert "faster-whisper-large-v3" in pro.whisper_model
+
+
+def test_select_profile_for_uses_selected_profile_name():
+    """The SELECTED language-model profile NAME decides the tier; total VRAM is only the
+    fallback when the name is absent."""
+    from transcriber import config
+
+    # 'lite' -> lite tier; stays lite even with plenty of VRAM (16311 MiB).
+    lite_high = config.select_profile_for("lite", total_mib=16311)
+    assert lite_high.name == "lite" and lite_high.load_mode == "sequential"
+    # 'pro'/'max'/'flash' (and the old 'pc2') -> pro tier; stays pro even with little VRAM (8000 MiB).
+    for name in ("pro", "max", "flash", "PRO", " max ", "pc2"):
+        prof = config.select_profile_for(name, total_mib=8000)
+        assert prof.name == "pro", name
+        assert prof.compute_type == "float16" and prof.load_mode == "parallel"
+    # The old hardware name 'pc1' -> lite; stays lite even with plenty of VRAM.
+    assert config.select_profile_for("pc1", total_mib=16311).name == "lite"
+    # No/unknown name -> VRAM fallback (8000 -> lite, 16311 -> pro).
+    assert config.select_profile_for(None, total_mib=8000).name == "lite"
+    assert config.select_profile_for(None, total_mib=16311).name == "pro"
+    assert config.select_profile_for("unknown", total_mib=8000).name == "lite"
+    assert config.select_profile_for("unknown", total_mib=16311).name == "pro"
+    # overrides are applied to the profile selected by name too.
+    tuned = config.select_profile_for("lite", total_mib=16311, language="auto", events=False)
+    assert tuned.name == "lite" and tuned.language == "auto" and tuned.events is False
 
 
 def test_config_overrides_are_applied():
@@ -116,8 +145,8 @@ def test_profile_carries_audio_memory_thresholds():
 
 
 def test_choose_plan_priority_vram_then_ram_then_swap():
-    """PC2 (CPU branch enabled) priority: (1) fits together -> GPU no swap, (2) fits in CPU
-    RAM -> CPU no swap, (3) neither fits -> mandatory swap."""
+    """pro (the old PC2; CPU branch enabled) priority: (1) fits together -> GPU no swap,
+    (2) fits in CPU RAM -> CPU no swap, (3) neither fits -> mandatory swap."""
     from transcriber import config
 
     profile = config.select_profile(total_mib=16311)
@@ -374,6 +403,44 @@ def test_run_explicit_device_is_not_overridden(monkeypatch, tmp_path):
     assert capture["device"] == "cpu"
 
 
+def test_cli_and_stdin_use_selected_profile_name(monkeypatch, tmp_path):
+    """CLI/worker contract: `--profile` and the stdin `profile` field map the NAME to a tier;
+    when the name is absent the profile stays None (transcriber falls back to VRAM)."""
+    import io
+
+    from transcriber import main as transcriber_main
+
+    calls = []
+
+    def fake_run(path, profile=None, **kw):
+        calls.append(profile.name if profile else None)
+        return {"text": "ok", "model": "m", "language": "auto",
+                "profile": profile.name if profile else None}
+
+    monkeypatch.setattr(transcriber_main, "run", fake_run)
+
+    # stdin: 'max' -> pro.
+    monkeypatch.setattr(sys, "stdin", io.StringIO(
+        '{"action":"transcribe","profile":"max","path":"x.wav"}'))
+    assert transcriber_main.main(["--stdin"]) == 0
+    assert calls[-1] == "pro"
+
+    # stdin: no profile -> None (VRAM fallback).
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"action":"transcribe","path":"x.wav"}'))
+    assert transcriber_main.main(["--stdin"]) == 0
+    assert calls[-1] is None
+
+    # CLI: 'lite' -> lite.
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"")
+    assert transcriber_main.main([str(wav), "--profile", "lite"]) == 0
+    assert calls[-1] == "lite"
+
+    # CLI: no profile -> None.
+    assert transcriber_main.main([str(wav)]) == 0
+    assert calls[-1] is None
+
+
 def test_worker_accepts_auto_and_need_swap(monkeypatch, tmp_path):
     """Worker contract: 'auto' is passed through; need_swap is forwarded when present, else None."""
     module = load_worker()
@@ -399,9 +466,30 @@ def test_worker_accepts_auto_and_need_swap(monkeypatch, tmp_path):
     assert captured["need_swap"] is None
 
 
+def test_worker_profile_maps_name_to_tier(monkeypatch):
+    """Worker contract: when the request carries a `profile` field the tier is chosen by NAME
+    ('lite'/'pro'/'pc1'/'pc2'/'max'/'flash'); without a name the total VRAM decides."""
+    module = load_worker()
+
+    # The name wins: 'lite' -> lite tier even with plenty of VRAM (16311).
+    monkeypatch.setattr(module.config, "total_vram_mib", lambda: 16311)
+    assert module._profile({"profile": "lite"}).name == "lite"
+    assert module._profile({"profile": "pc1"}).name == "lite"
+    # 'max'/'pc2' -> pro tier even with little VRAM (8000).
+    assert module._profile({"profile": "max"}).name == "pro"
+    assert module._profile({"profile": "pc2"}).name == "pro"
+    # With a name a valid language override is applied; the profile default ('auto') is kept.
+    assert module._profile({"profile": "lite", "language": "en"}).language == "en"
+    assert module._profile({"profile": "lite", "language": "auto"}).language == "auto"
+    # No name: only language -> VRAM fallback (8000 -> lite; empty request -> lite).
+    monkeypatch.setattr(module.config, "total_vram_mib", lambda: 8000)
+    assert module._profile({"language": "en"}).name == "lite"
+    assert module._profile({}).name == "lite"
+
+
 def test_worker_plan_action_decides_device_and_swap(monkeypatch, tmp_path):
     """Worker contract: action='plan' returns (device, need_swap) from the measured free
-    VRAM/RAM. Exercised with the PC2 profile (CPU branch enabled)."""
+    VRAM/RAM. Exercised with the pro profile (the old PC2; CPU branch enabled)."""
     module = load_worker()
     from transcriber import config
 
@@ -412,7 +500,7 @@ def test_worker_plan_action_decides_device_and_swap(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "available_ram_mib", lambda: 0)
     plan = module.plan({"profile": "pc2", "local_model_loaded": True})
     assert plan["device"] == "cuda" and plan["need_swap"] is False
-    assert plan["profile"] == "pc2" and plan["free_vram_mib"] == vram
+    assert plan["profile"] == "pro" and plan["free_vram_mib"] == vram
 
     # Not enough VRAM but enough RAM -> CPU, no swap.
     monkeypatch.setattr(config, "free_vram_mib", lambda: 0)
@@ -481,6 +569,19 @@ def test_transcription_uses_asr_environment_not_imagegen():
     assert "path = $path" in plan
 
 
+def test_worker_maps_selected_profile_to_asr_tier():
+    """The UI maps the SELECTED language-model profile to the audio-pipeline tier ('lite'->
+    'lite', otherwise 'pro') and passes it as the `profile` field on both the plan and the
+    transcribe requests."""
+    worker = read_text("agent/qwen-inference.ps1")
+    assert "function Get-AsrProfileName" in worker
+    fn = worker.split("function Get-AsrProfileName")[1].split("function ")[0]
+    assert "return 'lite'" in fn
+    assert "return 'pro'" in fn
+    assert "$planPayload.profile = $asrProfile" in worker
+    assert "$payloadBase.profile = $asrProfile" in worker
+
+
 def test_desktop_pipes_audio_to_worker_and_shows_transcript():
     desktop = read_text("qwen-desktop.ps1")
     worker = read_text("agent/qwen-inference.ps1")
@@ -525,10 +626,10 @@ def test_microphone_menu_has_non_speech_events_toggle():
 
 
 def test_transcription_uses_model_swap_for_local_provider():
-    """Same pattern as OCR: on the local provider (language model loaded) the device/swap
-    decision is made from the REAL free VRAM/RAM measured when the audio job starts; the
-    model is unloaded only when required and restored afterwards. The decision is NOT based
-    on the profile name (LITE runs on both 8 GB and 16 GB)."""
+    """Same pattern as OCR: on the local provider (language model loaded) the tier comes from
+    the SELECTED profile (lite/pro); the device/swap decision is made from the REAL free
+    VRAM/RAM measured when the audio job starts plus the recording duration; the model is
+    unloaded only when required and restored afterwards."""
     worker = read_text("agent/qwen-inference.ps1")
     block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
     plan = worker.split("function Get-AudioTranscriptionPlan")[1].split("function ")[0]
@@ -620,3 +721,64 @@ def test_installer_known_stages_include_asr_after_python():
     assert "'asr'" in stages and "'whisper'" not in stages
     order = installer.split("$stages = [ordered]@{")[1]
     assert order.index("python") < order.index("asr       = { Invoke-Asr }")
+
+
+def _extract_ps_function(source: str, name: str) -> str:
+    """Extracts the `function <name> { ... }` body with a simple brace counter."""
+    start = source.index(f"function {name}")
+    depth = 0
+    started = False
+    for index in range(start, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+            started = True
+        elif char == "}":
+            depth -= 1
+            if started and depth == 0:
+                return source[start:index + 1]
+    raise AssertionError(f"end of {name} not found")
+
+
+def _run_ps1(script: str, tmp_path: Path) -> str:
+    """Runs the script with a real pwsh via -File (text is safe there)."""
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 is unavailable")
+    script_path = tmp_path / "test.ps1"
+    script_path.write_text(script, encoding="utf-8-sig")
+    result = subprocess.run(
+        [pwsh, "-NoProfile", "-NonInteractive", "-File", str(script_path)],
+        capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout
+
+
+def test_asr_profile_name_ignores_non_local_provider(tmp_path):
+    """A2 regression: in API mode (no local model) `$JobData.profile` can come from the
+    default 'max' rather than the selected local profile; even if the user's saved
+    localProfile is 'lite', ASR must not be forced to 'pro'. Get-AsrProfileName must return
+    $null for a non-local provider so the worker picks the tier from real VRAM
+    (config.select_profile); local + lite -> 'lite', local + max/flash -> 'pro'.
+    The function is exercised in isolation in a real pwsh."""
+    worker = read_text("agent/qwen-inference.ps1")
+    fn = _extract_ps_function(worker, "Get-AsrProfileName")
+    script = fn + """
+
+function Ask([string]$prov, $prof) {
+    $script:provider = $prov
+    $script:JobData = [pscustomobject]@{ profile = $prof }
+    '[' + (Get-AsrProfileName) + ']'
+}
+Ask 'openai' 'max'
+Ask 'claude' 'flash'
+Ask 'custom' 'lite'
+Ask 'local' 'lite'
+Ask 'local' 'max'
+Ask 'local' 'flash'
+Ask 'local' 'pc1'
+Ask 'local' ''
+"""
+    out = _run_ps1(script, tmp_path)
+    assert out.split() == ["[]", "[]", "[]", "[lite]", "[pro]", "[pro]", "[lite]", "[]"]
