@@ -230,6 +230,9 @@ def test_lite_system_prompt_encourages_deep_reasoning():
     assert "$script:apiSettings.localProfile -eq 'lite'" in block
     # It does not switch thinking off; it only steers it.
     assert "enable_thinking" not in desktop
+    # Fixed (all-profile) verification instruction: check twice + no fabricated names.
+    assert "at least TWICE" in desktop
+    assert "unless you are sure it exists" in desktop
 
 
 # ------------------------------------------------------------------ media path

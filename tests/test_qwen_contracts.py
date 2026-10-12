@@ -571,3 +571,17 @@ def test_update_check_uses_a_github_token_for_the_private_repo():
     assert "GITHUB_TOKEN" in catalog and "GH_TOKEN" in catalog
     assert "Authorization" in catalog
     assert "Bearer $token" in catalog
+
+
+def test_system_prompt_requires_verification_and_forbids_fabrication():
+    """The fixed system prompt (Get-SystemPrompt) tells the model to give evidence-based,
+    correct answers and to double-check steps/intermediate results at least TWICE in
+    multi-step work, and forbids inventing test/theorem/source names. It is fixed, so the
+    prefix never changes and the KV cache is not broken."""
+    desktop = read_text("qwen-desktop.ps1")
+    assert "Give evidence-based, correct answers" in desktop
+    assert "at least TWICE" in desktop
+    assert "Do NOT use the name of a test, theorem, identity or source" in desktop
+    # The instruction must live in the fixed system prompt (not in per-turn hints).
+    prompt = desktop[desktop.index("function Get-SystemPrompt"):desktop.index("function Get-TurnHints")]
+    assert "at least TWICE" in prompt

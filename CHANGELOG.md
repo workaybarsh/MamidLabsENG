@@ -93,6 +93,18 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **Block LaTeX is now rendered as readable text.** `Convert-MathText` handles the block structures a
+  plain regex could not, with a **balanced parser** (`Read-MathGroup`/`Read-MathAtom`/`Expand-MathCommands`):
+  nested/parenthesised and escaped `\{ \}` `\frac{A}{B}`, `\sqrt{X}` / `\sqrt[n]{X}`, `\boxed{X}`/`\fbox{X}`
+  (`[ X ]` instead of a box), `\textbf`/`\textit`/`\mathrm`/`\text`/`\operatorname` (content),
+  `\left`/`\right` (plain delimiters), `\overline`/`\bar`/`\vec`/`\hat` (combining marks) and
+  `\begin`/`\end`. Example: `\boxed{\frac{\pi^5(89+72\sqrt3)}{3888}}` → `[ (π⁵(89+72√(3)))/3888 ]`.
+  The existing glyph table, the chemistry `\ce`/`\pu` support and the currency `$` behavior are kept.
+- **A fixed "evidence-based and double-check" instruction was added to the system prompt.**
+  `Get-SystemPrompt` (not per-turn; the KV cache is not broken) now tells the model to give correct,
+  evidence-based answers, to check the steps and the symbolic/numeric **intermediate results at least
+  twice** in multi-step math/algebra/logic, and **not to invent test/theorem/source names**; the LITE
+  deep-thinking line was merged with it (no duplication).
 - **Audio: the LITE CPU/GPU policy and the GPU runtime DLLs were clarified; the transcribe timeout
   is now tied to the recording duration.** (1) LITE ASR now uses the **CPU co-resident** path
   (`('cpu', False)`; the language model stays in VRAM, the audio model runs on the CPU/system RAM,

@@ -356,6 +356,165 @@ function Convert-ToSubscript([string]$t) {
     return $sb.ToString()
 }
 
+# --- Block LaTeX -> readable text helpers ----------------------------------------------
+# A plain regex could not split nested groups (a group inside \frac{A}{B}) or escaped
+# \{ \} characters, so a BALANCED parser is used.
+
+# If $s[$open] is '{', find the matching '}'. Escaped \{ and \} do NOT count as depth.
+function Read-MathGroup([string]$s, [int]$open) {
+    if ($open -lt 0 -or $open -ge $s.Length -or $s[$open] -ne '{') { return $null }
+    $depth = 0
+    $i = $open
+    $sb = New-Object Text.StringBuilder
+    while ($i -lt $s.Length) {
+        $ch = $s[$i]
+        if ($ch -eq '\' -and ($i + 1) -lt $s.Length) {
+            [void]$sb.Append($ch); [void]$sb.Append($s[$i + 1]); $i += 2; continue
+        }
+        if ($ch -eq '{') {
+            $depth++
+            if ($depth -gt 1) { [void]$sb.Append($ch) }
+        } elseif ($ch -eq '}') {
+            $depth--
+            if ($depth -eq 0) { return [pscustomobject]@{ End = $i + 1; Inner = $sb.ToString() } }
+            [void]$sb.Append($ch)
+        } else { [void]$sb.Append($ch) }
+        $i++
+    }
+    return $null
+}
+
+# Read one LaTeX argument starting at $s[$pos]: a {..} group or a single character/command.
+function Read-MathAtom([string]$s, [int]$pos) {
+    while ($pos -lt $s.Length -and $s[$pos] -eq ' ') { $pos++ }
+    if ($pos -ge $s.Length) { return [pscustomobject]@{ End = $pos; Text = '' } }
+    if ($s[$pos] -eq '{') {
+        $g = Read-MathGroup $s $pos
+        if ($g) { return [pscustomobject]@{ End = $g.End; Text = $g.Inner } }
+        return [pscustomobject]@{ End = $pos + 1; Text = '{' }
+    }
+    if ($s[$pos] -eq '\' -and ($pos + 1) -lt $s.Length -and [char]::IsLetter($s[$pos + 1])) {
+        $j = $pos + 1
+        while ($j -lt $s.Length -and [char]::IsLetter($s[$j])) { $j++ }
+        return [pscustomobject]@{ End = $j; Text = $s.Substring($pos, $j - $pos) }
+    }
+    return [pscustomobject]@{ End = $pos + 1; Text = [string]$s[$pos] }
+}
+
+# A combining mark is appended after every character (an overline over A -> A + U+0305).
+function Add-MathAccent([string]$text, [string]$mark) {
+    if ([string]::IsNullOrEmpty($text)) { return $text }
+    $sb = New-Object Text.StringBuilder
+    foreach ($ch in $text.ToCharArray()) {
+        [void]$sb.Append($ch)
+        if ($ch -ne ' ') { [void]$sb.Append($mark) }
+    }
+    return $sb.ToString()
+}
+
+# Resolves block LaTeX commands procedurally: \frac{..}{..}, \sqrt[n]{..}, \boxed{..},
+# \textbf{..} etc., \left/\right, \overline/\vec/\hat, \begin/\end. The content is expanded
+# recursively FIRST (nested structures resolve correctly). Unknown commands are left as-is;
+# the glyph table converts them to Unicode later.
+function Expand-MathCommands([string]$s) {
+    if ([string]::IsNullOrEmpty($s)) { return $s }
+    $sb = New-Object Text.StringBuilder
+    $n = $s.Length
+    $i = 0
+    while ($i -lt $n) {
+        $ch = $s[$i]
+        if ($ch -ne '\') { [void]$sb.Append($ch); $i++; continue }
+        if (($i + 1) -ge $n -or -not [char]::IsLetter($s[$i + 1])) {
+            if (($i + 1) -lt $n) { [void]$sb.Append($ch); [void]$sb.Append($s[$i + 1]); $i += 2 }
+            else { [void]$sb.Append($ch); $i++ }
+            continue
+        }
+        $j = $i + 1
+        while ($j -lt $n -and [char]::IsLetter($s[$j])) { $j++ }
+        $name = $s.Substring($i + 1, $j - $i - 1)
+        $i = $j
+        if ($name -eq 'frac' -or $name -eq 'dfrac' -or $name -eq 'tfrac') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            $a2 = Read-MathAtom $s $i; $i = $a2.End
+            if ($a1.Text -eq '' -and $a2.Text -eq '') { [void]$sb.Append('\' + $name); continue }
+            $ea = Expand-MathCommands $a1.Text
+            $eb = Expand-MathCommands $a2.Text
+            $na = if ($ea -match '^[A-Za-z0-9]+$') { $ea } else { '(' + $ea + ')' }
+            $nb = if ($eb -match '^[A-Za-z0-9]+$') { $eb } else { '(' + $eb + ')' }
+            [void]$sb.Append($na + '/' + $nb)
+        }
+        elseif ($name -eq 'sqrt') {
+            $idx = $null
+            while ($i -lt $n -and $s[$i] -eq ' ') { $i++ }
+            if ($i -lt $n -and $s[$i] -eq '[') {
+                $close = $s.IndexOf(']', $i + 1)
+                if ($close -ge 0) { $idx = $s.Substring($i + 1, $close - $i - 1); $i = $close + 1 }
+            }
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            $ea = Expand-MathCommands $a1.Text
+            if ($idx) {
+                $sup = Convert-ToSuperscript (Expand-MathCommands $idx)
+                if ($sup) { [void]$sb.Append($sup) } else { [void]$sb.Append('^(' + $idx + ')') }
+            }
+            [void]$sb.Append('√(' + $ea + ')')
+        }
+        elseif ($name -eq 'boxed' -or $name -eq 'fbox') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            [void]$sb.Append('[ ' + (Expand-MathCommands $a1.Text) + ' ]')
+        }
+        elseif ($name -eq 'textbf' -or $name -eq 'textit' -or $name -eq 'texttt' -or $name -eq 'textsf' -or $name -eq 'textrm' -or $name -eq 'textnormal' -or $name -eq 'textup' -or $name -eq 'emph' -or $name -eq 'text' -or $name -eq 'mathrm' -or $name -eq 'mathbf' -or $name -eq 'mathit' -or $name -eq 'mathsf' -or $name -eq 'mathtt' -or $name -eq 'mathcal' -or $name -eq 'mathbb' -or $name -eq 'operatorname' -or $name -eq 'mbox' -or $name -eq 'hbox') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            [void]$sb.Append((Expand-MathCommands $a1.Text))
+        }
+        elseif ($name -eq 'overline' -or $name -eq 'bar') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            [void]$sb.Append((Add-MathAccent (Expand-MathCommands $a1.Text) ([char]0x0305)))
+        }
+        elseif ($name -eq 'underline') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            [void]$sb.Append((Add-MathAccent (Expand-MathCommands $a1.Text) ([char]0x0332)))
+        }
+        elseif ($name -eq 'vec') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            [void]$sb.Append((Add-MathAccent (Expand-MathCommands $a1.Text) ([char]0x20d7)))
+        }
+        elseif ($name -eq 'hat') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            [void]$sb.Append((Add-MathAccent (Expand-MathCommands $a1.Text) ([char]0x0302)))
+        }
+        elseif ($name -eq 'tilde') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            [void]$sb.Append((Add-MathAccent (Expand-MathCommands $a1.Text) ([char]0x0303)))
+        }
+        elseif ($name -eq 'dot') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            [void]$sb.Append((Add-MathAccent (Expand-MathCommands $a1.Text) ([char]0x0307)))
+        }
+        elseif ($name -eq 'ddot') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+            [void]$sb.Append((Add-MathAccent (Expand-MathCommands $a1.Text) ([char]0x0308)))
+        }
+        elseif ($name -eq 'begin' -or $name -eq 'end') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+        }
+        elseif ($name -eq 'quad') { [void]$sb.Append('   ') }
+        elseif ($name -eq 'qquad') { [void]$sb.Append('     ') }
+        elseif ($name -eq 'phantom' -or $name -eq 'hphantom' -or $name -eq 'vphantom') {
+            $a1 = Read-MathAtom $s $i; $i = $a1.End
+        }
+        elseif ($name -eq 'left' -or $name -eq 'right') {
+            if ($i -lt $n -and $s[$i] -eq '.') { $i++ }
+        }
+        elseif ($name -eq 'big' -or $name -eq 'Big' -or $name -eq 'bigg' -or $name -eq 'Bigg' -or $name -eq 'bigl' -or $name -eq 'bigr' -or $name -eq 'Bigl' -or $name -eq 'Bigr' -or $name -eq 'biggl' -or $name -eq 'biggr' -or $name -eq 'Biggl' -or $name -eq 'Biggr' -or $name -eq 'displaystyle' -or $name -eq 'textstyle' -or $name -eq 'scriptstyle' -or $name -eq 'limits' -or $name -eq 'nolimits' -or $name -eq 'middle') {
+            # sizing/delimiter commands: dropped
+        }
+        else {
+            [void]$sb.Append('\'); [void]$sb.Append($name)
+        }
+    }
+    return $sb.ToString()
+}
+
 function Convert-MathText([string]$text) {
     if ([string]::IsNullOrEmpty($text)) { return $text }
     $s = $text
@@ -363,22 +522,6 @@ function Convert-MathText([string]$text) {
     if ($s -match '\\[a-zA-Z]+|\$\$') { $s = $s.Replace('$', '') }
     # Display/paren delimiters
     $s = $s -replace '\\\[', ' ' -replace '\\\]', ' ' -replace '\\\(', ' ' -replace '\\\)', ' '
-    # Fractions (simple/non-nested): \frac{a}{b} (\dfrac, \tfrac too) -> a/b. A single simple
-    # term (d, dx, x, 2) gets no parentheses; otherwise (a)/(b).
-    for ($k = 0; $k -lt 3; $k++) {
-        $s = [regex]::Replace($s, '\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}', {
-            param($m)
-            $a = $m.Groups[1].Value.Trim(); $b = $m.Groups[2].Value.Trim()
-            $na = if ($a -match '^[A-Za-z0-9]+$') { $a } else { '(' + $a + ')' }
-            $nb = if ($b -match '^[A-Za-z0-9]+$') { $b } else { '(' + $b + ')' }
-            return $na + '/' + $nb
-        })
-    }
-    # Root and box
-    for ($k = 0; $k -lt 3; $k++) {
-        $s = $s -replace '\\sqrt\s*\{([^{}]*)\}', '√($1)'
-        $s = $s -replace '\\boxed\s*\{([^{}]*)\}', '[ $1 ]'
-    }
     # Chemistry (mhchem) and physics units: make \ce{...} / \pu{...} readable.
     # Arrows (<->, <=>, ->, <-) and element numbers (H2O) are converted only inside \ce,
     # so text like '->' in code blocks is not corrupted.
@@ -393,6 +536,11 @@ function Convert-MathText([string]$text) {
         })
         return $inner
     })
+    # Block structures: \frac (nested / parenthesised), \sqrt[n]{}, \boxed/\fbox,
+    # \textbf/\textit/\mathrm/\text/\operatorname, \left/\right, \overline/\vec/\hat,
+    # \begin/\end. Resolved with the balanced parser (see Expand-MathCommands); a plain
+    # regex fell short on nested groups and escaped \{ \}.
+    $s = Expand-MathCommands $s
     # Text wrappers: keep content
     $s = $s -replace '\\(text|mathrm|mathbf|mathit|operatorname|mbox)\s*\{([^{}]*)\}', '$2'
     # Drop sizing/paren commands
@@ -2165,12 +2313,15 @@ function Get-SystemPrompt {
     $lines = @()
     $lines += 'You are the MamidLabs assistant. Reply in the language the user writes in (English by default), directly and clearly. The chat model may be local or an API; tools run on the user''s computer.'
     $lines += "Today's date: $(Get-Date -Format 'yyyy-MM-dd')."
+    # Fixed (NOT per-turn) verification instruction: the prefix does not change, so the KV
+    # cache is not broken. The model must answer with evidence and double-check multi-step work.
+    $lines += 'Give evidence-based, correct answers: do not present something you are unsure about as certain, and say when you do not know. Especially in math, algebra, logic and multi-step problems, check your steps and symbolic/numeric INTERMEDIATE RESULTS at least TWICE; verify by a different route when useful. Do NOT use the name of a test, theorem, identity or source unless you are sure it exists.'
     # LITE (small 9B model): thinking is ON and UNLIMITED (no server budget). This encourages
     # deep, step-by-step reasoning and tells the model not to cap its thinking time; it should
     # think as long as needed. The line is fixed per profile, so the prompt prefix (and thus the
     # KV cache) is not broken (added only for the LITE profile).
     if ([string]$script:apiSettings.localProfile -eq 'lite') {
-        $lines += 'Think deeply and carefully: before answering, break the problem down, reason step by step, bound your assumptions and aim for the most correct conclusion. For math, logic, planning, code and multi-step problems, target the CORRECT answer instead of a fast one. Do NOT cap your thinking time: think for as long and as deeply as needed; if necessary, try more than one approach, check intermediate results and assumptions, and go back and fix mistakes. Once confident, lay out your reasoning briefly and give a clear, complete and correct answer.'
+        $lines += 'Think deeply and carefully: before answering, break the problem down, reason step by step, bound your assumptions and aim for the most correct conclusion. For math, logic, planning, code and multi-step problems, target the CORRECT answer instead of a fast one. Do NOT cap your thinking time: think for as long and as deeply as needed; if necessary, try more than one approach and go back and fix mistakes. Once confident, lay out your reasoning briefly and give a clear, complete and correct answer.'
     }
     if ($netChip.Checked) { $lines += 'You have internet access: use the search_web and fetch_page tools when up-to-date information is needed.' }
     else { $lines += 'Your internet access is OFF; you cannot search the web.' }
