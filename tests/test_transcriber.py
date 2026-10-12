@@ -72,9 +72,11 @@ def test_choose_device_short_uses_cpu_long_uses_cuda_when_swap_needed():
     from transcriber import config
 
     profile = config.select_profile(total_mib=8000)
-    threshold = config.DEFAULT_CPU_MAX_SECONDS
+    # Effective threshold: profile-specific (LITE 15 s) if set, else the default.
+    threshold = profile.cpu_max_seconds or config.DEFAULT_CPU_MAX_SECONDS
     # Below the threshold -> CPU (the swap cost outweighs the gain).
-    assert config.choose_device(60, profile, need_swap=True) == "cpu"
+    assert config.choose_device(threshold - 1, profile, need_swap=True) == "cpu"
+    assert config.choose_device(5, profile, need_swap=True) == "cpu"
     # Boundary value -> CPU (<=).
     assert config.choose_device(threshold, profile, need_swap=True) == "cpu"
     # Above the threshold -> CUDA.
@@ -114,15 +116,14 @@ def test_profile_carries_audio_memory_thresholds():
 
 
 def test_choose_plan_priority_vram_then_ram_then_swap():
-    """Priority: (1) fits together -> GPU no swap, (2) fits in CPU RAM -> CPU no swap,
-    (3) neither fits -> mandatory swap."""
+    """PC2 (CPU branch enabled) priority: (1) fits together -> GPU no swap, (2) fits in CPU
+    RAM -> CPU no swap, (3) neither fits -> mandatory swap."""
     from transcriber import config
 
-    profile = config.select_profile(total_mib=8000)
+    profile = config.select_profile(total_mib=16311)
     vram = profile.audio_vram_mib
     ram = profile.audio_ram_mib
-    # 1) Enough free VRAM -> GPU, NO swap (on the real 8 GB LITE the language model holds
-    #    ~7.5 GB, leaving ~0.5 GB free, so this branch does NOT hit there).
+    # 1) Enough free VRAM -> GPU, NO swap.
     assert config.choose_plan(profile, vram_free_mib=vram, ram_free_mib=ram) == ("cuda", False)
     assert config.choose_plan(profile, vram_free_mib=vram + 1000, ram_free_mib=0) == ("cuda", False)
     # 2) Not enough VRAM but enough system RAM -> CPU, NO swap (slower, model stays resident).
@@ -131,6 +132,21 @@ def test_choose_plan_priority_vram_then_ram_then_swap():
     # 3) Neither fits -> mandatory VRAM swap (GPU).
     assert config.choose_plan(profile, vram_free_mib=vram - 1, ram_free_mib=ram - 1) == ("cuda", True)
     assert config.choose_plan(profile, vram_free_mib=0, ram_free_mib=0) == ("cuda", True)
+
+
+def test_choose_plan_lite_uses_cpu_branch_for_short_long_uses_gpu():
+    """LITE also uses the same unified logic (RAM measured as sufficient): VRAM insufficient +
+    SHORT -> CPU/no swap, LONG -> GPU + mandatory swap."""
+    from transcriber import config
+
+    profile = config.select_profile(total_mib=8000)
+    assert config.choose_plan(profile, vram_free_mib=profile.audio_vram_mib,
+                             ram_free_mib=0) == ("cuda", False)
+    threshold = config.DEFAULT_CPU_MAX_SECONDS
+    assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=0,
+                             ram_free_mib=10 ** 6) == ("cpu", False)
+    assert config.choose_plan(profile, duration_seconds=threshold + 1, vram_free_mib=0,
+                             ram_free_mib=10 ** 6) == ("cuda", True)
 
 
 def test_choose_plan_without_local_model_never_swaps():
@@ -155,7 +171,7 @@ def test_choose_plan_uses_duration_short_cpu_long_gpu_when_vram_tight():
                              ram_free_mib=ram) == ("cpu", False)
     assert config.choose_plan(profile, duration_seconds=threshold + 1, vram_free_mib=vram,
                              ram_free_mib=ram) == ("cuda", True)
-    assert config.choose_plan(profile, duration_seconds=30, vram_free_mib=vram,
+    assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=vram,
                              ram_free_mib=ram) == ("cpu", False)
 
 
@@ -311,7 +327,7 @@ def test_run_auto_selects_cpu_for_short_recording(monkeypatch, tmp_path):
     src = tmp_path / "short.wav"
     src.write_bytes(b"")
     capture = {}
-    _patch_transcriber_pipeline(monkeypatch, 30.0, capture)
+    _patch_transcriber_pipeline(monkeypatch, 5.0, capture)
     result = main.run(str(src), profile=config.select_profile(total_mib=8000),
                       device="auto", need_swap=True)
     assert capture["device"] == "cpu"
@@ -385,31 +401,52 @@ def test_worker_accepts_auto_and_need_swap(monkeypatch, tmp_path):
 
 def test_worker_plan_action_decides_device_and_swap(monkeypatch, tmp_path):
     """Worker contract: action='plan' returns (device, need_swap) from the measured free
-    VRAM/RAM (priority: VRAM fit -> GPU no swap, RAM fit -> CPU no swap, neither -> swap)."""
+    VRAM/RAM. Exercised with the PC2 profile (CPU branch enabled)."""
     module = load_worker()
     from transcriber import config
 
-    profile = config.select_profile(total_mib=8000)
+    profile = config.select_profile(total_mib=16311)
     vram, ram = profile.audio_vram_mib, profile.audio_ram_mib
 
     monkeypatch.setattr(config, "free_vram_mib", lambda: vram)
     monkeypatch.setattr(config, "available_ram_mib", lambda: 0)
-    plan = module.plan({"profile": "pc1", "local_model_loaded": True})
+    plan = module.plan({"profile": "pc2", "local_model_loaded": True})
     assert plan["device"] == "cuda" and plan["need_swap"] is False
-    assert plan["profile"] == "pc1" and plan["free_vram_mib"] == vram
+    assert plan["profile"] == "pc2" and plan["free_vram_mib"] == vram
 
     # Not enough VRAM but enough RAM -> CPU, no swap.
     monkeypatch.setattr(config, "free_vram_mib", lambda: 0)
     monkeypatch.setattr(config, "available_ram_mib", lambda: ram)
-    plan = module.plan({"profile": "pc1", "local_model_loaded": True})
+    plan = module.plan({"profile": "pc2", "local_model_loaded": True})
     assert plan["device"] == "cpu" and plan["need_swap"] is False
 
     # Neither fits -> mandatory swap.
     monkeypatch.setattr(config, "available_ram_mib", lambda: 0)
-    plan = module.plan({"profile": "pc1", "local_model_loaded": True})
+    plan = module.plan({"profile": "pc2", "local_model_loaded": True})
     assert plan["device"] == "cuda" and plan["need_swap"] is True
 
     # Local model not loaded (API) -> no swap.
+    plan = module.plan({"profile": "pc2", "local_model_loaded": False})
+    assert plan["device"] == "cuda" and plan["need_swap"] is False
+
+
+def test_lite_profile_uses_shared_plan(monkeypatch, tmp_path):
+    """LITE (8 GB) uses the same plan: since RAM is sufficient, a short recording uses the CPU
+    and a long one uses GPU + swap. With no local model (API) the GPU is free -> no swap."""
+    module = load_worker()
+    from transcriber import config, audio
+
+    src = tmp_path / "recording.wav"
+    src.write_bytes(b"RIFF")
+    monkeypatch.setattr(config, "free_vram_mib", lambda: 0)
+    monkeypatch.setattr(config, "available_ram_mib", lambda: 10 ** 6)
+    monkeypatch.setattr(audio, "probe_duration_seconds", lambda path: 5.0)
+    plan = module.plan({"profile": "pc1", "local_model_loaded": True, "path": str(src)})
+    assert plan["device"] == "cpu" and plan["need_swap"] is False
+    monkeypatch.setattr(audio, "probe_duration_seconds", lambda path: 3600.0)
+    plan = module.plan({"profile": "pc1", "local_model_loaded": True, "path": str(src)})
+    assert plan["device"] == "cuda" and plan["need_swap"] is True
+    # Local model not loaded (API) -> the GPU is free, no swap.
     plan = module.plan({"profile": "pc1", "local_model_loaded": False})
     assert plan["device"] == "cuda" and plan["need_swap"] is False
 
@@ -425,7 +462,7 @@ def test_worker_plan_action_uses_path_duration(monkeypatch, tmp_path):
     src.write_bytes(b"RIFF")
     monkeypatch.setattr(config, "free_vram_mib", lambda: 0)
     monkeypatch.setattr(config, "available_ram_mib", lambda: 10 ** 6)
-    monkeypatch.setattr(audio, "probe_duration_seconds", lambda path: 30.0)
+    monkeypatch.setattr(audio, "probe_duration_seconds", lambda path: 5.0)
     plan = module.plan({"profile": "pc2", "local_model_loaded": True, "path": str(src)})
     assert plan["device"] == "cpu" and plan["need_swap"] is False
     monkeypatch.setattr(audio, "probe_duration_seconds", lambda path: 3600.0)

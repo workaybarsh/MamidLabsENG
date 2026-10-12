@@ -67,6 +67,11 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   **deleted** with "Delete language edition".
 
 ### Changed
+- **Audio transcription CPU/GPU choice is now measurement-based:** the device is chosen
+  automatically from the real free VRAM + system RAM + the recording **duration**. Measured
+  threshold **PRO ~20 s**, **LITE ~15 s**; shorter recordings use the CPU, longer ones the GPU
+  (swap). When the model + audio pipeline fit together in free VRAM the GPU is always used
+  (no swap).
 - **FLASH output cap 4096 -> 8192:** all three profiles (`--predict` and the UI `max_tokens`) now use
   8192. This is a **ceiling**, not a target: generation stops at EOS, so normal answers keep the same
   speed; it only prevents long answers/thinking from being cut off (empty reply). The MAX/FLASH

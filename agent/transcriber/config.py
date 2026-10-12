@@ -26,7 +26,15 @@ VRAM_THRESHOLD_MIB = 14000
 #
 # The threshold is the duration below; when the R&D measurement lands, only this line is
 # updated (or override per profile with `Profile.cpu_max_seconds`).
-DEFAULT_CPU_MAX_SECONDS = 240.0  # 4 minutes
+# AR-GE measurement (RTX 5060 Ti 16 GB, faster-whisper large-v3):
+#   CPU(d)  = 5.0  + 0.908*d   (model load 5 s; transcription ~real time)
+#   GPU(d)  = 14.0 + 3.3 + 0.079*d   (swap = unload 3 + restore 11; model load 3.3)
+#   Break-even: d = (14 + 3.3 - 5.0) / (0.908 - 0.079) ~= 15 s
+# 20 s was chosen for a safety margin + the first-job CUDA context (PC2). LITE's swap was
+# measured shorter (unload 3 + restore 6 = ~9 s) and the 9B model loads in ~6 s, so LITE keeps
+# a slightly lower threshold (Profile.cpu_max_seconds = 15; see PROFILES). Both profiles use
+# the "short -> CPU, long -> GPU + swap" logic.
+DEFAULT_CPU_MAX_SECONDS = 20.0
 
 # English edition: the standard Whisper large-v3 CTranslate2 model (no Turkish fine-tune).
 DEFAULT_WHISPER_MODEL = 'Systran/faster-whisper-large-v3'
@@ -76,6 +84,9 @@ PROFILES = {
         name=PC1, compute_type='int8_float16', load_mode='sequential', chunk_minutes=30,
         whisper_model=DEFAULT_WHISPER_MODEL, events_model=DEFAULT_EVENTS_MODEL,
         language='auto', events=True, diarize=True,
+        # LITE's swap was measured shorter (9B: unload ~3 + restore ~6 = ~9 s); the threshold
+        # is slightly lower than PRO's (see the DEFAULT_CPU_MAX_SECONDS comment).
+        cpu_max_seconds=15.0,
     ),
 }
 
