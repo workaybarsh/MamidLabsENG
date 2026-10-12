@@ -93,6 +93,16 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **Audio transcription: the CPU fallback never ran because of a PowerShell dictionary bug (found
+  in the end-to-end audio test).** When the primary device (GPU) failed, `Invoke-TranscribeWithModelSwap`
+  built the CPU retry payload with `$payloadBase + @{ device = 'cpu' }`; in PowerShell a Hashtable
+  `+` **throws on a duplicate key** ("Item has already been added. Key in dictionary: 'device'")
+  because `$payloadBase` already contains `device`/`need_swap`. So the worker never actually fell
+  back to CPU, the real ASR error was swallowed, and the turn finished without a transcript (e.g.
+  when `cublas64_12.dll` required by ctranslate2 is missing, the GPU path always errors). The
+  payload is now cloned and the field overwritten (`$cpuPayload = $payloadBase.Clone();
+  $cpuPayload['device'] = 'cpu'`); the same fix applies to the "unload the model and retry" block.
+  `tests/test_transcriber.py` guards this pattern.
 - **Hygiene: audit-log rotation and a thinking (reasoning) repeat guard (F3/F4).** (F3) The tool-call
   record `logs\audit.jsonl` grew without bound; now, before a write, if the file exceeds 5 MB it is
   rotated to `audit.1.jsonl` (overwriting any previous one) and the new line goes to the clean

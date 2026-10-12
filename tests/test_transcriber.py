@@ -688,7 +688,8 @@ def test_worker_steers_model_away_from_reading_failed_audio():
     # If the no-swap path fails, retry with a swap (clean GPU + more free RAM).
     block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
     assert "!$swapModel -and $provider -eq 'local'" in block
-    assert "($payloadBase + @{ device = 'cuda'; need_swap = $true })" in block
+    # Hashtable '+' throws on a duplicate key; use clone + field overwrite.
+    assert "$retryPayload = $payloadBase.Clone(); $retryPayload['device'] = 'cuda'; $retryPayload['need_swap'] = $true" in block
     assert "Wait-LocalModelStopped" in block
     # Regression: the old "continuing without a transcript" path cannot continue without the note.
     assert 'Emit \'status\' "Could not transcribe the audio; continuing without a transcript. $reason"' in caller
@@ -1056,3 +1057,13 @@ Ask 'local' ''
 """
     out = _run_ps1(script, tmp_path)
     assert out.split() == ["[]", "[]", "[]", "[lite]", "[pro]", "[pro]", "[lite]", "[]"]
+
+
+def test_transcribe_cpu_fallback_overrides_device_without_duplicate_key():
+    """PowerShell hashtable '+' throws on a DUPLICATE key ('device'/'need_swap' already
+    present), so the CPU fallback payload cannot be merged with '+'. It must clone and
+    overwrite the field; otherwise a failed CUDA transcription never falls back to CPU
+    and the transcript silently disappears ("Item has already been added. Key: device")."""
+    worker = read_text("agent/qwen-inference.ps1")
+    assert "$payloadBase + @{" not in worker
+    assert "$cpuPayload['device'] = 'cpu'" in worker
