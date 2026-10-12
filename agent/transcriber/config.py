@@ -50,6 +50,12 @@ TIER_ALIASES = {
 # the "short -> CPU, long -> GPU + swap" logic.
 DEFAULT_CPU_MAX_SECONDS = 20.0
 
+# LITE (8 GB card) CPU/GPU threshold. LITE's swap was measured shorter (~9-14 s); the
+# break-even is d = (swap - 1.7) / 0.831 ~= 9-15 s. 15 s was chosen for a safety margin.
+# When the measurement agent's numeric verdict is unavailable the existing R&D value is used;
+# the safe band is 15-20 s.
+LITE_CPU_MAX_SECONDS = 15.0
+
 # English edition: the standard Whisper large-v3 CTranslate2 model (no Turkish fine-tune).
 DEFAULT_WHISPER_MODEL = 'Systran/faster-whisper-large-v3'
 # AudioSet-based audio event model (AST). Set to 'none' to disable.
@@ -98,9 +104,13 @@ PROFILES = {
         name=PC1, compute_type='int8_float16', load_mode='sequential', chunk_minutes=30,
         whisper_model=DEFAULT_WHISPER_MODEL, events_model=DEFAULT_EVENTS_MODEL,
         language='auto', events=True, diarize=True,
-        # LITE's swap was measured shorter (9B: unload ~3 + restore ~6 = ~9 s); the threshold
-        # is slightly lower than PRO's (see the DEFAULT_CPU_MAX_SECONDS comment).
-        cpu_max_seconds=15.0,
+        # LITE ASR policy: the CPU co-resident path is chosen ONLY when the recording is
+        # SHORTER than `cpu_max_seconds` AND system RAM suffices (the language model stays in
+        # VRAM, the audio model runs on the CPU/system RAM; NO swap). For a long recording or
+        # insufficient RAM it is GPU + mandatory swap (the swap costs ~9-14 s but GPU
+        # transcription is much faster, so the total time is shorter; see choose_plan).
+        # The threshold is LITE_CPU_MAX_SECONDS (15 s).
+        cpu_max_seconds=LITE_CPU_MAX_SECONDS,
     ),
 }
 
@@ -231,21 +241,29 @@ def choose_plan(profile: Profile, duration_seconds: float | None = None,
 
     The tier (`profile`) comes from the SELECTED profile name (lite/pro); the device/swap
     decision is made from the tier's memory thresholds + REAL free VRAM + system RAM and the
-    recording DURATION (the "short -> CPU, long -> GPU" economy):
+    recording DURATION:
 
       1) Whisper + AST fit in free VRAM ALONGSIDE the local language model
          (`audio_vram_mib`) -> ('cuda', False): GPU transcription, NO swap (fastest, free).
-      2) They do not fit and the recording is SHORTER than the threshold (swap cost
-         outweighs the gain), and the pipeline fits in system RAM on the CPU
-         (`audio_ram_mib`) -> ('cpu', False): NO swap; slower, but the language model
-         stays resident in VRAM.
-      3) Otherwise (LONG recording; CPU does not fit in RAM; or duration unknown and RAM is
-         insufficient) -> ('cuda', True): GPU transcription. The language model is unloaded
-         and restored (swap) ONLY if required. On a long recording the GPU gain outweighs
-         the swap cost; if RAM is insufficient the swap is unavoidable anyway.
+      2) They do not fit and the CPU co-resident condition holds -> ('cpu', False): the
+         language model STAYS in VRAM and the audio model runs on the CPU/system RAM (NO swap;
+         slower). Condition: the recording is SHORTER than the threshold **AND** the pipeline
+         fits in system RAM (`audio_ram_mib`). On a short recording the swap cost outweighs
+         the gain. Threshold: `cpu_max_seconds` / `profile.cpu_max_seconds` /
+         `DEFAULT_CPU_MAX_SECONDS` (LITE 15 s, PRO 20 s).
+      3) Otherwise (LONG recording or insufficient RAM) -> ('cuda', True): GPU transcription.
+         The language model is unloaded and restored (swap) ONLY if required. On a long
+         recording the GPU gain outweighs the swap cost; if RAM is insufficient the swap is
+         unavoidable anyway.
+
+    When the duration is unknown (duration_seconds=None) no swap is FORCED; only the memory
+    rule applies (CPU when RAM suffices, otherwise a mandatory swap). This avoids an
+    unnecessary language-model unload/reload for a single recording.
 
     If the local language model is not loaded (API provider) the GPU is already free
-    -> ('cuda', False). When `vram_free_mib`/`ram_free_mib` are omitted they are read
+    -> ('cuda', False). The CPU path is never a FORCED choice: if the chosen device fails the
+    worker layer falls back to the CPU; if there is no GPU at all (no CUDA/nvidia-smi) the CPU
+    remains as a last resort. When `vram_free_mib`/`ram_free_mib` are omitted they are read
     from the machine (if unreadable -> 0, i.e. assumed not to fit).
     """
     if not local_model_loaded:
@@ -257,15 +275,14 @@ def choose_plan(profile: Profile, duration_seconds: float | None = None,
     if vram_free_mib >= profile.audio_vram_mib:
         return 'cuda', False
     ram_ok = ram_free_mib >= profile.audio_ram_mib
-    # If the duration is unknown, decide only from memory (do not force a swap).
-    if duration_seconds is None:
-        return ('cpu', False) if ram_ok else ('cuda', True)
     threshold = cpu_max_seconds
     if threshold is None:
         threshold = profile.cpu_max_seconds
     if threshold is None:
         threshold = DEFAULT_CPU_MAX_SECONDS
-    short = duration_seconds <= threshold
-    if short and ram_ok:
+    # CPU co-resident ONLY when the recording is SHORTER than the threshold AND RAM suffices.
+    # If the duration is unknown no swap is forced (memory rule): no unnecessary language-model
+    # swap for a single recording.
+    if ram_ok and (duration_seconds is None or duration_seconds <= threshold):
         return 'cpu', False
     return 'cuda', True

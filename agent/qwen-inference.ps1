@@ -453,9 +453,22 @@ function Get-AsrProfileName {
     return 'pro'
 }
 
+function Get-AudioTimeoutSeconds([double]$durationSeconds) {
+    # Keep the fixed 180 s tool wall-clock from cutting off long audio recordings (the CPU
+    # co-resident path runs at ~real time; the GPU path adds swap). The timeout is derived
+    # from the recording duration: max(600, d*4 + 300), capped at 3600 s; if the duration is
+    # unknown, a sensible default (1800 s). This is only a deadlock safety net: "Stop" still
+    # takes effect INSTANTLY (Invoke-PythonTool also polls the cancel flag).
+    if ($durationSeconds -le 0) { return 1800 }
+    $t = [int][Math]::Ceiling($durationSeconds * 4.0 + 300.0)
+    if ($t -lt 600) { $t = 600 }
+    if ($t -gt 3600) { $t = 3600 }
+    return $t
+}
+
 function Get-AudioTranscriptionPlan([string]$path) {
     # If it cannot be measured, the SAFE side: swap on the local provider; on API the GPU is free.
-    $fallback = [pscustomobject]@{ device = 'cuda'; need_swap = ($provider -eq 'local') }
+    $fallback = [pscustomobject]@{ device = 'cuda'; need_swap = ($provider -eq 'local'); duration_seconds = $null }
     try {
         $whisperPy = Get-WhisperPyPath; $asrPy = Get-AsrPythonExe
         # The tier comes from the selected language-model profile (lite/pro); without a profile
@@ -467,7 +480,8 @@ function Get-AudioTranscriptionPlan([string]$path) {
         $plan = $null
         try { $plan = $raw | ConvertFrom-Json -ErrorAction Stop } catch { }
         if ($plan -and $plan.device) {
-            return [pscustomobject]@{ device = [string]$plan.device; need_swap = [bool]$plan.need_swap }
+            # duration_seconds: recording length (the timeout is derived from it; see Get-AudioTimeoutSeconds).
+            return [pscustomobject]@{ device = [string]$plan.device; need_swap = [bool]$plan.need_swap; duration_seconds = $plan.duration_seconds }
         }
     } catch { }
     return $fallback
@@ -479,6 +493,10 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
     $plan = Get-AudioTranscriptionPlan $path
     $needSwap = [bool]$plan.need_swap
     $device = [string]$plan.device
+    # Derive a FINITE tool timeout from the recording duration so the CPU co-resident path
+    # (long recording ~real time) or GPU + swap is not cut off at the fixed 180 s
+    # (see Get-AudioTimeoutSeconds).
+    $audioTimeout = Get-AudioTimeoutSeconds ([double]$plan.duration_seconds)
     $swapModel = $needSwap
     $resp = $null
     $err = $null
@@ -495,7 +513,7 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
         $audioEvents = if ($null -eq $JobData.audioEvents) { $true } else { [bool]$JobData.audioEvents }
         # The device/swap plan was decided above (free VRAM + RAM); the tier comes from the
         # selected profile (lite/pro); pass them to the worker as-is.
-        $payloadBase = @{ action = 'transcribe'; path = $path; language = 'auto'; events = $audioEvents; device = $device; need_swap = $needSwap }
+        $payloadBase = @{ action = 'transcribe'; path = $path; language = 'auto'; events = $audioEvents; device = $device; need_swap = $needSwap; timeoutSeconds = $audioTimeout }
         $asrProfile = Get-AsrProfileName
         if ($asrProfile) { $payloadBase.profile = $asrProfile }
         try {

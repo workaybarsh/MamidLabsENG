@@ -68,3 +68,23 @@ def test_installer_reads_packages_from_requirements_files():
     assert "throw ('Requirements file not found: ' + $path)" in installer
     # A file that is not found must now give an explicit error; the old inline array must be gone.
     assert "$script:AppPackages = @(" not in installer
+
+
+def test_asr_requirements_pin_cuda12_runtime_and_exclude_torch():
+    """venv\\asr: CTranslate2 4.x on Windows looks for cublas64_12.dll / cudnn_*64_9.dll; torch's
+    cu130 wheels ship cublas64_13.dll, so for the GPU the nvidia-cublas-cu12 + nvidia-cudnn-cu12
+    packages MUST be installed and PINNED. torch comes from a separate index, so it must NOT be
+    in asr.txt (otherwise the CPU wheel could be pulled in)."""
+    packages = {package_name(p) for p in parse_requirements("asr.txt")}
+    assert "nvidia-cublas-cu12" in packages
+    assert "nvidia-cudnn-cu12" in packages
+    assert not any(p.startswith("torch") for p in packages)
+    # Versions must be pinned (== ).
+    for pin in parse_requirements("asr.txt"):
+        assert "==" in pin, f"requirements/asr.txt: '{pin}' is not version-pinned"
+    # The installer reads asr.txt and installs into that environment (asr.py adds the DLL
+    # dirs from site-packages under nvidia\\*\\bin).
+    installer = read_text("scripts/install-mamidlabs.ps1")
+    assert "$script:AsrPackages = Read-Requirements 'asr.txt'" in installer
+    asr = read_text("agent/transcriber/asr.py")
+    assert "_add_cuda_dll_dirs" in asr and "nvidia" in asr

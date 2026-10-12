@@ -167,19 +167,33 @@ def test_choose_plan_priority_vram_then_ram_then_swap():
     assert config.choose_plan(profile, vram_free_mib=0, ram_free_mib=0) == ("cuda", True)
 
 
-def test_choose_plan_lite_uses_cpu_branch_for_short_long_uses_gpu():
-    """LITE also uses the same unified logic (RAM measured as sufficient): VRAM insufficient +
-    SHORT -> CPU/no swap, LONG -> GPU + mandatory swap."""
+def test_choose_plan_lite_short_uses_cpu_long_uses_gpu_swap():
+    """LITE policy (threshold: cpu_max_seconds = LITE_CPU_MAX_SECONDS = 15 s): when VRAM does
+    not fit, the CPU co-resident path is chosen ONLY when the recording is SHORTER than the
+    threshold AND system RAM suffices (('cpu', False); the language model stays in VRAM, the
+    audio model runs on the CPU, NO swap). A LONG recording or insufficient RAM -> GPU +
+    mandatory swap (('cuda', True))."""
     from transcriber import config
 
     profile = config.select_profile(total_mib=8000)
+    threshold = profile.cpu_max_seconds
+    assert threshold == config.LITE_CPU_MAX_SECONDS
+    # Enough free VRAM -> GPU, no swap (previous rule preserved).
     assert config.choose_plan(profile, vram_free_mib=profile.audio_vram_mib,
                              ram_free_mib=0) == ("cuda", False)
-    threshold = config.DEFAULT_CPU_MAX_SECONDS
+    # SHORT recording + enough RAM -> CPU co-resident, no swap.
     assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=0,
                              ram_free_mib=10 ** 6) == ("cpu", False)
+    assert config.choose_plan(profile, duration_seconds=threshold, vram_free_mib=0,
+                             ram_free_mib=10 ** 6) == ("cpu", False)
+    # LONG recording (including just above the threshold) -> GPU + mandatory swap.
     assert config.choose_plan(profile, duration_seconds=threshold + 1, vram_free_mib=0,
                              ram_free_mib=10 ** 6) == ("cuda", True)
+    assert config.choose_plan(profile, duration_seconds=3600, vram_free_mib=0,
+                             ram_free_mib=10 ** 6) == ("cuda", True)
+    # SHORT but RAM INSUFFICIENT -> mandatory swap.
+    assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=0,
+                             ram_free_mib=profile.audio_ram_mib - 1) == ("cuda", True)
 
 
 def test_choose_plan_without_local_model_never_swaps():
@@ -522,9 +536,10 @@ def test_worker_plan_action_decides_device_and_swap(monkeypatch, tmp_path):
     assert plan["device"] == "cuda" and plan["need_swap"] is False
 
 
-def test_lite_profile_uses_shared_plan(monkeypatch, tmp_path):
-    """LITE (8 GB) uses the same plan: since RAM is sufficient, a short recording uses the CPU
-    and a long one uses GPU + swap. With no local model (API) the GPU is free -> no swap."""
+def test_lite_profile_plan_short_cpu_long_gpu(monkeypatch, tmp_path):
+    """LITE (8 GB) plan: with enough RAM, a SHORT recording uses the CPU co-resident path (no
+    swap) and a LONG one uses GPU + mandatory swap; if RAM is insufficient (even a short
+    recording) the swap is mandatory. With no local model (API) the GPU is free -> no swap."""
     module = load_worker()
     from transcriber import config, audio
 
@@ -535,7 +550,13 @@ def test_lite_profile_uses_shared_plan(monkeypatch, tmp_path):
     monkeypatch.setattr(audio, "probe_duration_seconds", lambda path: 5.0)
     plan = module.plan({"profile": "pc1", "local_model_loaded": True, "path": str(src)})
     assert plan["device"] == "cpu" and plan["need_swap"] is False
+    # LONG recording -> GPU + mandatory swap.
     monkeypatch.setattr(audio, "probe_duration_seconds", lambda path: 3600.0)
+    plan = module.plan({"profile": "pc1", "local_model_loaded": True, "path": str(src)})
+    assert plan["device"] == "cuda" and plan["need_swap"] is True
+    # RAM insufficient -> even a SHORT recording requires the swap.
+    monkeypatch.setattr(config, "available_ram_mib", lambda: 0)
+    monkeypatch.setattr(audio, "probe_duration_seconds", lambda path: 5.0)
     plan = module.plan({"profile": "pc1", "local_model_loaded": True, "path": str(src)})
     assert plan["device"] == "cuda" and plan["need_swap"] is True
     # Local model not loaded (API) -> the GPU is free, no swap.
@@ -772,6 +793,42 @@ $out = Invoke-PythonTool @{{ x = 1 }} '{sleeper}' '{sys.executable}' 2
     assert "Tool timed out" in out, out
     elapsed = int(out.split("ELAPSED=")[1].split()[0])
     assert elapsed < 15, out
+
+
+# ------------------------------------- audio: finite timeout from recording duration
+def test_transcribe_sets_finite_timeout_from_recording_duration():
+    """The fixed 180 s tool wall-clock must not cut off long audio recordings (the CPU
+    co-resident path runs at ~real time; GPU + swap adds latency): the transcribe request
+    carries a FINITE `timeoutSeconds` derived from the recording duration, and the plan
+    action returns the recording duration (`duration_seconds`) so the timeout can be
+    computed from it."""
+    worker = read_text("agent/qwen-inference.ps1")
+    assert "function Get-AudioTimeoutSeconds" in worker
+    block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
+    assert "Get-AudioTimeoutSeconds" in block
+    assert "timeoutSeconds = $audioTimeout" in block
+    plan = worker.split("function Get-AudioTranscriptionPlan")[1].split("function ")[0]
+    assert "duration_seconds" in plan
+
+
+def test_audio_timeout_seconds_is_clamped(tmp_path):
+    """Get-AudioTimeoutSeconds rule: max(600, d*4+300), capped at 3600 s; if the duration is
+    unknown/0 -> 1800 s. Verified with a real pwsh."""
+    worker = read_text("agent/qwen-inference.ps1")
+    fn = _extract_ps_function(worker, "Get-AudioTimeoutSeconds")
+    script = fn + """
+'T0=' + (Get-AudioTimeoutSeconds 0)
+'T5=' + (Get-AudioTimeoutSeconds 5)
+'T120=' + (Get-AudioTimeoutSeconds 120)
+'T600=' + (Get-AudioTimeoutSeconds 600)
+'T3600=' + (Get-AudioTimeoutSeconds 3600)
+"""
+    out = _run_ps1(script, tmp_path)
+    assert "T0=1800" in out, out
+    assert "T5=600" in out, out
+    assert "T120=780" in out, out
+    assert "T600=2700" in out, out
+    assert "T3600=3600" in out, out
 
 
 # --------------------------------------------- F1/F2: context overflow guard

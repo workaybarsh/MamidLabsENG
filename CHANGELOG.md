@@ -93,6 +93,21 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **Audio: the LITE CPU/GPU policy and the GPU runtime DLLs were clarified; the transcribe timeout
+  is now tied to the recording duration.** (1) LITE ASR now uses the **CPU co-resident** path
+  (`('cpu', False)`; the language model stays in VRAM, the audio model runs on the CPU/system RAM,
+  no swap) ONLY when the recording is **shorter than** `LITE_CPU_MAX_SECONDS` (15 s) **AND** system
+  RAM suffices; for a long recording or insufficient RAM it uses **GPU + mandatory swap**
+  (`('cuda', True)`). The CPU path is never a forced choice: if the chosen device fails it falls
+  back to the CPU, and it remains the last resort when there is no GPU. PRO behavior is unchanged
+  (20 s). (2) `requirements\asr.txt` gained `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` (CTranslate2
+  4.x on Windows looks for `cublas64_12.dll` / `cudnn_*64_9.dll`; torch's cu130 wheels ship
+  `cublas64_13.dll`) and `asr.py` `_add_cuda_dll_dirs` adds `site-packages\nvidia\*\bin` to the DLL
+  search path; **GPU transcription now works** (verified with a real recording, `device=cuda`).
+  (3) The transcribe request now carries a finite `timeoutSeconds` derived from the recording
+  duration (`max(600, d*4+300)`, capped at 3600; 1800 when unknown) so a long CPU co-resident/swap
+  transcription is not cut off at the fixed 180 s; "Stop" still takes effect instantly.
+  `tests/test_transcriber.py` and `tests/test_requirements_files.py` guard these contracts.
 - **Audio transcription: the CPU fallback never ran because of a PowerShell dictionary bug (found
   in the end-to-end audio test).** When the primary device (GPU) failed, `Invoke-TranscribeWithModelSwap`
   built the CPU retry payload with `$payloadBase + @{ device = 'cpu' }`; in PowerShell a Hashtable
