@@ -42,7 +42,8 @@ function Get-AuditLogPath { Join-Path (Get-InstallRoot) 'logs\audit.jsonl' }
 # Action audit log: after each tool call one JSON line is appended to logs/audit.jsonl
 # (job/tool id, source channel, approval, result, changed paths). Document/command CONTENT
 # is never written - only identifying fields (path, command text, query, file name); API
-# keys never arrive in tool arguments, so they need no separate redaction.
+# keys never arrive in tool arguments, so they need no separate redaction. To keep the record
+# from growing without bound, once it exceeds 5 MB it is rotated to audit.1.jsonl (F3).
 # Defined as a function (same reason/pattern as Get-InstallRoot): when the file is loaded
 # only for its functions (behavior tests) top-level assignments do not run, and a method
 # call on null would blow up.
@@ -69,7 +70,18 @@ function Write-AuditLog([string]$tool, [string]$approval, [string]$result, [stri
         # file at the same time; the mutex keeps the lines from interleaving.
         $lock = Get-AuditLock
         $owns = $lock.WaitOne(2000)
-        try { Add-Content -LiteralPath $path -Value $line -Encoding utf8 }
+        try {
+            # F3: keep the audit record from growing without bound. When the cap (5 MB) is
+            # exceeded the current file is rotated to audit.1.jsonl (overwritten if present) and
+            # the new record goes to a clean file. A single rotation file is enough: the records
+            # carry only identifying fields and old lines are already out of scope, so multi-file
+            # rotation is unnecessary. The rotation is inside the same try, so the contract is
+            # preserved: audit writing NEVER fails the turn (the catch below swallows).
+            if ((Test-Path -LiteralPath $path -PathType Leaf) -and (Get-Item -LiteralPath $path).Length -ge 5MB) {
+                Move-Item -LiteralPath $path -Destination (Join-Path $dir 'audit.1.jsonl') -Force
+            }
+            Add-Content -LiteralPath $path -Value $line -Encoding utf8
+        }
         finally { if ($owns) { $lock.ReleaseMutex() } }
     } catch {
         # Failing to write the audit log must not block the user's request; we continue
@@ -156,7 +168,7 @@ function Test-BinaryFile([string]$path) {
     return ($controlCount / $bytes.Count) -gt 0.05
 }
 
-function Invoke-PythonTool([hashtable]$payload, [string]$scriptPath = $null, [string]$pythonPath = $null) {
+function Invoke-PythonTool([hashtable]$payload, [string]$scriptPath = $null, [string]$pythonPath = $null, [int]$timeoutSeconds = 0) {
     if (!$pythonPath) { $pythonPath = Get-PythonExe }
     if (!(Test-Path -LiteralPath $pythonPath -PathType Leaf)) { return 'Python tool is not installed.' }
     if (!$scriptPath) { $scriptPath = Get-ToolsPyPath }
@@ -178,10 +190,21 @@ function Invoke-PythonTool([hashtable]$payload, [string]$scriptPath = $null, [st
         # the wait loop polls for cancellation. Long audio/OCR/search jobs no longer block Stop.
         $outTask = $p.StandardOutput.ReadToEndAsync()
         $errTask = $p.StandardError.ReadToEndAsync()
+        # Wall-clock limit: if the subprocess gives no answer (deadlock, infinite loop) the whole
+        # job must not wait forever and the turn must not hang and fail. Default 180 s; the caller
+        # can override it with the parameter or $payload.timeoutSeconds (for long-running jobs).
+        # When exceeded the subprocess tree is killed and the existing error path is taken.
+        if ($timeoutSeconds -le 0 -and $payload -and $payload.timeoutSeconds) { $timeoutSeconds = [int]$payload.timeoutSeconds }
+        if ($timeoutSeconds -le 0) { $timeoutSeconds = 180 }
+        $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
         while (!$p.HasExited) {
             if ($Shared -and $Shared.Cancel) {
                 try { $p.Kill($true) } catch { }
                 throw [OperationCanceledException]::new()
+            }
+            if ([DateTime]::UtcNow -ge $deadline) {
+                try { $p.Kill($true) } catch { }
+                return "Tool timed out after $timeoutSeconds s."
             }
             Start-Sleep -Milliseconds 150
         }
@@ -192,6 +215,10 @@ function Invoke-PythonTool([hashtable]$payload, [string]$scriptPath = $null, [st
     } finally { $p.Dispose() }
 }
 
+# Runaway-repeat detector: looks in the last 800 characters for the same word (2-32 letters/
+# digits) repeated 6+ times in a row. The same threshold/pattern is used on the visible content
+# (F0) and on the reasoning accumulation (F4); the threshold is kept conservative so that
+# legitimate long output/thinking is not cut off by mistake.
 function Test-RepeatedOutput([string]$text) {
     if ([string]::IsNullOrWhiteSpace($text)) { return $false }
     $tail = if ($text.Length -gt 800) { $text.Substring($text.Length - 800) } else { $text }
@@ -485,6 +512,24 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
             try {
                 Emit 'status' 'Transcription failed with the chosen device; trying CPU…' | Out-Null
                 $candidate = Invoke-PythonTool ($payloadBase + @{ device = 'cpu' }) $whisperPy $asrPy
+                $parsed = $null
+                try { $parsed = $candidate | ConvertFrom-Json -ErrorAction Stop } catch { }
+                if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null }
+                elseif ($parsed -and $parsed.error) { $err = [Exception]::new([string]$parsed.error) }
+                else { $err = [Exception]::new([string]$candidate) }
+            } catch { $err = $_ }
+        }
+        # If the plan said "no swap" but no transcript was obtained after all, the language model
+        # is unloaded (CLEAN GPU + more free RAM) and retried ONCE, then restored. Under WDDM the
+        # free VRAM the plan reads can be optimistic while the model is loaded (see AGENTS
+        # pitfalls 7/13) and the no-swap path was silently failing into a transcript-less turn.
+        if ($err -and !$Shared.Cancel -and !$swapModel -and $provider -eq 'local') {
+            try {
+                Emit 'status' 'Could not transcribe the audio; unloading the language model temporarily and retrying…' | Out-Null
+                & (Get-ManageQwenPath) -Action stop | Out-Null
+                Wait-LocalModelStopped
+                $swapModel = $true
+                $candidate = Invoke-PythonTool ($payloadBase + @{ device = 'cuda'; need_swap = $true }) $whisperPy $asrPy
                 $parsed = $null
                 try { $parsed = $candidate | ConvertFrom-Json -ErrorAction Stop } catch { }
                 if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null }
@@ -1065,10 +1110,15 @@ function Invoke-ChatCompletion([hashtable]$body, [hashtable]$shared, [bool]$emit
                 $response = $script:http.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token).GetAwaiter().GetResult()
             } catch {
                 $cause = $_.Exception.GetBaseException()
-                if ($provider -ne 'local' -or $networkRetried -or $shared.Cancel -or $cts.IsCancellationRequested -or
+                # 'custom' (the user's own OpenAI-compatible endpoint) is also prone to transient
+                # connection drops (Ollama/LM Studio/vLLM can restart, the network can flap).
+                # Remote providers (openai/claude/gemini/deepseek) are PRESERVED: only local +
+                # custom are retried (once).
+                $retryableProvider = $provider -eq 'local' -or $provider -eq 'custom'
+                if (!$retryableProvider -or $networkRetried -or $shared.Cancel -or $cts.IsCancellationRequested -or
                     ($cause -isnot [Net.Http.HttpRequestException] -and $cause -isnot [IO.IOException] -and $cause -isnot [Net.Sockets.SocketException])) { throw }
                 $networkRetried = $true
-                Emit 'status' 'The connection to the local model dropped; reconnecting once...'
+                Emit 'status' $(if ($provider -eq 'custom') { 'The custom endpoint connection dropped; reconnecting once...' } else { 'The connection to the local model dropped; reconnecting once...' })
                 [Threading.Tasks.Task]::Delay(750, $cts.Token).GetAwaiter().GetResult()
                 continue
             }
@@ -1134,6 +1184,21 @@ function Invoke-ChatCompletion([hashtable]$body, [hashtable]$shared, [bool]$emit
                     $piece = [string]$delta.reasoning_content
                     $result.reasoning += $piece
                     if ($emitDeltas) { Emit 'thinking' $piece }
+                    # F4: on LITE thinking is UNLIMITED (there is no --reasoning-budget on the
+                    # server; a low-effort request does not turn it off). Because only the visible
+                    # content was checked, if the model started repeating in the reasoning stream it
+                    # spun to the 8192-token cap without a visible answer. The SAME threshold/pattern
+                    # used on the visible content (the same word 6+ times) is applied here too; the
+                    # threshold is conservative so legitimate long thinking is not cut off. If there
+                    # is NO visible answer the existing "empty answer" path (below, the low-effort
+                    # retry) still applies unchanged; if the actual answer was produced it is kept.
+                    if ($provider -eq 'local' -and (Test-RepeatedOutput $result.reasoning)) {
+                        $result.reasoning = Remove-RepeatedTail $result.reasoning
+                        if (!$result.finishReason) { $result.finishReason = 'repeat' }
+                        $finished = $true
+                        $stopForRepeat = $true
+                        if ($emitDeltas) { Emit 'status' 'The model started repeating itself while thinking; the stream was stopped at a safe point.' }
+                    }
                 }
                 if ($delta.content) {
                     $piece = [string]$delta.content
@@ -1182,7 +1247,10 @@ function Invoke-ChatCompletion([hashtable]$body, [hashtable]$shared, [bool]$emit
         # after is normal and must not be reported. Genuine (empty/tool-less/incomplete) drops
         # are still reported as errors.
         $usable = $result.finishReason -or ![string]::IsNullOrWhiteSpace($result.content) -or $result.toolParts.Count -gt 0
-        if ($provider -eq 'local' -and $isReset -and !$shared.Cancel -and $usable) {
+        # local + custom: if the connection dropped after an answer was produced (finish_reason/
+        # content/tool call) that is NOT an error; a '[Error]' line is not appended under the
+        # answer. Remote providers keep their behavior (only local/custom are tolerant).
+        if (($provider -eq 'local' -or $provider -eq 'custom') -and $isReset -and !$shared.Cancel -and $usable) {
             if (!$result.finishReason) { $result.finishReason = 'connection-closed' }
         } else {
             throw
@@ -1231,6 +1299,67 @@ function Get-PlainText($content) {
         elseif ($type -eq 'image_url') { $parts += '[image]' }
     }
     return ($parts -join ' ')
+}
+
+# F1: In-turn context overflow guard. Tool results accumulate during a turn and grow the prompt;
+# llama-server runs with --no-context-shift (see manage-qwen.ps1), so when the prompt exceeds
+# ctx-size the request returns an ERROR and the turn fails. So at the START of every turn the
+# estimated prompt size is measured and old outputs are shortened if needed. The estimate uses
+# the same approach as the desktop's Estimate-ContextTokens (chars/3; an image part is a fixed
+# 4096 chars); tool-call arguments also go into the context.
+function Estimate-MessagesTokens([Collections.ArrayList]$items) {
+    $chars = 0
+    foreach ($message in @($items.ToArray())) {
+        $content = $message.content
+        if ($content -is [string]) { $chars += $content.Length }
+        else {
+            foreach ($part in @($content)) {
+                if ($part -is [string]) { $chars += $part.Length }
+                elseif ($part.type -eq 'text') { $chars += ([string]$part.text).Length }
+                elseif ($part.type -eq 'image_url') { $chars += 4096 }
+            }
+        }
+        foreach ($call in @($message.tool_calls)) {
+            if ($call -and $call.function -and $call.function.arguments) { $chars += ([string]$call.function.arguments).Length }
+        }
+    }
+    return [int]($chars / 3)
+}
+
+# Shortens the OLDEST tool outputs (and, if needed, old assistant texts) that exceed the budget by
+# shrinking their content. It does NOT touch the system message (index 0) or the last user message:
+# the user's actual question and instructions are preserved. Messages are NOT deleted (the
+# assistant tool_calls / tool result pairing is not broken); only the content is shrunk.
+function Compress-TurnMessages([Collections.ArrayList]$items, [int]$budgetTokens) {
+    if ($items.Count -eq 0) { return 0 }
+    $marker = '[Old output shortened for the context limit]'
+    $lastUser = -1
+    for ($i = $items.Count - 1; $i -ge 0; $i--) {
+        if ([string]$items[$i].role -eq 'user') { $lastUser = $i; break }
+    }
+    $trimmed = 0
+    # 1) Shorten the oldest tool results.
+    for ($i = 1; $i -lt $items.Count; $i++) {
+        if ((Estimate-MessagesTokens $items) -le $budgetTokens) { break }
+        $message = $items[$i]
+        if ([string]$message.role -ne 'tool') { continue }
+        if ([string]$message.content -le $marker) { continue }
+        $message.content = $marker
+        $trimmed++
+    }
+    # 2) If it still does not fit, shorten the visible text of old assistant messages
+    #    (the tool_calls field is preserved; the tool pairing is not broken).
+    for ($i = 1; $i -lt $items.Count; $i++) {
+        if ((Estimate-MessagesTokens $items) -le $budgetTokens) { break }
+        if ($i -eq $lastUser) { continue }
+        $message = $items[$i]
+        if ([string]$message.role -ne 'assistant') { continue }
+        if ($message.content -is [string] -and $message.content.Length -gt $marker.Length) {
+            $message.content = $marker
+            $trimmed++
+        }
+    }
+    return $trimmed
 }
 
 function Test-OcrIntent([string]$text) {
@@ -1353,6 +1482,33 @@ function Add-TranscriptToMessages([Collections.ArrayList]$items, [string]$transc
     return $false
 }
 
+# When no transcript was obtained (error or empty result): if the note in the last user message
+# ("[The user attached an audio file: ...]") is left alone, the model takes the file for an
+# "attached document", tries to open it with read_document/read_bound_file and wastes all the
+# agent turns (in the UI test: 8/8 turns, only read_document; the file is never found). So the
+# note is combined with an explicit note saying the file is NOT a document and could not be
+# transcribed; the model then reports the situation to the user.
+function Set-AudioUnavailableNote([Collections.ArrayList]$items, [string]$fileName, [string]$reason) {
+    for ($i = $items.Count - 1; $i -ge 0; $i--) {
+        $message = $items[$i]
+        if ([string]$message.role -ne 'user') { continue }
+        $note = "[The audio file could not be transcribed ($fileName)] $reason " +
+            "This file is NOT a document (it is a sound recording); do not try to open it with tools " +
+            "like read_document/read_bound_file, the file cannot be found on any path. Tell the user " +
+            "briefly and clearly that the audio could not be transcribed."
+        if ($message.content -is [string]) {
+            $message.content = [string]$message.content + "`n`n" + $note
+        } else {
+            $parts = New-Object System.Collections.Generic.List[object]
+            foreach ($part in @($message.content)) { [void]$parts.Add($part) }
+            [void]$parts.Add(@{ type = 'text'; text = $note })
+            $message.content = @($parts.ToArray())
+        }
+        return $true
+    }
+    return $false
+}
+
 function Replace-CurrentImagesWithOcrToolNotice([Collections.ArrayList]$items) {
     for ($i = $items.Count - 1; $i -ge 0; $i--) {
         $message = $items[$i]
@@ -1448,11 +1604,13 @@ try {
                 }
             } else {
                 $reason = if ($tr -and $tr.error) { [string]$tr.error } else { 'Speech recognition produced no text.' }
+                [void](Set-AudioUnavailableNote $messages ([IO.Path]::GetFileName($audioPath)) $reason)
                 Emit 'status' "Could not transcribe the audio; continuing without a transcript. $reason"
             }
         } catch {
             # An exception caused by stopping is a cancellation, not an error.
             if ($Shared.Cancel) { Emit 'cancelled' 'The request was stopped.'; return }
+            [void](Set-AudioUnavailableNote $messages ([IO.Path]::GetFileName($audioPath)) $_.Exception.Message)
             Emit 'status' ("Could not transcribe the audio; continuing without a transcript. " + $_.Exception.Message)
         }
     }
@@ -1528,6 +1686,33 @@ try {
     for ($round = 0; $round -lt $maxRounds; $round++) {
         if ($Shared.Cancel) { Emit 'cancelled' 'Request stopped.'; return }
         Emit 'status' $(if ($round -eq 0) { 'Thinking…' } else { "Agent turn $($round + 1)/$maxRounds..." })
+        # F1/F2: in-turn context guard. $contextLimit comes from the selected model (local
+        # profile 32768, the custom/API model's stored value). If the estimated prompt size
+        # exceeds the budget we shorten the OLDEST tool outputs; if it still does not fit we ask
+        # for a visible answer from the findings at hand without continuing with tools (instead
+        # of the server's 400).
+        $contextLimit = if ($JobData.contextLimit) { [int]$JobData.contextLimit } else { 32768 }
+        $contextReserve = 1024
+        $promptTokensEst = Estimate-MessagesTokens $messages
+        $forceFinalAnswer = $false
+        if ($promptTokensEst + [int]$JobData.maxTokens + $contextReserve -gt $contextLimit) {
+            $trimBudget = [math]::Max(256, $contextLimit - [int]$JobData.maxTokens - $contextReserve)
+            $trimmedCount = Compress-TurnMessages $messages $trimBudget
+            $promptTokensEst = Estimate-MessagesTokens $messages
+            if ($promptTokensEst + 256 + $contextReserve -gt $contextLimit) {
+                $forceFinalAnswer = $true
+                Emit 'status' 'The context limit was exceeded; asking for an answer from the findings at hand without continuing with tools.'
+            } elseif ($trimmedCount -gt 0) {
+                Emit 'status' 'Approaching the context limit; old tool outputs were shortened.'
+            }
+        }
+        # F2: cap max_tokens to the remaining context room (small-context model/endpoint).
+        # On remote providers (openai/claude/gemini/deepseek) the ceiling is KEPT; it is applied
+        # only on local + custom endpoints.
+        $maxTokens = [int]$JobData.maxTokens
+        if ($provider -eq 'local' -or $provider -eq 'custom') {
+            $maxTokens = [math]::Min($maxTokens, [math]::Max(256, $contextLimit - $promptTokensEst - $contextReserve))
+        }
         # CAUTION: the [array] cast is there ON PURPOSE. If it were assigned directly as a
         # hashtable value like "messages = if (...) {...} else {...}", then while $messages has a
         # SINGLE element (first turn of the chat, no tools) PowerShell "unrolls" the array into a
@@ -1559,7 +1744,7 @@ try {
         $body = @{
             model = [string]$JobData.model
             messages = $sendMessages
-            max_tokens = [int]$JobData.maxTokens
+            max_tokens = $maxTokens
             stream = $true
             stream_options = @{ include_usage = $true }
             temperature = 0.6
@@ -1570,7 +1755,11 @@ try {
         # same web tools again (search loop) AND from looking for the answer elsewhere (rummaging in
         # the bound folder's files), web tools are always dropped and, if the user did not ask about
         # files, the file tools too. After the first failure all are still offered (one retry).
-        $offeredTools = if ($script:webToolFailCount -ge 2) {
+        # F1: if the context limit was exceeded, stop offering tools and ask the model to write a
+        # visible answer from the findings at hand.
+        $offeredTools = if ($forceFinalAnswer) {
+            @()
+        } elseif ($script:webToolFailCount -ge 2) {
             $blocked = @('search_web', 'fetch_page', 'find_reference_image')
             if (!(Test-FileIntent $userText)) { $blocked += @('list_bound_files', 'read_bound_file') }
             @($toolDefinitions | Where-Object { $_.function.name -notin $blocked })
@@ -1583,6 +1772,11 @@ try {
         # Likewise, if a web tool fails because of the network, a note prevents the model from
         # working around it with commands/pages. Both notes are merged into one message.
         $systemNotes = @()
+        if ($forceFinalAnswer) {
+            $systemNotes += (
+                '[SYSTEM NOTE] The context window is full. Do NOT call any new tools now; using the tool ' +
+                'results you have and this conversation, write a clear, short and direct answer for the user.')
+        }
         if ($script:deniedTools -and $script:deniedTools.Count -gt 0) {
             $systemNotes += (
                 'In this request the user DENIED the following operations in the approval window: ' + (@($script:deniedTools) -join ', ') +
@@ -1609,7 +1803,7 @@ try {
         if ($systemNotes.Count -gt 0) {
             $body.messages = @($sendMessages) + @(@{ role = 'user'; content = ('[System note] ' + ($systemNotes -join ' ')) })
         }
-        if ($JobData.multiImageOcr -and $round -eq 0) {
+        if ($JobData.multiImageOcr -and $round -eq 0 -and !$forceFinalAnswer) {
             $body.tool_choice = @{ type = 'function'; function = @{ name = 'read_images_ocr' } }
         }
         if ($JobData.effort) {

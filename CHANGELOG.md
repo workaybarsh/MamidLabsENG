@@ -93,6 +93,37 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **Hygiene: audit-log rotation and a thinking (reasoning) repeat guard (F3/F4).** (F3) The tool-call
+  record `logs\audit.jsonl` grew without bound; now, before a write, if the file exceeds 5 MB it is
+  rotated to `audit.1.jsonl` (overwriting any previous one) and the new line goes to the clean
+  file — the rotation is inside the existing `try/catch`, so audit writing never fails a turn. (F4)
+  The runaway-repeat detector looked only at the visible content; because thinking is **unlimited**
+  on LITE, if the model started repeating in the `reasoning_content` stream it spun to the
+  8192-token cap with no visible answer. The **same threshold/pattern** is now applied
+  conservatively to the reasoning accumulation too; on strong repetition the stream is stopped at a
+  safe point (if there is no visible answer the existing empty-answer path is kept).
+- **Agent-loop resilience: in-turn context overflow, wall-clock limit and `custom`-provider
+  tolerance.** (F1) Tool results accumulating during a turn could push the prompt past
+  `contextLimit`/`--ctx-size` and, because of `--no-context-shift`, the server returned an error and
+  the turn failed; now at the start of every turn the estimated prompt size is computed and, if the
+  budget is exceeded, the **oldest tool outputs** are shortened (keeping the system message and the
+  last user message); if it still does not fit the model is asked for a visible answer from the
+  findings without continuing with tools. (F2) `max_tokens` is capped to the remaining context room
+  (small-context model/endpoint). (D2) Python subprocesses now have a wall-clock limit (default
+  180 s; killed when exceeded). (D3) An OpenAI-compatible `custom` endpoint retries once on a
+  transient drop and does not treat a drop as an error when a response was produced; remote
+  providers keep their behavior.
+- **When an attached audio file could not be transcribed the model tried to read it and wasted the
+  turns (found in an end-to-end audio test).** When an attached `.wav` produced no transcript the
+  worker silently continued "without a transcript" and the `[The user attached an audio file: ...]`
+  note in the user message was left alone; the model took it for an "attached document", tried to
+  open the `.wav` with `read_document`/`read_bound_file` and spent **8/8 agent turns** without ever
+  producing a transcript. Now (1) if the plan says "no swap" but no transcript is obtained, the
+  language model is unloaded and retried once with a **clean GPU/RAM** (under WDDM the free VRAM the
+  plan reads can be optimistic while the model is loaded), and (2) if it still fails an explicit
+  note is added to the last user message saying the audio is **not a document** and could not be
+  transcribed. The engine itself was sound (calling `whisper-tools.py` directly works); the flaw was
+  the worker swallowing the failure and leaving the model with the wrong context.
 - **`EULA.txt` was not copied by script-based updates:** the `install-mamidlabs.ps1` upper-file
   list (`qwen-desktop.ps1`, `launch-qwen-desktop.vbs`, `README.md`, `LICENSE`) is copied to the root
   and to the `setup-source` package; because `EULA.txt` was not in the list, the license file was

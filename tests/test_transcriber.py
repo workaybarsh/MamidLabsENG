@@ -5,9 +5,13 @@ Qwen3-ASR and whisper.cpp were fully removed. Heavy tests are skipped when the m
 environment is unavailable; the contracts are always checked.
 """
 import importlib.util
+import json
 import shutil
 import subprocess
 import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -666,6 +670,51 @@ def test_transcription_honors_cancel_and_stop_does_not_wait_for_restore():
     assert "Emit 'cancelled'" in caller
 
 
+def test_worker_steers_model_away_from_reading_failed_audio():
+    """Regression (end-to-end audio test): when no transcript is obtained (error or empty result)
+    the worker does NOT leave the '[The user attached an audio file: ...]' note in the last user
+    message alone. Otherwise the model takes the file for an 'attached document', tries to open it
+    with read_document/read_bound_file, wastes ALL agent turns (>8) and gives the user not a single
+    word; no transcript bubble is produced either. Also, if the plan says 'no swap' but no
+    transcript is obtained after all, the language model is unloaded and retried ONCE with a CLEAN
+    GPU/RAM."""
+    worker = read_text("agent/qwen-inference.ps1")
+    assert "function Set-AudioUnavailableNote" in worker
+    # In BOTH failure paths of a failed transcript (empty/error result + exception) the steering
+    # note is added.
+    caller = worker.split("$currentAudioPaths = @($JobData.currentAudioPaths")[1].split("Automatic context")[0]
+    assert caller.count("Set-AudioUnavailableNote") >= 2
+    assert "read_document/read_bound_file" in worker
+    # If the no-swap path fails, retry with a swap (clean GPU + more free RAM).
+    block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
+    assert "!$swapModel -and $provider -eq 'local'" in block
+    assert "($payloadBase + @{ device = 'cuda'; need_swap = $true })" in block
+    assert "Wait-LocalModelStopped" in block
+    # Regression: the old "continuing without a transcript" path cannot continue without the note.
+    assert 'Emit \'status\' "Could not transcribe the audio; continuing without a transcript. $reason"' in caller
+
+
+def test_set_audio_unavailable_note_isolated(tmp_path):
+    """Set-AudioUnavailableNote is exercised in isolation: the steering note is added to the last
+    user message and explicitly steers the model away from reading the file (real pwsh)."""
+    worker = read_text("agent/qwen-inference.ps1")
+    fn = _extract_ps_function(worker, "Set-AudioUnavailableNote")
+    script = fn + """
+$items = [Collections.ArrayList]::new()
+[void]$items.Add(@{ role = 'user'; content = @(@{ type = 'text'; text = '[The user attached an audio file: audio.wav]' }) })
+$ok = Set-AudioUnavailableNote $items 'audio.wav' 'CUDA out of memory'
+'OK=' + $ok
+'COUNT=' + @($items[0].content).Count
+'NOTE=' + [string]$items[0].content[-1].text
+"""
+    out = _run_ps1(script, tmp_path)
+    assert "OK=True" in out
+    assert "COUNT=2" in out
+    assert "NOT a document" in out
+    assert "read_document" in out
+    assert "audio.wav" in out
+
+
 def test_audio_turn_preempts_language_model_loading():
     desktop = read_text("qwen-desktop.ps1")
     assert "function Stop-ModelSwitchForAudio" in desktop
@@ -684,6 +733,231 @@ def test_python_tool_subprocess_is_killed_instantly_on_stop():
     asr = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
     # The device loop was removed; the CPU fallback runs only if NOT cancelled.
     assert "if ($err -and !$Shared.Cancel) {" in asr
+
+
+# ---------------------------------------------------- D2: wall-clock limit
+def test_python_tool_has_wall_clock_timeout():
+    """D2: the Invoke-PythonTool wait loop used to poll only for cancellation; if the subprocess
+    deadlocked the whole job waited forever. There is now an upper bound (default 180 s;
+    overridable by a parameter or $payload.timeoutSeconds) and when it is exceeded the subprocess
+    tree is killed and an error returned; cancel behavior is preserved."""
+    worker = read_text("agent/qwen-inference.ps1")
+    block = worker.split("function Invoke-PythonTool")[1].split("function ")[0]
+    assert "function Invoke-PythonTool([hashtable]$payload, [string]$scriptPath = $null, [string]$pythonPath = $null, [int]$timeoutSeconds = 0)" in worker
+    assert "$payload.timeoutSeconds" in block
+    assert "if ($timeoutSeconds -le 0) { $timeoutSeconds = 180 }" in block
+    assert "$deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)" in block
+    assert "[DateTime]::UtcNow -ge $deadline" in block
+    assert "return \"Tool timed out after $timeoutSeconds s.\"" in block
+    # Cancel behavior is preserved (cancel is checked first, then the timeout).
+    assert block.index("$Shared.Cancel") < block.index("-ge $deadline")
+
+
+def test_python_tool_wall_clock_timeout_kills_subprocess(tmp_path):
+    """D2 behavior: a subprocess sleeping forever is killed at the timeout and the job returns an
+    error WITHOUT hanging (real pwsh + a real Python process)."""
+    worker = read_text("agent/qwen-inference.ps1")
+    fn = _extract_ps_function(worker, "Invoke-PythonTool")
+    sleeper = tmp_path / "sleeper.py"
+    sleeper.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+    script = fn + f"""
+$shared = @{{ Cancel = $false }}
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$out = Invoke-PythonTool @{{ x = 1 }} '{sleeper}' '{sys.executable}' 2
+'OUT=' + $out
+'ELAPSED=' + [int]$sw.Elapsed.TotalSeconds
+"""
+    out = _run_ps1(script, tmp_path)
+    assert "Tool timed out" in out, out
+    elapsed = int(out.split("ELAPSED=")[1].split()[0])
+    assert elapsed < 15, out
+
+
+# --------------------------------------------- F1/F2: context overflow guard
+def test_inference_loop_guards_against_context_overflow():
+    """F1/F2: tool results accumulating during a turn could push the prompt past ctx-size and,
+    with --no-context-shift, the server returned an ERROR and the turn failed. At the START of
+    every turn the estimated prompt size is computed; if the budget is exceeded the OLDEST tool
+    outputs are shortened, and if it still does not fit the model is asked for a visible answer
+    without continuing with tools. max_tokens is also capped to the remaining room."""
+    worker = read_text("agent/qwen-inference.ps1")
+    assert "function Estimate-MessagesTokens" in worker
+    assert "function Compress-TurnMessages" in worker
+    assert "$promptTokensEst = Estimate-MessagesTokens $messages" in worker
+    assert "Compress-TurnMessages $messages $trimBudget" in worker
+    assert "Approaching the context limit; old tool outputs were shortened." in worker
+    assert "The context limit was exceeded; asking for an answer from the findings at hand without continuing with tools." in worker
+    # max_tokens is capped to the remaining room; the sent body uses that value.
+    assert "$maxTokens = [math]::Min($maxTokens, [math]::Max(256, $contextLimit - $promptTokensEst - $contextReserve))" in worker
+    assert "max_tokens = $maxTokens" in worker
+    assert "max_tokens = [int]$JobData.maxTokens" not in worker
+    # Safe ending: no tools are offered.
+    assert "$offeredTools = if ($forceFinalAnswer)" in worker
+    assert "$forceFinalAnswer" in worker.split("function Estimate-MessagesTokens")[1]
+
+
+def test_estimate_and_compress_turn_messages_isolated(tmp_path):
+    """F1 behavior: the estimate grows with tool output; Compress-TurnMessages shortens the
+    OLDEST over-budget tool output, keeps the system message and the LAST user message, and does
+    not delete a message (the assistant tool_calls / tool pairing is not broken)."""
+    worker = read_text("agent/qwen-inference.ps1")
+    fn = _extract_ps_function(worker, "Estimate-MessagesTokens") + "\n\n" + \
+        _extract_ps_function(worker, "Compress-TurnMessages")
+    script = fn + """
+$items = [Collections.ArrayList]::new()
+[void]$items.Add(@{ role = 'system'; content = 'SYSTEM INSTRUCTIONS' })
+[void]$items.Add(@{ role = 'user'; content = 'first question' })
+[void]$items.Add(@{ role = 'assistant'; content = ''; tool_calls = @(@{ id = 'c1'; type = 'function'; function = @{ name = 'read_bound_file'; arguments = '{}' } }) })
+[void]$items.Add(@{ role = 'tool'; tool_call_id = 'c1'; content = ('X' * 30000) })
+[void]$items.Add(@{ role = 'user'; content = 'LAST QUESTION' })
+'BEFORE=' + (Estimate-MessagesTokens $items)
+$n = Compress-TurnMessages $items 500
+'AFTER=' + (Estimate-MessagesTokens $items)
+'TRIMMED=' + $n
+'COUNT=' + $items.Count
+'SYS=' + [string]$items[0].content
+'LAST=' + [string]$items[4].content
+'TOOL=' + [string]$items[3].content
+'ARGS=' + [string]$items[2].tool_calls[0].function.arguments
+"""
+    out = _run_ps1(script, tmp_path)
+    before = int(out.split("BEFORE=")[1].split()[0])
+    after = int(out.split("AFTER=")[1].split()[0])
+    assert before >= 10000, out
+    assert after < before, out
+    trimmed = int(out.split("TRIMMED=")[1].split()[0])
+    assert trimmed >= 1, out
+    assert "COUNT=5" in out
+    assert "SYS=SYSTEM INSTRUCTIONS" in out
+    assert "LAST=LAST QUESTION" in out
+    assert "shortened" in out.split("TOOL=")[1]
+    assert "ARGS={}" in out
+
+
+# --------------------------------------------------- F3: audit log rotation
+def test_audit_log_has_size_rotation():
+    """F3: logs/audit.jsonl grew without bound; there was no size cap/rotation. When the cap
+    (5 MB) is exceeded the current file is rotated to audit.1.jsonl (overwritten if present) and
+    the new record goes to a clean file. The rotation is inside the same try; audit writing NEVER
+    fails the turn (the existing catch swallows)."""
+    worker = read_text("agent/qwen-inference.ps1")
+    block = worker.split("function Write-AuditLog")[1].split("$endpoint =")[0]
+    assert "5MB" in block
+    assert "audit.1.jsonl" in block
+    assert "Move-Item" in block and "-Force" in block
+    # The rotation must be INSIDE the mutex-held block and BEFORE the write (races prevented).
+    after_lock = block.split("$owns = $lock.WaitOne(2000)")[1]
+    assert after_lock.index("Move-Item") < after_lock.index("Add-Content")
+    # try/catch is preserved: a write/rotation error is swallowed, the turn does not fail.
+    assert "catch {" in block
+
+
+def test_write_audit_log_rotates_when_oversized(tmp_path):
+    """F3 behavior (real pwsh): an audit.jsonl over 5 MB is rotated to audit.1.jsonl before the
+    next write (overwriting an existing rotation file), and the new line goes to the clean file.
+    Because the file is small after the rotation, the second write does not rotate again."""
+    worker = read_text("agent/qwen-inference.ps1")
+    fn = _extract_ps_function(worker, "Get-AuditLock") + "\n\n" + \
+        _extract_ps_function(worker, "Write-AuditLog")
+    log_dir = tmp_path / "logs"
+    log_path = log_dir / "audit.jsonl"
+    rotated = log_dir / "audit.1.jsonl"
+    script = fn + f"""
+function Get-AuditLogPath {{ '{log_path}' }}
+[IO.Directory]::CreateDirectory('{log_dir}') | Out-Null
+# An existing rotation file (should be overwritten) + 6 MB of filled records over the cap.
+[IO.File]::WriteAllText('{rotated}', 'OLD-ROTATED-CONTENT')
+[IO.File]::WriteAllText('{log_path}', ('x' * 999 + "`n") * 6000)
+Write-AuditLog 'read_bound_file' 'not_required' 'ok' 'a.txt' ''
+Write-AuditLog 'run_command' 'asked_yes' 'ok' 'echo hi' 'C:\\tmp\\out.txt'
+'WROTE=ok'
+"""
+    out = _run_ps1(script, tmp_path)
+    assert "WROTE=ok" in out, out
+    new_lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(new_lines) == 2, new_lines
+    assert '"tool":"read_bound_file"' in new_lines[0]
+    assert '"tool":"run_command"' in new_lines[1]
+    rotated_text = rotated.read_text(encoding="utf-8")
+    assert rotated_text.startswith("x" * 100), rotated_text[:120]
+    assert "OLD-ROTATED-CONTENT" not in rotated_text
+    assert len(rotated_text.splitlines()) == 6000
+
+
+# --------------------------------------------- F4: reasoning repeat guard
+def test_reasoning_repeat_guard_uses_same_threshold():
+    """F4: thinking is unlimited on LITE; because the runaway detector looked only at the visible
+    content, if the model started repeating in the reasoning stream it spun to the 8192-token cap
+    without a visible answer. The SAME threshold/pattern is applied to the reasoning accumulation
+    and the stream is stopped safely; if there is no visible answer the existing 'empty answer'
+    path (which does not look at finishReason) still applies unchanged."""
+    worker = read_text("agent/qwen-inference.ps1")
+    block = worker.split("if ($delta.reasoning_content) {")[1].split("if ($delta.content) {")[0]
+    assert "(Test-RepeatedOutput $result.reasoning)" in block
+    assert "Remove-RepeatedTail $result.reasoning" in block
+    assert "$stopForRepeat = $true" in block
+    assert "$finished = $true" in block
+    # The guard is limited to the local stream; remote providers are unaffected (same as content).
+    assert "$provider -eq 'local'" in block
+    # The empty-answer path still looks at the visible content; a reasoning repeat does not break it.
+    assert 'IsNullOrWhiteSpace($turn.content)' in worker
+
+
+class ReasoningRepeatHandler(BaseHTTPRequestHandler):
+    """SSE: sends only reasoning_content and repeats the same word 6+ times; [DONE] is not sent
+    and the connection stays open. Without the F4 guard the client would spin to 8192 tokens or
+    wait for the 120 s silence timeout."""
+
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        try:
+            for _ in range(400):
+                chunk = {"choices": [{"index": 0, "delta": {"reasoning_content": "thinking "}}]}
+                self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
+                self.wfile.flush()
+            time.sleep(60)
+        except OSError:
+            pass
+
+    def log_message(self, *args):
+        pass
+
+
+def test_reasoning_repeat_stops_stream_early(tmp_path):
+    """F4 behavior (real pwsh + a fake SSE server): if a repeat in the reasoning stream is not
+    stopped early, LITE spins to 8192 tokens with no visible answer. The same threshold/pattern
+    is applied to the reasoning; the stream closes safely with 'repeat', there is no visible
+    answer (so the existing empty-answer/retry path can run) and no exception leaks."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ReasoningRepeatHandler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        script = f"""
+$job = @{{ messages = @(@{{ role = 'user'; content = 'hi' }}); compactOnly = $true; model = 'test'; contextLimit = 32768; maxTokens = 8192; agent = $false; internet = $false; office = $false; documentCreate = $false }}
+$shared = @{{ Cancel = $false }}
+. '{ROOT}\\agent\\qwen-inference.ps1' $job $shared | Out-Null
+$endpoint = 'http://127.0.0.1:{server.server_port}/v1/chat/completions'
+$script:http = [Net.Http.HttpClient]::new(); $script:http.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+$turn = @{{ reasoning = ''; content = ''; usage = $null; toolParts = @{{}}; finishReason = $null }}
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$threw = ''
+try {{ Invoke-ChatCompletion @{{ messages = @() }} $shared $false $turn | Out-Null }} catch {{ $threw = [string]$_.Exception.GetBaseException().Message }}
+@{{ content = $turn.content; reasoningLen = $turn.reasoning.Length; finish = $turn.finishReason; threw = $threw; seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1) }} | ConvertTo-Json -Compress
+"""
+        out = _run_ps1(script, tmp_path)
+    finally:
+        server.shutdown()
+    got = json.loads(out.strip().splitlines()[-1])
+    assert got["finish"] == "repeat", got
+    assert got["content"] == "", got
+    assert got["threw"] == "", got
+    assert got["reasoningLen"] < 2000, got
+    assert got["seconds"] < 15, got
 
 
 def test_stop_cancels_work_but_never_kills_an_in_flight_model_load():

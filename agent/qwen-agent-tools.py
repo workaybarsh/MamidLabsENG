@@ -3,6 +3,7 @@ import ipaddress
 import re
 import socket
 import sys
+import threading
 import urllib.request
 from urllib.parse import urlparse
 
@@ -10,6 +11,17 @@ from urllib.parse import urlparse
 MAX_PAGE_BYTES = 3_000_000
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
 MAX_REFERENCE_PIXELS = 40_000_000
+
+# On a slow DNS, socket.getaddrinfo can block; resolution runs in a separate
+# thread bounded with join(timeout). If that time is exceeded, _pin_resolution
+# raises OSError; the caller turns it into the existing clean error-JSON flow
+# (no exception leaks out).
+DNS_TIMEOUT_SECONDS = 5
+# ddgs tries several search-engine backends internally, so the total time of
+# search_web could be backend x timeout (measured: ~60 s). A single overall
+# upper bound (deadline) is applied; when exceeded, the remaining backends are
+# not awaited, collected results are returned if any, otherwise clean error JSON.
+SEARCH_DEADLINE_SECONDS = 25
 
 # DNS rebinding protection: _validate_remote_url resolved and validated the host once,
 # but the real connection (urllib/http.client) resolved it again with a separate DNS
@@ -26,7 +38,25 @@ _real_getaddrinfo = socket.getaddrinfo
 
 
 def _pin_resolution(host, port):
-    results = _real_getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    # The resolution runs in a separate thread bounded with join(timeout), so a
+    # slow/stuck DNS query cannot block. The chosen addresses (pinning) are
+    # unchanged; only a time limit is added.
+    outcome = {}
+
+    def _resolve():
+        try:
+            outcome['results'] = _real_getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except Exception as exc:  # passed on to the caller as-is
+            outcome['error'] = exc
+
+    worker = threading.Thread(target=_resolve, daemon=True)
+    worker.start()
+    worker.join(DNS_TIMEOUT_SECONDS)
+    if worker.is_alive():
+        raise OSError('DNS resolution timed out.')
+    if 'error' in outcome:
+        raise outcome['error']
+    results = outcome['results']
     _pinned_addresses[host] = results
     return [ipaddress.ip_address(item[4][0]) for item in results]
 
@@ -96,12 +126,31 @@ def search_web(request):
     from ddgs import DDGS
     query = str(request.get('query', ''))[:500]
     count = max(1, min(int(request.get('count', 5)), 8))
-    try:
-        # An unreachable search engine must not keep the job waiting for minutes.
-        results = list(DDGS(timeout=15).text(query, max_results=count))
-    except Exception as exc:
-        return json.dumps({'error': f'Web search failed: {exc}'}, ensure_ascii=False)
-    return json.dumps(results, ensure_ascii=False)
+    collected = []
+    failure = {}
+
+    def _search():
+        try:
+            # An unreachable search engine must not keep the job waiting for minutes.
+            # The backend evaluation tries engines sequentially/in parallel, so the
+            # overall time is bounded by the deadline on the outside.
+            for item in DDGS(timeout=15).text(query, max_results=count):
+                collected.append(item)
+        except Exception as exc:
+            failure['error'] = exc
+
+    worker = threading.Thread(target=_search, daemon=True)
+    worker.start()
+    worker.join(SEARCH_DEADLINE_SECONDS)
+    if worker.is_alive():
+        # The overall time limit was exceeded: stop waiting for the remaining
+        # backends. Return collected results if any, otherwise valid error JSON.
+        if collected:
+            return json.dumps(collected, ensure_ascii=False)
+        return json.dumps({'error': 'Web search timed out: no results.'}, ensure_ascii=False)
+    if 'error' in failure:
+        return json.dumps({'error': f'Web search failed: {failure["error"]}'}, ensure_ascii=False)
+    return json.dumps(collected, ensure_ascii=False)
 
 
 def fetch_page(request):
@@ -139,7 +188,9 @@ def find_reference_image(request):
     os.makedirs(out_dir, exist_ok=True)
 
     try:
-        results = list(DDGS().images(query, max_results=8))
+        # Image search must also use an explicit timeout like search_web;
+        # otherwise it depends on the ddgs default and can stall the job.
+        results = list(DDGS(timeout=15).images(query, max_results=8))
     except Exception as exc:
         return json.dumps({'error': 'image search failed: %s' % exc}, ensure_ascii=False)
 

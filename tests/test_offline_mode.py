@@ -12,11 +12,14 @@ web tool stalls for a long time, leaving the local model connection idle until
 it is dropped. Here we guarantee the tool layer behaves cleanly while offline.
 """
 import importlib.util
+import ipaddress
 import json
 import os
 import socket
 import subprocess
 import sys
+import threading
+import time
 import types
 from pathlib import Path
 
@@ -138,3 +141,163 @@ def test_offline_real_tool_process_fails_cleanly():
     assert proc.returncode == 0, proc.stderr
     data = json.loads(proc.stdout.strip().splitlines()[-1])
     assert "error" in data
+
+
+# --- Flaky-network resilience: D1 (image search timeout), D4 (DNS timeout),
+# --- D5 (search_web overall deadline). These tests cover the relevant branches
+# --- fast and deterministically, without waiting on the real network.
+
+def test_image_search_uses_an_explicit_ddgs_timeout(qat, monkeypatch):
+    """D1: find_reference_image image search must also use an explicit timeout;
+    otherwise it depends on the ddgs default (same pattern as search_web)."""
+    monkeypatch.setattr(os, "makedirs", lambda *a, **k: None)  # do not create folders in the repo
+    captured = {}
+
+    class RecordingDDGS:
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+
+        def images(self, *args, **kwargs):
+            return []  # no results: falls into the "no suitable image" path
+
+    fake = types.ModuleType("ddgs")
+    fake.DDGS = RecordingDDGS
+    monkeypatch.setitem(sys.modules, "ddgs", fake)
+
+    out = qat.find_reference_image({"query": "istanbul"})
+
+    data = json.loads(out)
+    assert "error" in data
+    assert captured.get("timeout") == 15
+
+
+def test_pin_resolution_pins_the_validated_address(qat, monkeypatch):
+    """D4: the pinning behavior is preserved; even though resolution runs in a
+    thread, the validated addresses are stored exactly as before."""
+    qat._pinned_addresses.clear()
+    fake = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+    monkeypatch.setattr(qat, "_real_getaddrinfo", lambda *a, **k: fake)
+
+    addresses = qat._pin_resolution("example.com", 443)
+
+    assert addresses == [ipaddress.ip_address("93.184.216.34")]
+    assert qat._pinned_addresses["example.com"] == fake
+
+
+def test_pin_resolution_propagates_dns_errors(qat, monkeypatch):
+    """D4: a getaddrinfo error is passed from the thread to the caller as-is
+    (the existing error flow is preserved)."""
+    def failing(*args, **kwargs):
+        raise socket.gaierror("getaddrinfo failed")
+
+    monkeypatch.setattr(qat, "_real_getaddrinfo", failing)
+
+    with pytest.raises(OSError):
+        qat._pin_resolution("broken.invalid", 443)
+
+
+def test_pin_resolution_times_out_instead_of_blocking(qat, monkeypatch):
+    """D4: on a slow DNS _pin_resolution must not block forever; on timeout it
+    raises OSError (no exception leaks out)."""
+    monkeypatch.setattr(qat, "DNS_TIMEOUT_SECONDS", 0.1)
+    release = threading.Event()
+
+    def hanging(*args, **kwargs):
+        release.wait(5)
+        return []
+
+    monkeypatch.setattr(qat, "_real_getaddrinfo", hanging)
+    try:
+        with pytest.raises(OSError):
+            qat._pin_resolution("slow-dns.invalid", 443)
+    finally:
+        release.set()
+
+
+def test_dns_timeout_returns_clean_error_json_from_fetch_page(qat, monkeypatch):
+    """D4: a DNS timeout does not leak an exception; the tool returns clean error JSON."""
+    monkeypatch.setattr(qat, "DNS_TIMEOUT_SECONDS", 0.1)
+    release = threading.Event()
+
+    def hanging(*args, **kwargs):
+        release.wait(5)
+        return []
+
+    monkeypatch.setattr(qat, "_real_getaddrinfo", hanging)
+    try:
+        out = qat.fetch_page({"url": "https://slow-dns-host.invalid/page"})
+    finally:
+        release.set()
+
+    data = json.loads(out)
+    assert "error" in data
+
+
+def test_search_web_returns_backend_results(qat, monkeypatch):
+    """D5: on the normal (non-timeout) path the results are returned as-is."""
+    class FastDDGS:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def text(self, *args, **kwargs):
+            return [{"title": "a", "href": "https://a.example"}]
+
+    fake = types.ModuleType("ddgs")
+    fake.DDGS = FastDDGS
+    monkeypatch.setitem(sys.modules, "ddgs", fake)
+
+    out = qat.search_web({"query": "fast", "count": 2})
+
+    assert json.loads(out) == [{"title": "a", "href": "https://a.example"}]
+
+
+def test_search_web_deadline_caps_total_time(qat, monkeypatch):
+    """D5: a stuck backend must not cap the total time; at the deadline the call
+    returns quickly and (with no results) produces valid error JSON."""
+    monkeypatch.setattr(qat, "SEARCH_DEADLINE_SECONDS", 0.2)
+    release = threading.Event()
+
+    class HangingDDGS:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def text(self, *args, **kwargs):
+            release.wait(5)
+            return []
+
+    fake = types.ModuleType("ddgs")
+    fake.DDGS = HangingDDGS
+    monkeypatch.setitem(sys.modules, "ddgs", fake)
+
+    start = time.monotonic()
+    out = qat.search_web({"query": "stuck", "count": 3})
+    elapsed = time.monotonic() - start
+    release.set()
+
+    data = json.loads(out)
+    assert "error" in data
+    assert elapsed < 3  # even though the backend waits 5 s, the deadline caps the total time
+
+
+def test_search_web_deadline_returns_partial_results(qat, monkeypatch):
+    """D5: when the deadline is exceeded but results were already collected,
+    those are returned without waiting for the remaining backends."""
+    monkeypatch.setattr(qat, "SEARCH_DEADLINE_SECONDS", 0.5)
+    release = threading.Event()
+
+    class PartialDDGS:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def text(self, *args, **kwargs):
+            yield {"title": "partial", "href": "https://partial.example"}
+            release.wait(5)
+
+    fake = types.ModuleType("ddgs")
+    fake.DDGS = PartialDDGS
+    monkeypatch.setitem(sys.modules, "ddgs", fake)
+
+    out = qat.search_web({"query": "partial", "count": 3})
+    release.set()
+
+    assert json.loads(out) == [{"title": "partial", "href": "https://partial.example"}]

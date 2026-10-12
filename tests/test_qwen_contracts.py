@@ -1,7 +1,13 @@
-﻿import subprocess
+﻿import json
 import shutil
+import socket
+import struct
+import subprocess
 import tempfile
+import threading
+import time
 import importlib.util
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -150,7 +156,9 @@ def test_web_tool_failure_is_detected_and_discourages_workarounds():
     assert "$script:webToolFailCount -gt 0 -and" in inference
     assert "No network command was run" in inference
     # After the 2nd web failure web tools are no longer offered (prevents a search loop).
-    assert "$offeredTools = if ($script:webToolFailCount -ge 2)" in inference
+    # (The F1 context guard became the first condition; the web-failure branch is kept as elseif.)
+    assert "$offeredTools = if ($forceFinalAnswer)" in inference
+    assert "elseif ($script:webToolFailCount -ge 2)" in inference
     # If the user did not ask about files, the file tools are dropped too (no rummaging).
     assert "function Test-FileIntent" in inference
     assert "$blocked += @('list_bound_files', 'read_bound_file')" in inference
@@ -247,6 +255,98 @@ Write-Output ("FAILCOUNT=" + $fail)
         script_path.unlink(missing_ok=True)
     assert result.returncode == 0, result.stderr or result.stdout
     assert "FAILCOUNT=0" in result.stdout, result.stdout
+
+
+# ---------------------------------------------------- D3: custom retry/tolerance
+def test_custom_provider_retries_and_tolerates_partial_stream():
+    """D3: for 'custom' (an OpenAI-compatible custom endpoint) a transient connection error gets
+    a bounded retry + partial-answer tolerance. Remote providers (openai/claude/gemini/deepseek)
+    are PRESERVED: only local + custom get this tolerance."""
+    inference = read_text("agent/qwen-inference.ps1")
+
+    assert "$retryableProvider = $provider -eq 'local' -or $provider -eq 'custom'" in inference
+    assert "if (!$retryableProvider -or $networkRetried" in inference
+    assert "The custom endpoint connection dropped; reconnecting once..." in inference
+    assert "($provider -eq 'local' -or $provider -eq 'custom') -and $isReset -and !$shared.Cancel -and $usable" in inference
+    # Remote providers are NOT added to the tolerance (keep the side effect minimal): the new retry
+    # condition contains only local/custom.
+    retry_lines = [line for line in inference.splitlines() if "retryableProvider" in line]
+    assert retry_lines
+    for line in retry_lines:
+        assert "openai" not in line and "claude" not in line and "gemini" not in line and "deepseek" not in line
+
+
+class _DropMidStreamHandler(BaseHTTPRequestHandler):
+    """Sends a content chunk and then closes the connection with an RST before [DONE]
+    (the real custom endpoint/drop scenario)."""
+
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(
+            b"data: "
+            + json.dumps({"choices": [{"index": 0, "delta": {"content": "Hello"}}]}).encode()
+            + b"\n\n"
+        )
+        self.wfile.flush()
+        time.sleep(1.0)
+        self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        try:
+            self.connection.close()
+        except OSError:
+            pass
+        self.close_connection = True
+
+    def log_message(self, *args):
+        pass
+
+
+def test_custom_provider_dropped_stream_is_not_an_error(tmp_path):
+    """D3 behavior: if a custom provider drops the connection after producing answer text, that is
+    NOT an error (no '[Error]' appended under the answer); finish_reason becomes
+    'connection-closed' and no exception leaks out."""
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("pwsh is unavailable")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _DropMidStreamHandler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        script = tmp_path / "custom-drop.ps1"
+        base = f"http://127.0.0.1:{server.server_port}"
+        script.write_text(
+            f"""
+$job = @{{ messages = @(@{{ role = 'user'; content = 'hi' }}); compactOnly = $true; provider = 'custom'; baseUrl = '{base}'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $false; internet = $false; office = $false; documentCreate = $false }}
+$shared = @{{ Cancel = $false }}
+. '{ROOT}\\agent\\qwen-inference.ps1' $job $shared | Out-Null
+# On the compactOnly exit the script closes its own HttpClient.
+$script:http = [Net.Http.HttpClient]::new(); $script:http.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+$turn = @{{ reasoning = ''; content = ''; usage = $null; toolParts = @{{}}; finishReason = $null }}
+$threw = $false
+try {{
+    Invoke-ChatCompletion @{{ model = 'test'; max_tokens = 100; messages = @() }} $shared $false $turn | Out-Null
+}} catch {{
+    $threw = [string]$_.Exception.GetBaseException().Message
+}}
+@{{ content = $turn.content; finish = $turn.finishReason; threw = $threw }} | ConvertTo-Json -Compress
+""",
+            encoding="utf-8-sig",
+        )
+        result = subprocess.run(
+            [pwsh, "-NoProfile", "-NonInteractive", "-File", str(script)],
+            capture_output=True, encoding="utf-8", errors="replace", check=False, timeout=60,
+        )
+    finally:
+        server.shutdown()
+    assert result.returncode == 0, result.stderr or result.stdout
+    got = json.loads(result.stdout.strip().splitlines()[-1])
+    assert got["content"] == "Hello", got
+    assert got["finish"] == "connection-closed", got
+    assert got["threw"] is False, got
 
 
 def test_ocr_model_swap_keeps_json_response_separate_from_status_events():
