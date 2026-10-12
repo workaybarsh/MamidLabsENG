@@ -76,15 +76,17 @@ DEFAULT_AUDIO_VRAM_MIB = 4096
 # chunk/decode buffers (30 min float32 ~0.15 GB; chunked transcription).
 DEFAULT_AUDIO_RAM_MIB = 5120
 
-# LITE (8 GB card) CPU co-resident audio-pipeline RAM threshold. Measured (with llama-server
-# resident in VRAM, on this machine): the CPU ASR pipeline peaks at ~3775 MiB commit / ~3292
-# MiB working set; private ~2870 MiB. The 5120 MiB worst-case margin NEVER enabled the LITE
-# CPU branch (available RAM < 5120). So the LITE threshold is lowered to 3584 MiB (close to
-# the measured peak, a small margin; Windows trims the mmap cache, so it empirically FITS).
-# Because the threshold is compared against "available RAM", the plan automatically falls back
-# to the swap when RAM is squeezed by a browser/OCR/comfyKeepAlive (the safety net is kept).
-# The PRO threshold (DEFAULT_AUDIO_RAM_MIB) is UNCHANGED.
-LITE_AUDIO_RAM_MIB = 3584
+# LITE (8 GB card) CPU co-resident audio-pipeline RAM threshold. TWO measurements conflicted;
+# the more DEFINITIVE one (measurement-2, which actually ran the LM and the ASR CPU pipeline
+# TOGETHER) concludes: co-resident **DOES NOT FIT**. Physical RAM 15.25 GB; with the LM loaded
+# the requirement is ~16.1 GB (zero/negative margin; peak ~15127/15611 MB, only ~489 MB free).
+# There is no OOM, but the LM's ~6.1 GB model pages get evicted from the reclaimable cache and
+# are re-read from disk on the NEXT chat turn (slowdown). So LITE uses the SAME safe gate as
+# PRO: **5120 MiB** (the real ASR need is ~3.8 GB, but since it must coexist with the language
+# model ~16 GB is required, so this is the safe gate). With the LM loaded (this machine)
+# choose_plan does NOT pick the CPU branch -> GPU + swap; on a RAM-rich machine a short
+# recording can still use the CPU co-resident path.
+LITE_AUDIO_RAM_MIB = DEFAULT_AUDIO_RAM_MIB
 
 
 @dataclass(frozen=True)
@@ -120,7 +122,8 @@ PROFILES = {
         # insufficient RAM it is GPU + mandatory swap (the swap costs ~9-14 s but GPU
         # transcription is much faster, so the total time is shorter; see choose_plan).
         # The threshold is LITE_CPU_MAX_SECONDS (15 s); the CPU branch requires
-        # LITE_AUDIO_RAM_MIB (3584 MiB; measured peak ~3775 MiB) of system RAM.
+        # LITE_AUDIO_RAM_MIB (5120 MiB; measurement-2: co-resident DOES NOT FIT alongside the
+        # LM -> in practice GPU + swap on this machine).
         cpu_max_seconds=LITE_CPU_MAX_SECONDS,
         audio_ram_mib=LITE_AUDIO_RAM_MIB,
     ),
@@ -260,7 +263,7 @@ def choose_plan(profile: Profile, duration_seconds: float | None = None,
       2) They do not fit and the CPU co-resident condition holds -> ('cpu', False): the
          language model STAYS in VRAM and the audio model runs on the CPU/system RAM (NO swap;
          slower). Condition: the recording is SHORTER than the threshold **AND** the pipeline
-         fits in system RAM (`audio_ram_mib`; LITE 3584 MiB, PRO 5120 MiB). On a short
+         fits in system RAM (`audio_ram_mib`; LITE and PRO 5120 MiB). On a short
          recording the swap cost outweighs
          the gain. Threshold: `cpu_max_seconds` / `profile.cpu_max_seconds` /
          `DEFAULT_CPU_MAX_SECONDS` (LITE 15 s, PRO 20 s).

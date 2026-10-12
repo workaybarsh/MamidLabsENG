@@ -169,25 +169,25 @@ def test_choose_plan_priority_vram_then_ram_then_swap():
 
 def test_choose_plan_lite_short_uses_cpu_long_uses_gpu_swap():
     """LITE policy (threshold: cpu_max_seconds = LITE_CPU_MAX_SECONDS = 15 s; the CPU branch
-    needs LITE_AUDIO_RAM_MIB = 3584 MiB of system RAM, measured peak commit ~3775 MiB): when
-    VRAM does not fit, the CPU co-resident path is chosen ONLY when the recording is SHORTER
-    than the threshold AND system RAM suffices (('cpu', False); the language model stays in
-    VRAM, the audio model runs on the CPU, NO swap). A LONG recording or insufficient RAM ->
-    GPU + mandatory swap (('cuda', True))."""
+    needs LITE_AUDIO_RAM_MIB = 5120 MiB of system RAM, the SAME as PRO). Measurement-2 (which
+    actually ran the LM and the ASR CPU pipeline TOGETHER) concludes: co-resident **DOES NOT
+    FIT** (physical 15.25 GB < requirement ~16.1 GB; the LM pages are evicted from the
+    reclaimable cache). So when VRAM does not fit, the CPU co-resident path is chosen ONLY when
+    the recording is SHORTER than the threshold AND system RAM is PLENTIFUL (('cpu', False));
+    with low RAM or a long recording -> GPU + mandatory swap (('cuda', True))."""
     from transcriber import config
 
     profile = config.select_profile(total_mib=8000)
     threshold = profile.cpu_max_seconds
     assert threshold == config.LITE_CPU_MAX_SECONDS
-    # The LITE CPU-branch RAM threshold was lowered to the measured value; PRO is unchanged.
-    assert profile.audio_ram_mib == config.LITE_AUDIO_RAM_MIB
-    assert config.LITE_AUDIO_RAM_MIB < config.DEFAULT_AUDIO_RAM_MIB
+    # Measurement-2: LITE co-resident DOES NOT FIT -> the safe gate is the same as PRO (5120 MiB).
+    assert profile.audio_ram_mib == config.LITE_AUDIO_RAM_MIB == config.DEFAULT_AUDIO_RAM_MIB
     assert config.select_profile(total_mib=16311).audio_ram_mib == config.DEFAULT_AUDIO_RAM_MIB
     ram_ok = profile.audio_ram_mib          # exactly the threshold counts as "enough"
     # Enough free VRAM -> GPU, no swap (previous rule preserved).
     assert config.choose_plan(profile, vram_free_mib=profile.audio_vram_mib,
                              ram_free_mib=0) == ("cuda", False)
-    # SHORT recording + enough RAM -> CPU co-resident, no swap.
+    # SHORT recording + PLENTIFUL RAM -> CPU co-resident, no swap.
     assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=0,
                              ram_free_mib=ram_ok) == ("cpu", False)
     assert config.choose_plan(profile, duration_seconds=threshold, vram_free_mib=0,
@@ -197,9 +197,12 @@ def test_choose_plan_lite_short_uses_cpu_long_uses_gpu_swap():
                              ram_free_mib=ram_ok) == ("cuda", True)
     assert config.choose_plan(profile, duration_seconds=3600, vram_free_mib=0,
                              ram_free_mib=ram_ok) == ("cuda", True)
-    # SHORT but RAM INSUFFICIENT (below the threshold) -> mandatory swap.
+    # SHORT but RAM INSUFFICIENT -> mandatory swap. The typical value on this machine (with the
+    # LM loaded free_ram is ~2957 MiB) lands exactly in this branch -> GPU + swap (correct).
     assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=0,
                              ram_free_mib=ram_ok - 1) == ("cuda", True)
+    assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=0,
+                             ram_free_mib=2957) == ("cuda", True)
 
 
 def test_choose_plan_without_local_model_never_swaps():

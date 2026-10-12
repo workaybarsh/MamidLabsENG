@@ -100,10 +100,15 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   RAM suffices; for a long recording or insufficient RAM it uses **GPU + mandatory swap**
   (`('cuda', True)`). The CPU path is never a forced choice: if the chosen device fails it falls
   back to the CPU, and it remains the last resort when there is no GPU. PRO behavior is unchanged
-  (20 s). Measurement verdict: LITE co-resident FITS in RAM (with llama-server resident in VRAM the
-  CPU ASR transcription succeeds without OOM; the CPU pipeline peaks at ~3775 MiB commit), so the
-  LITE `audio_ram_mib` was lowered 5120 -> **3584 MiB** (PRO stays at 5120) and the LITE CPU branch
-  can now actually be selected (at 5120 it always fell back to the swap). (2) `requirements\asr.txt` gained `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` (CTranslate2
+  (20 s). **Measurement verdict** (two independent measurements conflicted; the more DEFINITIVE
+  one, measurement-2, actually ran the LM and the ASR CPU pipeline TOGETHER): LITE co-resident
+  **DOES NOT FIT** — physical RAM 15.25 GB < requirement ~16.1 GB; zero/negative margin (peak
+  ~15127/15611 MB, only ~489 MB free); there is no OOM, but the LM's ~6.1 GB model pages are
+  evicted from the reclaimable cache and **re-read from disk on the next chat turn**. So the LITE
+  `audio_ram_mib` is kept at **5120 MiB** (the SAME safe gate as PRO); with the LM loaded
+  `choose_plan` does NOT pick the CPU branch -> **GPU + swap** (user rule: fits in RAM ->
+  co-resident, does not fit -> VRAM swap). On a RAM-rich machine a short recording can still use
+  the CPU co-resident path. (2) `requirements\asr.txt` gained `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` (CTranslate2
   4.x on Windows looks for `cublas64_12.dll` / `cudnn_*64_9.dll`; torch's cu130 wheels ship
   `cublas64_13.dll`) and `asr.py` `_add_cuda_dll_dirs` adds `site-packages\nvidia\*\bin` to the DLL
   search path; **GPU transcription now works** (verified with a real recording, `device=cuda`).
