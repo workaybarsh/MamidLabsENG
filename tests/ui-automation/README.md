@@ -5,8 +5,8 @@ desktop control tool. The full UI tests are done with them.
 
 | File | Content |
 |---|---|
-| `ui.ps1` | UI Automation: `Get-Window`, `Show-Tree`, `Find-El`, `Click-Name`, `Set-Text`, `Save-Shot`; `Click-Pane` / `Click-Hwnd` (BM_CLICK) for Inno buttons |
-| `win32.ps1` | Pure Win32: `Find-Top`, `Kids-Text`, `Shot-Hwnd`, `Click-Btn` (PostMessage, non-blocking) |
+| `ui.ps1` | UI Automation: `Get-Window`, `Show-Tree`, `Find-El`, `Click-Name`, `Set-Text`, `Save-Shot`; `Click-Pane` / `Click-Hwnd` (BM_CLICK) for Inno buttons; `Set-FileDialogTarget` / `Dismiss-FileDialogError` for the file dialog |
+| `win32.ps1` | Pure Win32: `Find-Top`, `Kids-Text`, `Shot-Hwnd`, `Click-Btn` (PostMessage, non-blocking); the `[FileDlg]` class (file-dialog control/P-Invoke helpers) |
 
 Usage (Windows PowerShell 5.1):
 
@@ -45,3 +45,16 @@ Screenshots are written under `%TEMP%\claude\ui\shots\`.
   above), find the button's HWND and retry with `Click-Btn` in `win32.ps1` (PostMessage,
   non-blocking) — the window may already be open on the server side, only the pending client-side call
   timed out.
+- **Never write a full path into the file picker → invalid-character error; go to the folder first,
+  then write only the file name.** Writing the full path into the file-name box (`GetDlgItem` 1148 →
+  `ComboBoxEx32`→`ComboBox`→`Edit`) with `SetWindowText` makes Windows 11 show
+  **"A file name cannot contain any of the following characters: \\ / : * ? \" < > |"** (Windows treats
+  it as a rename). Fix with `Set-FileDialogTarget`: (1) point the dialog at the target folder —
+  preferably the address bar's editable `Edit` (`AutomationId` **41477**, 1001 on some builds; in UIA
+  `AutomationId` "1001" is the address Toolbar, named "Address: …"), otherwise write the **folder**
+  path into the file-name box + `Enter`; (2) clear the file-name box and write **only the file name**
+  (`Split-Path -Leaf`); (3) accept with `Open`/`Save` (control id **1**); (4) if an error popup
+  (#32770, "cannot contain") appears, click OK to close it and retry with file-name-only. Give focus
+  with `Thread.AttachThreadInput` + `SetFocus` before writing; verify navigation via the address-bar
+  text. Convert 8.3 short paths to long with `GetLongPathName`; the dialog may not navigate a short
+  path.

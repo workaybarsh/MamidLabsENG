@@ -119,4 +119,130 @@ function Click-Pane($root, [string]$name, [int]$timeoutSec = 30) {
 function Set-HwndText($el, [string]$text) {
     [void][Msg]::SendMessage([IntPtr]$el.Current.NativeWindowHandle, 0x000C, [IntPtr]::Zero, $text)
 }
+
+# ---------------------------------------------------------------- file selection dialog
+# PITFALL: writing a FULL PATH into the file-name box of the Vista+ common Open/Save
+# dialog makes Windows 11 show "A file name cannot contain any of the following
+# characters: \ / : * ? \" < > |" (Windows treats it as a rename). Correct order:
+#   1) navigate the dialog to the target FOLDER (address-bar Edit; otherwise write the
+#      FOLDER path into the file-name box + Enter),
+#   2) clear the file-name box and write ONLY the file name (Split-Path -Leaf),
+#   3) accept (Open/Save = control id 1),
+#   4) if an error popup (#32770, "cannot contain") appears, click OK, close it and retry
+#      with file-name-only. The error must never reach the user/test.
+# Win32 layer: the [FileDlg] class in win32.ps1.
+
+# Current folder name from the dialog's address bar (used to verify navigation).
+function Get-FileDialogAddressName {
+    param([IntPtr]$dialog)
+    $d = [Windows.Automation.AutomationElement]::FromHandle($dialog)
+    foreach ($e in $d.FindAll($TS::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+        $c = $e.Current
+        if ($c.AutomationId -eq '1001' -and -not $c.IsOffscreen -and $c.Name) { return $c.Name }
+    }
+    return ''
+}
+
+# Navigate the dialog to the target folder. Tries the address-bar Edit first, then the
+# file-name box with the FOLDER path + Enter. Returns $true when navigation is verified.
+function Move-FileDialogToFolder {
+    param([IntPtr]$dialog, [string]$folder)
+    if (-not $folder) { return $true }
+    $folder = [FileDlg]::LongPath(([IO.Path]::GetFullPath($folder)))
+    $leafName = Split-Path -Leaf $folder
+    $targets = @([FileDlg]::AddressEdit($dialog), [FileDlg]::FileNameEdit($dialog))
+    foreach ($ctl in $targets) {
+        if ($ctl -eq [IntPtr]::Zero) { continue }
+        [FileDlg]::FocusIn($dialog, $ctl)
+        Start-Sleep -Milliseconds 150
+        [FileDlg]::SetTextValue($ctl, '')
+        Start-Sleep -Milliseconds 120
+        [FileDlg]::SetTextValue($ctl, $folder)
+        Start-Sleep -Milliseconds 200
+        [FileDlg]::PressEnter($ctl)
+        Start-Sleep -Milliseconds 1400
+        if ((Get-FileDialogAddressName $dialog) -like "*$leafName*") { return $true }
+    }
+    return $false
+}
+
+# Clear the file-name box and write ONLY the given name (never a full path).
+function Set-FileDialogNameOnly {
+    param([IntPtr]$dialog, [string]$name)
+    $edit = [FileDlg]::FileNameEdit($dialog)
+    if ($edit -eq [IntPtr]::Zero) { throw 'File-name box not found.' }
+    [FileDlg]::FocusIn($dialog, $edit)
+    Start-Sleep -Milliseconds 120
+    [FileDlg]::SetTextValue($edit, '')
+    Start-Sleep -Milliseconds 120
+    [FileDlg]::SetTextValue($edit, $name)
+    Start-Sleep -Milliseconds 200
+}
+
+# Accept the dialog (Open/Save = control id 1).
+function Accept-FileDialog {
+    param([IntPtr]$dialog)
+    [FileDlg]::ClickButton($dialog, 1)
+}
+
+# Collect a popup's (#32770) text via UIA (GetWindowText returns empty cross-process).
+function Get-FileDialogPopupText {
+    param([IntPtr]$h)
+    $parts = @()
+    try {
+        $d = [Windows.Automation.AutomationElement]::FromHandle($h)
+        if ($d.Current.Name) { $parts += $d.Current.Name }
+        foreach ($e in $d.FindAll($TS::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+            $c = $e.Current
+            if (-not $c.IsOffscreen -and $c.Name) { $parts += $c.Name }
+        }
+    } catch {}
+    return ($parts -join ' ')
+}
+
+# Find the error popup (#32770) and click OK to close it. Returns $true if dismissed.
+function Dismiss-FileDialogError {
+    param([IntPtr]$dialog, [int]$appPid = 0, [string]$Pattern = 'cannot contain|following characters|invalid|karakterler bulunamaz')
+    foreach ($h in [FileDlg]::Tops()) {
+        if ($h -eq $dialog) { continue }
+        if ([FileDlg]::Cls($h) -notmatch '32770') { continue }
+        if ($appPid -gt 0) { $p = 0; [void][W32]::GetWindowThreadProcessId($h, [ref]$p); if ($p -ne $appPid) { continue } }
+        if ((Get-FileDialogPopupText $h) -match $Pattern) {
+            [FileDlg]::ClickButton($h, 1)
+            Start-Sleep -Milliseconds 200
+            [FileDlg]::PressEnter($h)
+            Start-Sleep -Milliseconds 400
+            return $true
+        }
+    }
+    return $false
+}
+
+# Is this HWND still alive?
+function Test-WindowExists {
+    param([IntPtr]$h)
+    return ([FileDlg]::Tops() -contains $h)
+}
+
+# MAIN FLOW: point the dialog at the target file and select it. If an error popup shows
+# it is closed and the file-name-only step is retried. Returns $true when the dialog closes.
+function Set-FileDialogTarget {
+    param([IntPtr]$dialog, [string]$path, [int]$appPid = 0)
+    if ($dialog -eq [IntPtr]::Zero) { throw 'Set-FileDialogTarget: invalid dialog.' }
+    $full = [FileDlg]::LongPath(([IO.Path]::GetFullPath($path)))
+    $folder = Split-Path -Parent $full
+    $leaf = Split-Path -Leaf $full
+    [void](Move-FileDialogToFolder $dialog $folder)
+    for ($i = 0; $i -lt 2; $i++) {
+        Set-FileDialogNameOnly $dialog $leaf
+        Accept-FileDialog $dialog
+        Start-Sleep -Milliseconds 900
+        if (-not (Test-WindowExists $dialog)) { return $true }
+        if (Dismiss-FileDialogError $dialog $appPid) {
+            Start-Sleep -Milliseconds 400
+            [void](Move-FileDialogToFolder $dialog $folder)
+        } else { break }
+    }
+    return $false
+}
 function Get-Wizard { Get-Window ([int](Get-Content (Join-Path $env:TEMP 'claude\ui\wizard-pid.txt'))) '*' 10 }
