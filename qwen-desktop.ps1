@@ -2314,14 +2314,16 @@ function Get-SystemPrompt {
     $lines += 'You are the MamidLabs assistant. Reply in the language the user writes in (English by default), directly and clearly. The chat model may be local or an API; tools run on the user''s computer.'
     $lines += "Today's date: $(Get-Date -Format 'yyyy-MM-dd')."
     # Fixed (NOT per-turn) verification instruction: the prefix does not change, so the KV
-    # cache is not broken. The model must answer with evidence and double-check multi-step work.
-    $lines += 'Give evidence-based, correct answers: do not present something you are unsure about as certain, and say when you do not know. Especially in math, algebra, logic and multi-step problems, check your steps and symbolic/numeric INTERMEDIATE RESULTS at least TWICE; verify by a different route when useful. Do NOT use the name of a test, theorem, identity or source unless you are sure it exists.'
-    # LITE (small 9B model): thinking is ON and UNLIMITED (no server budget). This encourages
-    # deep, step-by-step reasoning and tells the model not to cap its thinking time; it should
-    # think as long as needed. The line is fixed per profile, so the prompt prefix (and thus the
-    # KV cache) is not broken (added only for the LITE profile).
+    # cache is not broken. The model must answer with evidence, review critical steps again
+    # BUT also always write its answer (do not think endlessly and produce nothing; on a hard
+    # question thinking can consume the output budget - see the recovery path in qwen-inference.ps1).
+    $lines += 'Give evidence-based, correct answers: do not present something you are unsure about as certain, and say when you do not know. Especially in math, algebra, logic and multi-step problems, review your critical steps and symbolic/numeric INTERMEDIATE RESULTS again; verify by a different route when useful. But ALSO ALWAYS WRITE YOUR ANSWER: do not think endlessly and end up with no answer; once confident, give the clear and complete answer right away. Do NOT use the name of a test, theorem, identity or source unless you are sure it exists.'
+    # LITE (small 9B model): thinking is ON (no server budget). We encourage deep, step-by-step
+    # reasoning BUT NOT endlessly extending it: thinking tokens share the output budget, so the
+    # model could think very long and skip writing the visible answer. The line is fixed per
+    # profile, so the prompt prefix (and thus the KV cache) is not broken (added only for LITE).
     if ([string]$script:apiSettings.localProfile -eq 'lite') {
-        $lines += 'Think deeply and carefully: before answering, break the problem down, reason step by step, bound your assumptions and aim for the most correct conclusion. For math, logic, planning, code and multi-step problems, target the CORRECT answer instead of a fast one. Do NOT cap your thinking time: think for as long and as deeply as needed; if necessary, try more than one approach and go back and fix mistakes. Once confident, lay out your reasoning briefly and give a clear, complete and correct answer.'
+        $lines += 'Think deeply and carefully: before answering, break the problem down, reason step by step, bound your assumptions and aim for the most correct conclusion. For math, logic, planning, code and multi-step problems, target the CORRECT answer instead of a fast one. Think as long as needed; if necessary, try more than one approach and go back and fix mistakes. But do NOT extend your thinking endlessly and ALWAYS WRITE YOUR ANSWER: your thinking must not consume the whole output budget and leave you with no answer; once confident, lay out your reasoning briefly and give the clear, complete and correct answer right away.'
     }
     if ($netChip.Checked) { $lines += 'You have internet access: use the search_web and fetch_page tools when up-to-date information is needed.' }
     else { $lines += 'Your internet access is OFF; you cannot search the web.' }

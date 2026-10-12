@@ -93,6 +93,22 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **Empty visible-answer regression on hard questions (thinking consumed the whole output budget).**
+  In an end-to-end math test LITE (9B), on a hard integral question, spent **all 8192 tokens**
+  (~159.7 s) thinking and produced **no visible answer**; the bubble kept only "İntegral"
+  (`logs\qwen-lite.stderr.log`: `eval 159714 ms / 8192 tokens`). Root cause: thinking is “unlimited”,
+  the output cap `--predict 8192` and the UI `maxTokens 8192` **share the same budget**; the
+  “double-check the steps” instruction made thinking even longer, and the existing empty-answer
+  fallback was also stuck at the same 8192. (1) **Thinking-off recovery:** the new
+  `Set-NoThinkingRequest` (`chat_template_kwargs = @{ enable_thinking = $false }`, plus `/no_think`)
+  makes the second attempt turn thinking **fully off** (LITE ignores `reasoning_effort`, so this is
+  the only guaranteed way) and **guarantees** a visible answer; the trigger now covers both an
+  **empty** answer and one **cut off at the output cap** (`finishReason='length'`) leaving a broken
+  fragment. (2) **System prompt softened:** “check at least TWICE” → “review the critical steps again
+  **but also always write your answer**; do not think endlessly and end up with no answer” (the LITE
+  deep-thinking line follows the same direction). (3) Since thinking is unlimited, raising `--predict`
+  does not guarantee an answer and only lengthens thinking and latency (measured: 8192 tokens =
+  159.7 s); so the guaranteed recovery was chosen and no KV/context overflow was introduced.
 - **Block LaTeX is now rendered as readable text.** `Convert-MathText` handles the block structures a
   plain regex could not, with a **balanced parser** (`Read-MathGroup`/`Read-MathAtom`/`Expand-MathCommands`):
   nested/parenthesised and escaped `\{ \}` `\frac{A}{B}`, `\sqrt{X}` / `\sqrt[n]{X}`, `\boxed{X}`/`\fbox{X}`

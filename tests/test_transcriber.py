@@ -1106,6 +1106,39 @@ def _run_ps1(script: str, tmp_path: Path) -> str:
     return result.stdout
 
 
+# ------------------------------- Empty/truncated visible-answer recovery (no thinking)
+def test_empty_answer_recovery_disables_thinking(tmp_path):
+    """On a hard math question the model spent the entire output budget (8192) on thinking
+    and produced no visible answer, or left only a broken fragment ("İntegral"); the bubble
+    had no answer. The recovery path retries with `enable_thinking = $false` (the only
+    guaranteed way, since LITE ignores reasoning_effort) and also asks /no_think so the
+    model writes the answer directly. Trigger: the visible answer is EMPTY or was cut off
+    at the output cap leaving a broken fragment."""
+    worker = read_text("agent/qwen-inference.ps1")
+    assert "function Set-NoThinkingRequest" in worker
+    assert "$body.chat_template_kwargs = @{ enable_thinking = $false }" in worker
+    # Trigger: visible answer EMPTY or cut off ('length') leaving a broken fragment.
+    assert "$emptyVisible = [string]::IsNullOrWhiteSpace($turn.content)" in worker
+    assert "$truncatedFragment = $turn.finishReason -eq 'length' -and $turn.content.Length -lt 400" in worker
+    assert "($emptyVisible -or $truncatedFragment)" in worker
+    # The recovery body TURNS THINKING OFF (not low effort) and asks /no_think.
+    block = worker.split("($emptyVisible -or $truncatedFragment)")[1].split("$turn = $retryTurn")[0]
+    assert "Set-NoThinkingRequest $retryBody" in block
+    assert "Set-LowEffortRequest $retryBody" not in block
+    assert "/no_think" in block
+    # Behavior: when the function is called the request body turns thinking off (real pwsh).
+    fn = _extract_ps_function(worker, "Set-NoThinkingRequest")
+    script = fn + """
+$b = @{ messages = @(); max_tokens = 8192 }
+Set-NoThinkingRequest $b
+'ENABLED=' + [string]$b.chat_template_kwargs.enable_thinking
+'BODY=' + ($b | ConvertTo-Json -Depth 6 -Compress)
+"""
+    out = _run_ps1(script, tmp_path)
+    assert "ENABLED=False" in out, out
+    assert '"enable_thinking":false' in out, out
+
+
 def test_asr_profile_name_ignores_non_local_provider(tmp_path):
     """A2 regression: in API mode (no local model) `$JobData.profile` can come from the
     default 'max' rather than the selected local profile; even if the user's saved

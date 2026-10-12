@@ -183,8 +183,11 @@ def test_lite_thinks_without_a_reasoning_budget():
     # Thinking remains on, in deepseek format.
     assert "'--reasoning', 'on'" in manager
     assert "'--reasoning-format', 'deepseek'" in manager
-    # Deep-thinking instruction and the "do not cap thinking time" emphasis.
-    assert "Do NOT cap your thinking time" in desktop
+    # The deep-thinking instruction was SOFTENED: thinking tokens share the output budget,
+    # so the model could think very long and skip writing the visible answer; it is now told
+    # to always write its answer too (see the thinking-off recovery in qwen-inference.ps1).
+    assert "Think deeply and carefully" in desktop
+    assert "ALWAYS WRITE YOUR ANSWER" in desktop
 
 
 def test_mtp_speculative_decoding_is_enabled_when_model_has_mtp_layers():
@@ -206,22 +209,33 @@ def test_mtp_speculative_decoding_is_enabled_when_model_has_mtp_layers():
     assert "nextn" in manager
 
 
-def test_thinking_is_never_switched_off_in_requests():
-    """Thinking is a product decision: requests only tune the effort (reasoning_effort), they never turn the feature off."""
+def test_thinking_is_only_switched_off_for_empty_answer_recovery():
+    """Thinking is a product decision; NORMAL requests only tune the effort (reasoning_effort),
+    they never turn the feature off. The ONE exception is the empty/truncated visible-answer
+    recovery. On LITE reasoning_effort is ignored, so thinking can consume the whole output
+    budget and leave no answer; the recovery path retries with `enable_thinking = $false`
+    (Set-NoThinkingRequest). The main request/compaction still ask for low effort."""
     inference = read_text("agent/qwen-inference.ps1")
 
-    assert "enable_thinking" not in inference
     assert "function Set-LowEffortRequest" in inference
-    # Definition + context compaction + main request + empty-answer retry.
-    assert inference.count("Set-LowEffortRequest") == 4
+    assert "function Set-NoThinkingRequest" in inference
+    assert "enable_thinking = $false" in inference
+    # Definition + context compaction + main request (the recovery now uses Set-NoThinkingRequest).
+    assert inference.count("Set-LowEffortRequest") == 3
     assert "$body.reasoning_effort = 'low'" in inference
+    # enable_thinking appears ONLY in the recovery function; the low-effort one does not
+    # turn thinking off (it only tunes the effort).
+    no_think_fn = inference.split("function Set-NoThinkingRequest")[1].split("}")[0]
+    assert "enable_thinking = $false" in no_think_fn
+    low_fn = inference.split("function Set-LowEffortRequest")[1].split("}")[0]
+    assert "enable_thinking" not in low_fn
 
 
 def test_lite_system_prompt_encourages_deep_reasoning():
     """The LITE system prompt gets a deep, step-by-step reasoning instruction; the line
     is only present for the lite profile (the prefix is fixed per profile, so the KV
-    cache is not broken) and steers toward a more accurate result during its unlimited
-    thinking time."""
+    cache is not broken). The instruction was SOFTENED: not "extend thinking endlessly"
+    but "think enough and ALWAYS WRITE YOUR ANSWER" (thinking shares the output budget)."""
     desktop = read_text("qwen-desktop.ps1")
 
     assert "Think deeply and carefully" in desktop
@@ -230,8 +244,11 @@ def test_lite_system_prompt_encourages_deep_reasoning():
     assert "$script:apiSettings.localProfile -eq 'lite'" in block
     # It does not switch thinking off; it only steers it.
     assert "enable_thinking" not in desktop
-    # Fixed (all-profile) verification instruction: check twice + no fabricated names.
-    assert "at least TWICE" in desktop
+    # Softened instruction: "always write your answer" + "do not extend endlessly".
+    assert "do NOT extend your thinking endlessly" in desktop
+    assert "ALWAYS WRITE YOUR ANSWER" in desktop
+    # Fixed (all-profile) verification instruction: review again + write the answer + no fabricated names.
+    assert "review your critical steps" in desktop
     assert "unless you are sure it exists" in desktop
 
 

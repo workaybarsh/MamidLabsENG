@@ -109,10 +109,15 @@ fit check marks this as "does not fully fit", but since `--gpu-layers 99` is for
 loads anyway), generation **~35 tok/s**, prefill ~270 tok/s. If you want a more comfortable margin
 you can go back to Q4_K_M with the `liteModel` setting below (~40 tok/s, ~1.7 GB of VRAM stays free).
 
-**Thinking (unlimited).** The Qwen3.5 template ignores the `--reasoning-effort` value; thinking
-stays ON (`--reasoning on`, `--reasoning-format deepseek`) and **no thinking budget is imposed** —
-LITE thinks as long as needed (measured unlimited: 1451–2391 tokens, ~50 s). The system prompt also
-tells the model to think deeply and not to cap its thinking time. If you
+**Thinking (unlimited) and the guaranteed answer.** The Qwen3.5 template ignores the
+`--reasoning-effort` value; thinking stays ON (`--reasoning on`, `--reasoning-format deepseek`) and
+**no thinking budget is imposed** — LITE thinks as long as needed. Because thinking tokens share the
+`--predict` **output** budget, on a hard question thinking can consume all 8192 tokens and produce no
+visible answer (measured: 8192 tokens ≈ 159.7 s, no answer). So the worker, when the visible answer is
+**empty** or was cut off at the output cap (`finishReason='length'`) leaving a broken fragment,
+retries with thinking **fully off** (`chat_template_kwargs.enable_thinking = $false` plus `/no_think`)
+and **guarantees** the visible answer; the system prompt also steers the model to think enough and to
+**always write its answer** (not to extend thinking endlessly). If you
 want a more comfortable VRAM margin, write `liteModel:
 "Huihui-Qwen3.5-9B-abliterated.i1-Q4_K_M.gguf"` into `%LOCALAPPDATA%\Programs\MamidLabs\settings\api.json`, download the
 file manually from the same Hugging Face repository

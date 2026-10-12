@@ -575,13 +575,20 @@ def test_update_check_uses_a_github_token_for_the_private_repo():
 
 def test_system_prompt_requires_verification_and_forbids_fabrication():
     """The fixed system prompt (Get-SystemPrompt) tells the model to give evidence-based,
-    correct answers and to double-check steps/intermediate results at least TWICE in
-    multi-step work, and forbids inventing test/theorem/source names. It is fixed, so the
-    prefix never changes and the KV cache is not broken."""
+    correct answers and to review critical steps/intermediate results again in multi-step
+    work, and forbids inventing test/theorem/source names. The verification wording was
+    SOFTENED: "check at least TWICE" encouraged extending thinking endlessly and, on LITE,
+    could consume the output budget and leave no visible answer; the model is now told to
+    ALWAYS WRITE ITS ANSWER too. It is fixed, so the prefix never changes and the KV cache
+    is not broken."""
     desktop = read_text("qwen-desktop.ps1")
     assert "Give evidence-based, correct answers" in desktop
-    assert "at least TWICE" in desktop
+    assert "review your critical steps" in desktop
+    assert "ALWAYS WRITE YOUR ANSWER" in desktop
+    assert "end up with no answer" in desktop
+    # The old wording that encouraged endless thinking must be gone (the regression trigger).
+    assert "at least TWICE" not in desktop
     assert "Do NOT use the name of a test, theorem, identity or source" in desktop
     # The instruction must live in the fixed system prompt (not in per-turn hints).
     prompt = desktop[desktop.index("function Get-SystemPrompt"):desktop.index("function Get-TurnHints")]
-    assert "at least TWICE" in prompt
+    assert "ALWAYS WRITE YOUR ANSWER" in prompt

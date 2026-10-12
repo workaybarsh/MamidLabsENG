@@ -338,16 +338,29 @@ function Wait-LocalModelStopped {
     throw 'The language model could not be unloaded from VRAM for OCR.'
 }
 
-# Builds the low-effort request in one place: context compaction, the main request and the
-# empty-answer retry use the same path.
+# Builds the low-effort request in one place: context compaction and the main request
+# use the same path.
 #
 # The Qwen3.8 27B template on MAX/FLASH understands the reasoning_effort key. The Qwen3.5 9B
 # template on Lite ignores it (measured: token count did not change with low effort);
 # there thinking is ON and UNLIMITED (no --reasoning-budget is passed; see
-# scripts/manage-qwen.ps1). Compaction/empty-answer retry still ask for low effort.
+# scripts/manage-qwen.ps1). So on a hard question thinking can consume the WHOLE output
+# budget (--predict) and produce no visible answer; the real recovery is
+# Set-NoThinkingRequest below.
 function Set-LowEffortRequest([hashtable]$body) {
     $body.reasoning_effort = 'low'
     $body.chat_template_kwargs = @{ reasoning_effort = 'low' }
+}
+
+# Turns thinking FULLY OFF for the empty/truncated visible-answer recovery.
+#
+# On LITE reasoning_effort is ignored, so a low-effort request does NOT stop thinking;
+# the ONLY guaranteed way is the `enable_thinking = $false` key the Qwen3 template
+# supports, which turns thinking OFF completely. The model then writes the visible
+# answer directly, so even when thinking consumed the whole output budget on a hard
+# question the user is never left without an answer.
+function Set-NoThinkingRequest([hashtable]$body) {
+    $body.chat_template_kwargs = @{ enable_thinking = $false }
 }
 
 function Start-LocalModelRestore([string]$profile) {
@@ -1212,8 +1225,8 @@ function Invoke-ChatCompletion([hashtable]$body, [hashtable]$shared, [bool]$emit
                     # spun to the 8192-token cap without a visible answer. The SAME threshold/pattern
                     # used on the visible content (the same word 6+ times) is applied here too; the
                     # threshold is conservative so legitimate long thinking is not cut off. If there
-                    # is NO visible answer the existing "empty answer" path (below, the low-effort
-                    # retry) still applies unchanged; if the actual answer was produced it is kept.
+                    # is NO/truncated visible answer the recovery path below (retry with thinking
+                    # TURNED OFF) still applies unchanged; if the actual answer was produced it is kept.
                     if ($provider -eq 'local' -and (Test-RepeatedOutput $result.reasoning)) {
                         $result.reasoning = Remove-RepeatedTail $result.reasoning
                         if (!$result.finishReason) { $result.finishReason = 'repeat' }
@@ -1841,12 +1854,18 @@ try {
         if ($turn.usage) { $lastUsage = $turn.usage }
         if ($Shared.Cancel) { Emit 'cancelled' 'Request stopped.'; return }
 
-        # If the visible answer stayed empty, we try once more with low effort,
-        # regardless of the finish reason and the thinking output.
-        if ($provider -eq 'local' -and $turn.toolParts.Count -eq 0 -and [string]::IsNullOrWhiteSpace($turn.content)) {
-            Emit 'status' 'The model gave an empty answer; continuing with low effort while keeping the earlier findings...'
+        # If the visible answer stayed EMPTY, or it was CUT OFF at the output cap
+        # (finishReason='length') leaving only a broken fragment (on a hard question
+        # thinking consumes the whole output budget), we try once more with thinking
+        # FULLY OFF. LITE ignores `reasoning_effort`, so low effort is not enough;
+        # enable_thinking=$false forces the model to write the answer directly and thus
+        # GUARANTEES a visible answer.
+        $emptyVisible = [string]::IsNullOrWhiteSpace($turn.content)
+        $truncatedFragment = $turn.finishReason -eq 'length' -and $turn.content.Length -lt 400
+        if ($provider -eq 'local' -and $turn.toolParts.Count -eq 0 -and ($emptyVisible -or $truncatedFragment)) {
+            Emit 'status' 'The model could not finish the answer; turning thinking off and asking for the answer directly...'
             $retryBody = $body.Clone()
-            Set-LowEffortRequest $retryBody
+            Set-NoThinkingRequest $retryBody
             # Tool results and earlier turns are already in messages. Also carry over the working
             # notes of the last, unanswered turn; do not rebuild the user's request from scratch.
             $notes = [string]$turn.reasoning
@@ -1867,13 +1886,15 @@ try {
             }
             $retryBody.messages = @($messages.ToArray()) + @(
                 @{ role = 'assistant'; content = ("[Working notes before the answer; not a finished answer yet]`n" + $notes) },
-                @{ role = 'user'; content = 'Continue my previous request from the working notes above and the existing tool results. Use the findings obtained; do not repeat tool operations that are already done. Think briefly and write the actual answer now.' }
+                @{ role = 'user'; content = 'Continue my previous request from the working notes above and the existing tool results. Use the findings obtained; do not repeat tool operations that are already done. Do not think at length; write the ACTUAL ANSWER NOW, complete and direct. /no_think' }
             )
             $retryTurn = @{ reasoning = ''; content = ''; usage = $null; toolParts = @{}; finishReason = $null }
             Invoke-ChatCompletion $retryBody $Shared $true $retryTurn
             if ($retryTurn.usage) { $lastUsage = $retryTurn.usage }
             if ($Shared.Cancel) { Emit 'cancelled' 'Request stopped.'; return }
-            $turn = $retryTurn
+            # Use the thinking-off turn if it produced a visible answer; otherwise keep the
+            # (broken) text at hand so the user is not shown nothing at all.
+            if (![string]::IsNullOrWhiteSpace($retryTurn.content) -or $emptyVisible) { $turn = $retryTurn }
         }
 
         $toolCalls = @($turn.toolParts.GetEnumerator() | Sort-Object Key | ForEach-Object {
