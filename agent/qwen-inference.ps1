@@ -32,8 +32,10 @@ function Get-OfficePyPath { Join-Path (Get-InstallRoot) 'agent\office-tools.py' 
 function Get-OcrPyPath { Join-Path (Get-InstallRoot) 'agent\ocr-tools.py' }
 function Get-OcrPythonExe { Join-Path (Get-InstallRoot) 'venv\ocr\Scripts\python.exe' }
 function Get-OcrCpuPythonExe { Join-Path (Get-InstallRoot) 'venv\ocr-cpu\Scripts\python.exe' }
-function Get-AsrPyPath { Join-Path (Get-InstallRoot) 'agent\qwen3-asr-tools.py' }
+function Get-WhisperPyPath { Join-Path (Get-InstallRoot) 'agent\whisper-tools.py' }
 function Get-MediaPythonExe { Join-Path (Get-InstallRoot) 'venv\imagegen\Scripts\python.exe' }
+# The audio transcription pipeline runs in its own environment (faster-whisper + transformers/AST + pyannote).
+function Get-AsrPythonExe { Join-Path (Get-InstallRoot) 'venv\asr\Scripts\python.exe' }
 function Get-ManageQwenPath { Join-Path (Get-InstallRoot) 'scripts\manage-qwen.ps1' }
 function Get-AuditLogPath { Join-Path (Get-InstallRoot) 'logs\audit.jsonl' }
 
@@ -395,13 +397,40 @@ function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = 
     return $ocrResponse
 }
 
-# Audio transcription (Qwen3-ASR-1.7B). Same pattern as OCR: on the local provider the language
-# model is unloaded from VRAM (leaving the GPU to the audio model), the transcript is taken, the
-# model is restored. A single engine: Qwen3-ASR (multilingual; 52 languages, Turkish included;
-# speech + singing/BGM). A GPU is recommended; without one it falls back to CPU (slow). The
-# transcript always reaches the user.
+# Audio transcription (faster-whisper large-v3). The device and swap decision is made from
+# the REAL free VRAM and system RAM measured when the audio job starts, NOT from the profile
+# name: the LITE profile runs on both 8 GB (target machine) and 16 GB cards, so "lite" alone
+# cannot decide. Priority order (see config.choose_plan):
+#   1) Whisper + AST fit in free VRAM ALONGSIDE the language model -> GPU, NO swap.
+#   2) They do not fit, but the recording is SHORT (swap cost outweighs the gain) and the
+#      pipeline fits in system RAM on the CPU -> CPU, NO swap (slower, but the language
+#      model stays resident in VRAM).
+#   3) Otherwise (LONG recording, or RAM insufficient) -> GPU + MANDATORY VRAM swap
+#      (unload the language model, run Whisper on the GPU, then reload the language model).
+# The plan is requested from the worker (venv python); if the chosen device fails it falls
+# back to the CPU; the cancel (Stop) behavior is preserved.
+function Get-AudioTranscriptionPlan([string]$path) {
+    # If it cannot be measured, the SAFE side: swap on the local provider; on API the GPU is free.
+    $fallback = [pscustomobject]@{ device = 'cuda'; need_swap = ($provider -eq 'local') }
+    try {
+        $whisperPy = Get-WhisperPyPath; $asrPy = Get-AsrPythonExe
+        $raw = Invoke-PythonTool @{ action = 'plan'; local_model_loaded = ($provider -eq 'local'); path = $path } $whisperPy $asrPy
+        $plan = $null
+        try { $plan = $raw | ConvertFrom-Json -ErrorAction Stop } catch { }
+        if ($plan -and $plan.device) {
+            return [pscustomobject]@{ device = [string]$plan.device; need_swap = [bool]$plan.need_swap }
+        }
+    } catch { }
+    return $fallback
+}
+
 function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $true) {
-    $swapModel = ($provider -eq 'local')
+    # Plan from the real free VRAM/RAM AND the recording duration: GPU (no swap) / CPU (no
+    # swap) / GPU + mandatory swap (long recording or RAM insufficient).
+    $plan = Get-AudioTranscriptionPlan $path
+    $needSwap = [bool]$plan.need_swap
+    $device = [string]$plan.device
+    $swapModel = $needSwap
     $resp = $null
     $err = $null
     # If the user stopped right after sending, exit before starting.
@@ -412,20 +441,31 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
         try { & (Get-ManageQwenPath) -Action stop | Out-Null; Wait-LocalModelStopped } catch { $err = $_ }
     }
     if (!$err) {
-        $asrPy = Get-AsrPyPath; $mediaPy = Get-MediaPythonExe
-        $payloadBase = @{ action = 'transcribe'; path = $path; language = 'auto' }
-        foreach ($device in @('cuda', 'cpu')) {
+        $whisperPy = Get-WhisperPyPath; $asrPy = Get-AsrPythonExe
+        # Non-speech audio events (AST) setting: the microphone-menu checkbox.
+        $audioEvents = if ($null -eq $JobData.audioEvents) { $true } else { [bool]$JobData.audioEvents }
+        # The device/swap plan was decided above (free VRAM + RAM); pass it to the worker as-is.
+        $payloadBase = @{ action = 'transcribe'; path = $path; language = 'auto'; events = $audioEvents; device = $device; need_swap = $needSwap }
+        try {
+            Emit 'status' ("Transcribing audio with large-v3 (" + $device + ")…") | Out-Null
+            $candidate = Invoke-PythonTool $payloadBase $whisperPy $asrPy
+            $parsed = $null
+            try { $parsed = $candidate | ConvertFrom-Json -ErrorAction Stop } catch { }
+            if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null }
+            elseif ($parsed -and $parsed.error) { $err = [Exception]::new([string]$parsed.error) }
+            else { $err = [Exception]::new([string]$candidate) }
+        } catch { $err = $_ }
+        # If the chosen device failed, try the CPU fallback. Skip the retry when stopped.
+        if ($err -and !$Shared.Cancel) {
             try {
-                Emit 'status' ("Transcribing audio with Qwen3-ASR (" + $device + ")…") | Out-Null
-                $candidate = Invoke-PythonTool ($payloadBase + @{ device = $device }) $asrPy $mediaPy
+                Emit 'status' 'Transcription failed with the chosen device; trying CPU…' | Out-Null
+                $candidate = Invoke-PythonTool ($payloadBase + @{ device = 'cpu' }) $whisperPy $asrPy
                 $parsed = $null
                 try { $parsed = $candidate | ConvertFrom-Json -ErrorAction Stop } catch { }
-                if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null; break }
-                if ($parsed -and $parsed.error) { $err = [Exception]::new([string]$parsed.error) } else { $err = [Exception]::new([string]$candidate) }
+                if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null }
+                elseif ($parsed -and $parsed.error) { $err = [Exception]::new([string]$parsed.error) }
+                else { $err = [Exception]::new([string]$candidate) }
             } catch { $err = $_ }
-            # If stopped, there is no point in the CPU fallback; leave and restore the model.
-            if ($Shared.Cancel) { break }
-            if ($device -eq 'cuda') { Emit 'status' 'GPU transcription failed; trying CPU…' | Out-Null }
         }
     }
     if ($swapModel) {
@@ -1370,7 +1410,7 @@ try {
         if ($Shared.Cancel) { Emit 'cancelled' 'The request was stopped.'; return }
         $audioPath = [string]$currentAudioPaths[0]
         try {
-            Emit 'status' 'Transcribing the attached audio (Qwen3-ASR)…'
+            Emit 'status' 'Transcribing the attached audio (faster-whisper)…'
             $trResponse = Invoke-TranscribeWithModelSwap $audioPath
             $tr = $null
             try { $tr = $trResponse | ConvertFrom-Json -ErrorAction Stop } catch { }

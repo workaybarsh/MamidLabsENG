@@ -1,0 +1,15 @@
+# venv\asr: local speech + audio-event transcription pipeline.
+#   - faster-whisper: Whisper large-v3 (CTranslate2) speech transcription + built-in Silero VAD
+#   - transformers: AST (AudioSet) audio-event tagging
+#   - pyannote.audio: speaker diarization (optional; needs a HF token)
+#   - av: convert to 16 kHz mono WAV (no ffmpeg needed)
+#
+# torch/torchaudio are NOT in this file: the CUDA 13.0 wheels come from a separate index
+# (https://download.pytorch.org/whl/cu130) and are installed separately:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu130
+#   pip install -r requirements\asr.txt
+faster-whisper==1.1.1
+transformers==5.17.0
+pyannote.audio==3.3.2
+av==18.1.0
+onnxruntime==1.20.1

@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>A fully local, multimodal AI workspace</b><br>
-  Chat · Web search · Documents · OCR · Image understanding · Image and video generation · Photo editing
+  Chat · Web search · Documents · OCR · Audio transcription · Image understanding · Image and video generation · Photo editing
 </p>
 
 <p align="center">
@@ -26,7 +26,8 @@
   <a href="#license">License</a>
 </p>
 
-MamidLabs brings chat, web search, reading and creating documents, OCR, image understanding, and
+MamidLabs brings chat, web search, reading and creating documents, OCR, audio transcription
+(speech plus non-speech audio events), image understanding, and
 image and video generation together in a single desktop window. The language, image and video models
 run on the user's own graphics card. The internet is used only for installation, downloading models,
 web search and optional API providers.
@@ -44,6 +45,8 @@ web search and optional API providers.
 | **Document reading** | PDF, Word, Excel, PowerPoint, ZIP and RAR |
 | **Document creation** | PDF, Word and PowerPoint; with user approval |
 | **OCR** | PaddleOCR: images on the GPU, scanned PDFs on the CPU |
+| **Audio transcription** | Whisper large-v3 + Silero VAD; a microphone recording or audio file becomes chronological text |
+| **Non-speech sounds** | AST (AudioSet) tags events such as footsteps or a door in parentheses; optional speaker diarization |
 | **Image understanding** | The language model interprets the attached image directly |
 | **Image generation** | Krea-2 Turbo; regeneration, style reference and a realism LoRA on request |
 | **Photo editing** | Krea 2 Identity Edit: clothes, lighting and background change while the person's face is preserved; with two images it places the person into a scene (16 GB profiles) |

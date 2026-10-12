@@ -313,7 +313,12 @@ try {
     # thinking tokens share this output budget; 3072 was too small and even a simple request could
     # be cut off with NO visible answer ("empty answer"). The UI request already sends
     # max_tokens=8192 for LITE, and the server must accommodate it.
-    $predict = switch ($Profile) { 'lite' { '8192' } 'flash' { '4096' } default { '8192' } }
+    # The output cap is 8192 on all three profiles: thinking is ON, so thinking tokens share this
+    # output budget (3072/4096 was too small and a model could think itself out of a VISIBLE
+    # answer, i.e. an empty reply). 8192 is a CEILING, not a target: generation stops at EOS, so
+    # normal answers keep the same speed. The UI request also sends max_tokens=8192; the server
+    # must accept it.
+    $predict = switch ($Profile) { 'lite' { '8192' } 'flash' { '8192' } default { '8192' } }
     # The model names are max/flash/lite; the corresponding reasoning values for the
     # llama.cpp template are still sent as low/xhigh.
     $reasoningEffort = if ($Profile -eq 'max') { 'xhigh' } else { 'low' }

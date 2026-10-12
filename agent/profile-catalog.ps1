@@ -124,11 +124,11 @@ function Remove-ProfileFiles([string]$id) {
 }
 
 # Component classification: media (image/video) lives under ComfyUI, audio under
-# models\qwen3-asr; everything else (language model/mmproj) is core and not optional.
+# venv\asr and whisper model files; everything else (language model/mmproj) is core.
 function Get-ProfileFileComponent([string]$target) {
     $t = ([string]$target) -replace '\\', '/'
     if ($t -like 'ComfyUI/*') { return 'media' }
-    if ($t -like 'models/qwen3-asr/*') { return 'audio' }
+    if ($t -like 'venv/asr/*' -or $t -like 'models/whisper*') { return 'audio' }
     return 'core'
 }
 
@@ -169,6 +169,11 @@ function Test-LocalProfileChatFilesPresent([string]$id) {
 # editions have separate AppIds and separate GitHub repositories (see AGENTS.md, pitfalls).
 $script:MamidLabsAppId = '{BB5BDCB4-3C19-4599-88C4-5CEA1A7942CB}'
 $script:MamidLabsRepo = 'workaybarsh/MamidLabsENG'
+# This edition's UI language and the "language profile" (other-language edition) repository.
+# The Profiles-window language selector downloads and installs the other-language setup
+# (installed into the same folder).
+$script:MamidLabsEditionLang = 'en'
+$script:OtherEditionRepo = 'workaybarsh/MamidLabsTR'
 
 # A private repository needs a GitHub token for the update check and download; otherwise
 # GitHub returns 404. The token is looked up in order: the GITHUB_TOKEN / GH_TOKEN environment
@@ -237,6 +242,42 @@ function Test-MamidLabsUpdateAvailable {
               apiUrl = [string]$asset.url; size = [long]$asset.size; localVersion = $local }
 }
 
+# Finds the latest setup package of the other-language edition (language-profile download).
+# Result: @{ version; downloadUrl; apiUrl; size } or @{ error }. Never throws on a network error.
+function Get-EditionRelease([string]$repo) {
+    $token = Get-UpdateToken
+    try {
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" `
+            -Headers (Get-GitHubHeaders $token) -TimeoutSec 20 -ErrorAction Stop
+    } catch {
+        $reason = if (!$token) { 'an update token is required for a private repository' } else { 'no internet?' }
+        return @{ error = "Could not check ($reason)" }
+    }
+    $asset = @($release.assets | Where-Object { $_.name -like '*Setup*.exe' }) | Select-Object -First 1
+    if (!$asset) { return @{ error = 'Setup file not found' } }
+    return @{ version = ([string]$release.tag_name).TrimStart('v', 'V')
+              downloadUrl = [string]$asset.browser_download_url
+              apiUrl = [string]$asset.url; size = [long]$asset.size }
+}
+
+# Persistent path and record for the downloaded language profile (other-language edition)
+# package. Kept so the user can delete it later (a persistent folder, not %TEMP%).
+function Get-EditionDownloadDir { return (Join-Path $root 'tools\editions') }
+function Get-EditionRecordPath { return (Join-Path (Get-EditionDownloadDir) 'edition.json') }
+
+function Get-EditionRecord {
+    $path = Get-EditionRecordPath
+    if (!(Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    try { return (Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+}
+
+# The Profiles-window handlers are closures (GetNewClosure) and CANNOT see `$script:`
+# variables (inside a closure `$script:` points at the closure's own module scope and comes
+# back empty). The "busy" flags are live values, so they cannot be copied into a local (it
+# would go stale); the live value is read through this function instead (inside a function
+# `$script:` refers to the real script scope).
+function Test-ProfileManagerBusy { return [bool]($script:busy -or $script:imageBusy) }
+
 function Get-ProfileStatusLabel([string]$id) {
     $state = Get-ProfileState $id
     $downloadable = @($state.missingDownloadable).Count
@@ -304,7 +345,7 @@ function Show-ProfileManager([string]$focusId) {
 
     $dlg = [Windows.Forms.Form]::new()
     $dlg.Text = 'MamidLabs · Profiles'
-    $dlg.Size = [Drawing.Size]::new(790, 600)
+    $dlg.Size = [Drawing.Size]::new(790, 660)
     $dlg.StartPosition = 'CenterParent'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.MaximizeBox = $false
@@ -375,6 +416,30 @@ function Show-ProfileManager([string]$focusId) {
     $delCompBtn = [Windows.Forms.Button]::new()
     $delCompBtn.Text = 'Delete selected components'
     $delCompBtn.SetBounds(16, 508, 200, 34)
+    # The language-profile values are NOT visible through $script: inside GetNewClosure() (the
+    # closure looks at its own module scope, so $script: comes back empty); capture them into
+    # locals instead. Otherwise the "already installed" check and the other-edition repo are
+    # empty (see $mainForm = $form, pitfall 21).
+    $editionLang = $script:MamidLabsEditionLang
+    $otherEditionRepo = $script:OtherEditionRepo
+    # Language profile: this edition's language is selected by default; the user can download
+    # and install the other-language edition (Turkish/English) here. Installed into the same folder.
+    $langLabel = [Windows.Forms.Label]::new()
+    $langLabel.Text = 'UI language / language profile:'
+    $langLabel.SetBounds(16, 552, 210, 20)
+    $langLabel.ForeColor = $colText
+    $langCombo = [Windows.Forms.ComboBox]::new()
+    $langCombo.DropDownStyle = 'DropDownList'
+    [void]$langCombo.Items.Add('Türkçe')
+    [void]$langCombo.Items.Add('English')
+    $langCombo.SetBounds(232, 550, 140, 26)
+    $langCombo.SelectedIndex = if ($editionLang -eq 'en') { 1 } else { 0 }
+    $langBtn = [Windows.Forms.Button]::new()
+    $langBtn.Text = 'Download selected language edition'
+    $langBtn.SetBounds(380, 549, 240, 28)
+    $langDeleteBtn = [Windows.Forms.Button]::new()
+    $langDeleteBtn.Text = 'Delete language edition'
+    $langDeleteBtn.SetBounds(626, 549, 136, 28)
     if ($script:apiSettings.providers -and $script:apiSettings.providers['github']) {
         $tokenLabel.Text = 'Update token saved (leave blank to keep it; type to replace):'
     }
@@ -437,7 +502,7 @@ function Show-ProfileManager([string]$focusId) {
     $delCompBtn.Add_Click({
         $index = $list.SelectedIndex
         if ($index -lt 0) { return }
-        if ($script:busy -or $script:imageBusy) { $status.Text = 'Wait for the current operation to finish first.'; return }
+        if (Test-ProfileManagerBusy) { $status.Text = 'Wait for the current operation to finish first.'; return }
         $components = @()
         if ($mediaChk.Checked) { $components += 'media' }
         if ($audioChk.Checked) { $components += 'audio' }
@@ -475,10 +540,14 @@ function Show-ProfileManager([string]$focusId) {
     # Delete profile: removes only files UNIQUE to this profile; files shared with other
     # profiles (e.g. LITE's media files also used by MAX/FLASH) are kept. If the active
     # profile is deleted, the model is stopped first.
+    # $script:apiSettings is invisible inside a closure ($script: comes back empty), so it is
+    # captured into a local; it is the same object, so token save/clear also mutates the real
+    # settings.
+    $settings = $script:apiSettings
     $deleteBtn.Add_Click({
         $index = $list.SelectedIndex
         if ($index -lt 0) { return }
-        if ($script:busy -or $script:imageBusy) { $status.Text = 'Wait for the current job to finish first.'; return }
+        if (Test-ProfileManagerBusy) { $status.Text = 'Wait for the current job to finish first.'; return }
         $profile = $catalog[$index]
         $present = @((Get-ProfileUniqueTargets $profile.id) | Where-Object {
             Test-Path -LiteralPath (Join-Path $root $_) -PathType Leaf })
@@ -488,7 +557,7 @@ function Show-ProfileManager([string]$focusId) {
         }
         $bytes = 0L
         foreach ($rel in $present) { try { $bytes += [long](Get-Item -LiteralPath (Join-Path $root $rel)).Length } catch { } }
-        $isActive = ([string]$script:apiSettings.selectedModel -eq "builtin-$($profile.id)")
+        $isActive = ([string]$settings.selectedModel -eq "builtin-$($profile.id)")
         $warn = if ($isActive) { "`r`n`r`nWARNING: This profile is currently selected. The model is stopped first." } else { '' }
         $answer = [Windows.Forms.MessageBox]::Show(
             ($profile.label + ': ' + $present.Count + ' file(s) (' + (Format-ByteSize $bytes) + ') will be deleted.' +
@@ -504,11 +573,13 @@ function Show-ProfileManager([string]$focusId) {
         try { Update-ProviderSelection } catch { }
     }.GetNewClosure())
 
+    # $settings is the real settings object captured above; the token save/clear closures
+    # (GetNewClosure) use it because $script:apiSettings comes back empty inside a closure.
     $tokenSave.Add_Click({
-        if (!$script:apiSettings.providers) { $script:apiSettings.providers = @{} }
+        if (!$settings.providers) { $settings.providers = @{} }
         $value = $tokenBox.Text.Trim()
         if ($value) {
-            $script:apiSettings.providers['github'] = @{ key = (ConvertFrom-SecureString (ConvertTo-SecureString $value -AsPlainText -Force)) }
+            $settings.providers['github'] = @{ key = (ConvertFrom-SecureString (ConvertTo-SecureString $value -AsPlainText -Force)) }
             $status.Text = 'Update token saved. Try "Check for updates".'
         } else {
             $status.Text = 'Empty token was not saved.'
@@ -517,8 +588,8 @@ function Show-ProfileManager([string]$focusId) {
         Save-ApiSettings
     }.GetNewClosure())
     $tokenClear.Add_Click({
-        if ($script:apiSettings.providers -and $script:apiSettings.providers.ContainsKey('github')) {
-            $script:apiSettings.providers.Remove('github')
+        if ($settings.providers -and $settings.providers.ContainsKey('github')) {
+            $settings.providers.Remove('github')
         }
         Save-ApiSettings
         $status.Text = 'Update token cleared.'
@@ -596,7 +667,67 @@ function Show-ProfileManager([string]$focusId) {
         }
     }.GetNewClosure())
 
-    $dlg.Controls.AddRange(@($list, $detail, $status, $downloadBtn, $switchBtn, $deleteBtn, $updateBtn, $closeBtn, $tokenLabel, $tokenBox, $tokenSave, $tokenClear, $mediaChk, $audioChk, $delCompBtn))
+    $langBtn.Add_Click({
+        $chosen = if ($langCombo.SelectedIndex -eq 1) { 'en' } else { 'tr' }
+        if ($chosen -eq $editionLang) {
+            $status.Text = 'The selected language edition is already installed.'
+            return
+        }
+        $langBtn.Enabled = $false
+        $langBtn.Text = 'Downloading…'
+        $dlg.Refresh()
+        $release = Get-EditionRelease $otherEditionRepo
+        if ($release.error) {
+            $status.Text = 'Could not download the language edition: ' + $release.error
+            $langBtn.Text = 'Download selected language edition'
+            $langBtn.Enabled = $true
+            return
+        }
+        try {
+            # The package is kept persistently (tools\editions); "Delete" removes this file + record.
+            $dir = Get-EditionDownloadDir
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $downloadPath = Join-Path $dir ("MamidLabs_Setup_" + $chosen + ".exe")
+            $token = Get-UpdateToken
+            $url = if ($token -and $release.apiUrl) { $release.apiUrl } else { $release.downloadUrl }
+            $headers = if ($token -and $release.apiUrl) {
+                @{ 'User-Agent' = 'MamidLabs-Updater'; 'Accept' = 'application/octet-stream'; 'Authorization' = "Bearer $token" }
+            } else { @{ 'User-Agent' = 'MamidLabs-Updater' } }
+            Invoke-WebRequest -Uri $url -Headers $headers -OutFile $downloadPath -UseBasicParsing -ErrorAction Stop
+            if ($release.size -and (Get-Item -LiteralPath $downloadPath).Length -ne $release.size) { throw 'Downloaded file size does not match.' }
+            @{ lang = $chosen; version = [string]$release.version; path = $downloadPath; installedAt = (Get-Date).ToString('o') } |
+                ConvertTo-Json | Set-Content -LiteralPath (Get-EditionRecordPath) -Encoding UTF8
+            $langDeleteBtn.Enabled = $true
+            Start-Process -FilePath $downloadPath
+            $status.Text = 'The language-edition setup wizard opened; MamidLabs is closing.'
+            $dlg.Close()
+            if ($mainForm) { $mainForm.Close() }
+        } catch {
+            $status.Text = 'Could not download the language edition: ' + $_.Exception.Message
+            $langBtn.Text = 'Download selected language edition'
+            $langBtn.Enabled = $true
+        }
+    }.GetNewClosure())
+
+    $langDeleteBtn.Add_Click({
+        $record = Get-EditionRecord
+        if (!$record) { $status.Text = 'There is no downloaded language edition to delete.'; return }
+        try {
+            if ($record.path -and (Test-Path -LiteralPath $record.path -PathType Leaf)) {
+                Remove-Item -LiteralPath $record.path -Force
+            }
+            Remove-Item -LiteralPath (Get-EditionRecordPath) -Force -ErrorAction SilentlyContinue
+            $langDeleteBtn.Enabled = $false
+            $status.Text = 'The downloaded language-edition package was deleted.'
+        } catch {
+            $status.Text = 'Could not delete the language-edition package: ' + $_.Exception.Message
+        }
+    }.GetNewClosure())
+
+    # The "Delete" button is enabled only when a downloaded language package exists.
+    $langDeleteBtn.Enabled = [bool](Get-EditionRecord)
+
+    $dlg.Controls.AddRange(@($list, $detail, $status, $downloadBtn, $switchBtn, $deleteBtn, $updateBtn, $closeBtn, $tokenLabel, $tokenBox, $tokenSave, $tokenClear, $mediaChk, $audioChk, $delCompBtn, $langLabel, $langCombo, $langBtn, $langDeleteBtn))
     $wanted = 0
     if ($focusId) {
         for ($i = 0; $i -lt $catalog.Count; $i++) { if ($catalog[$i].id -eq $focusId) { $wanted = $i; break } }

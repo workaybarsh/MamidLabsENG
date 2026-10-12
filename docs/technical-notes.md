@@ -51,7 +51,7 @@ Launch: the **MamidLabs** shortcut on the desktop → `launch-qwen-desktop.vbs`
 | Profile | Model | Context | Reasoning | max_tokens | Measured speed |
 |---|---|---|---|---|---|
 | MAX (deep) | Qwen3.8 27B IQ4_XS | 32K | `xhigh` | 8192 | ~42–58 token/s |
-| FLASH (fast) | Qwen3.8 27B IQ4_XS | 32K | `low` | 4096 | ~42–58 token/s |
+| FLASH (fast) | Qwen3.8 27B IQ4_XS | 32K | `low` | 8192 | ~42-58 token/s |
 | LITE (8 GB) | Huihui-Qwen3.5 9B Q5_K_M | 32K | `low` | 8192 | ~97 token/s (on 16 GB) |
 
 MAX and FLASH share the same 27B file: 32K context, `--gpu-layers 99`, flash-attn on, KV cache q4_0,
@@ -504,6 +504,27 @@ it was, *Delete* deletes the selected one and *Delete all* deletes all chats in 
   ComfyUI outputs are accepted only inside their own output folder and with the expected extensions.
 - There are size limits on attached images, videos and documents. These limits reduce the memory or
   disk consumption of malicious files; they do not limit model generation itself.
+
+## Audio transcription (Whisper + audio events)
+
+An audio file attached to the chat or a microphone recording is transcribed automatically. The
+pipeline lives in the `agent/transcriber/` package and runs in `venv\asr`:
+
+- **Speech:** `faster-whisper` **large-v3**. Silero VAD keeps non-speech spans away from Whisper;
+  `condition_on_previous_text=False` plus `no_speech`/`log_prob`/`compression_ratio` thresholds and
+  low-temperature fallback reduce hallucination.
+- **Non-speech sounds:** AST (`MIT/ast-finetuned-audioset-10-10-0.4593`) tags events (footsteps,
+  door, applause…). Speech labels are filtered. Default **on**; toggled by the microphone-menu
+  **"Non-speech sounds"** checkbox (`api.json -> audioEvents`).
+- **Speaker diarization:** pyannote (needs a HF token; skipped without one).
+- **Output** is chronological and timestamp-free: `(footsteps)` / `Speaker: ...` lines.
+- **Profiles:** `config.py` reads total GPU VRAM. **PC2 (>= 14 GB):** `float16`, models resident
+  together. **PC1 (< 14 GB):** `int8_float16`, models loaded sequentially and long recordings split
+  into 30-minute chunks (`torch.cuda.empty_cache()` after each model).
+- **CPU / GPU choice:** a GPU transcription requires unloading and restoring the local language model
+  (swap). So short recordings are cheaper on the CPU and long ones on the GPU; the threshold is
+  measured and set via `DEFAULT_CPU_MAX_SECONDS` in `agent/transcriber/config.py` (see AGENTS
+  section 5 and the AR-GE note below).
 
 ## Verifying the fixes
 

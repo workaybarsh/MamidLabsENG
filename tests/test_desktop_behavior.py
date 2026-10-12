@@ -360,9 +360,9 @@ Assert ([TestMessageBox]::Last -like 'The chat could not be saved*') 'Save failu
 
 
 def test_microphone_menu_cancel_and_red_mic_send_wiring(tmp_path):
-    """While recording, clicking the RED microphone finishes and sends the recording; the menu's
-    "Cancel recording" discards it. When idle the microphone menu opens and "Use microphone"
-    starts recording. Right click always opens the menu (cancel reachable while recording)."""
+    """While recording, clicking the RED microphone CANCELS the recording (stop + delete file).
+    "Finish and send" and "Cancel recording" in the menu also work. When idle the menu opens and
+    "Use microphone" starts recording. Right click always opens the menu."""
     run_ps(tmp_path, r"""
 Add-Type -AssemblyName System.Windows.Forms
 $script:micRecording = $false
@@ -386,14 +386,17 @@ Assert ($script:started -and !$script:completed) 'Idle use item did not start re
 & (Get-Handler '$micCancel' 'Add_Click')
 Assert (!$script:cancelled -and $script:menuClosed) 'Idle cancel cancelled a recording'
 
-# --- Recording ---
+# --- Recording: red mic click CANCELS ---
 $script:menuShown=$false; $script:menuClosed=$false
 $script:micRecording = $true
 Show-MicMenu
 Assert ($micUse.Text -eq 'Finish and send' -and $micCancel.Text -eq 'Cancel recording') 'Recording menu labels wrong'
 $script:menuShown=$false
 & (Get-Handler '$micBtn' 'Add_Click')
-Assert ($script:completed -and !$script:menuShown) 'Red mic click did not finish+send'
+Assert ($script:cancelled -and !$script:menuShown) 'Red mic click did not cancel the recording'
+$script:cancelled=$false
+& (Get-Handler '$micUse' 'Add_Click')
+Assert ($script:completed) 'Recording use item did not finish+send'
 & (Get-Handler '$micCancel' 'Add_Click')
 Assert ($script:cancelled) 'Recording cancel item did not cancel'
 

@@ -158,7 +158,7 @@ function Convert-ProviderRequest([hashtable]$body, [string]$provider) {
     # thinking is not sent: Opus 5.5 and Fable 5/5.1 reject the 'disabled' value with 400,
     # and Opus 5 rejects it at high effort. Without the field newer models think adaptively,
     # older ones run without thinking. Since max_tokens is the combined limit of thinking + answer,
-    # FLASH's 4096 cuts the answer short on newer models; the lower bound is 16000.
+    # the local profiles' output cap (8192) cuts newer models' answers short; the lower bound is 16000.
     $request.max_tokens = [math]::Max([int]$body.max_tokens, 16000)
     $system = [Collections.Generic.List[string]]::new()
     $messages = [Collections.Generic.List[object]]::new()

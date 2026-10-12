@@ -22,16 +22,25 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   cleaned before loading.
 - **Documents and OCR:** read PDF/Word/Excel/PowerPoint/ZIP/RAR, create PDF/DOCX/PPTX; image and PDF
   OCR with PaddleOCR.
-- **Audio transcription (Qwen3-ASR-1.7B):** an attached audio file is transcribed automatically and
-  the findings are given to the language model (the OCR/mmproj pattern). The engine is **Qwen3-ASR**:
-  52 languages + **Turkish**; speech, singing and music-with-BGM; fast on GPU (falls back to CPU).
-  On the local provider the language model is unloaded from VRAM, the transcript is taken, then it is
-  restored. A **microphone** button left of Send (**live recording from the Windows default input
-  device**, dependency-free) and **Add audio** in the "+" menu. The model is downloaded into
-  `models\qwen3-asr` during installation.
+- **Audio transcription (Whisper + audio events):** an attached audio file or microphone recording
+  is transcribed automatically and the findings are given to the language model (the OCR/mmproj
+  pattern). The engine is **faster-whisper large-v3**: highest accuracy + **Silero VAD** to suppress
+  hallucinated text on silence. **Non-speech audio events** (AudioSet/AST; e.g. footsteps, a door)
+  and optional **speaker diarization** (pyannote) are merged into the same transcript. The output is
+  **chronological and timestamp-free**:
+  ```
+  (footsteps)
+  Speaker: Did you come?
+  (door closing)
+  Speaker: Yes, a bit late.
+  ```
+  Fast on GPU (falls back to CPU). On the local provider the language model is unloaded from VRAM,
+  the transcript is taken, then it is restored. A **microphone** button left of Send (**live
+  recording from the Windows default input device**, dependency-free) and **Add audio** in the "+"
+  menu. The engine and models are installed into `venv\asr` + the HF cache during installation.
 - **ASR preempts the language-model load:** when a message with an audio attachment is sent while
   the language model is not ready, the job starts immediately; the in-flight model load is
-  abandoned, the audio is transcribed with Qwen3-ASR, then the language model (per the selected
+  abandoned, the audio is transcribed with Whisper, then the language model (per the selected
   profile) is restored. So there is no need to wait for the model to load before sending audio.
 - **Dependency-free chart generation:** the `generate_chart` chat tool + `agent/chart-run.ps1`
   (bundled pwsh + System.Drawing; bar/line/pie/scatter/function charts; a safe expression evaluator,
@@ -51,8 +60,23 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   it. Ownership and all rights belong to the developer; copying, modifying, cracking or commercially
   marketing the Software is prohibited. Unauthorized use may carry civil and criminal liability;
   disclaimer and limitation of liability, termination and governing law/jurisdiction are included.
+- **Language profile (Profiles window):** the Profiles window gained a **UI language / language
+  profile** selector (Turkish/English). From there the user can **download and install the other
+  language edition's setup package**; it installs into the same folder (`UsePreviousAppDir`) and
+  keeps `settings\` and `chats\`. The downloaded package is stored under `tools\editions` and can be
+  **deleted** with "Delete language edition".
 
 ### Changed
+- **FLASH output cap 4096 -> 8192:** all three profiles (`--predict` and the UI `max_tokens`) now use
+  8192. This is a **ceiling**, not a target: generation stops at EOS, so normal answers keep the same
+  speed; it only prevents long answers/thinking from being cut off (empty reply). The MAX/FLASH
+  distinction is carried by `--reasoning-effort` (xhigh vs low).
+- **The audio transcription engine changed:** Qwen3-ASR and whisper.cpp were removed in favour of a
+  **faster-whisper large-v3 + AST audio-events** pipeline (`agent/transcriber/`). The microphone menu
+  gained a **"Non-speech sounds"** checkbox (unchecked -> speech only). **Clicking the red microphone
+  button now cancels the recording** (stops it, deletes the file, sends nothing); use the right-click
+  menu or **Send** to finish and send.
+- **The setup wizard offers a Turkish/English language choice** (default English in this edition).
 - **LITE no longer uses a thinking budget (unlimited):** `--reasoning-budget` is never passed;
   thinking stays on and the model thinks as long as it needs. The system prompt tells it to think
   deeply and not to cap its thinking time. The former 300-token budget was removed.

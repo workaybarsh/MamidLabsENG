@@ -34,8 +34,8 @@ param(
     [string]$Root = (Join-Path $env:LOCALAPPDATA 'Programs\MamidLabs'),
     [string]$Source,
     [switch]$SkipMedia,
-    # Audio capture (Qwen3-ASR) is separate from media: -SkipMedia skips media but not audio;
-    # only when audio is not wanted is -SkipAudio given.
+    # The audio transcription environment (venv\asr) is separate from media: -SkipMedia skips media but not
+    # audio; only when audio is not wanted is -SkipAudio given.
     [switch]$SkipAudio,
     [switch]$Force,
     # The setup wizard writes its own uninstall entry; the script does not create a second one.
@@ -49,7 +49,7 @@ if (!$Source) { $Source = Split-Path -Parent $PSScriptRoot }
 # when uninstall-mamidlabs.ps1 deletes the root no trace is left behind.
 $env:PIP_CACHE_DIR = Join-Path $Root 'tools\pip-cache'
 
-$script:KnownStages = @('all', 'preflight', 'layout', 'runtime', 'llama', 'asr', 'python', 'comfyui', 'verify')
+$script:KnownStages = @('all', 'preflight', 'layout', 'runtime', 'llama', 'python', 'asr', 'comfyui', 'verify')
 $Stage = @($Stage | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if (!$Stage) { $Stage = @('all') }
 $unknown = @($Stage | Where-Object { $script:KnownStages -notcontains $_ })
@@ -75,19 +75,11 @@ $script:Packages = @{
         file = 'cudart-llama-bin-win-cuda-13.4-x64.zip'; bytes = 423535356
     }
 }
-# Qwen3-ASR (audio transcription). Single engine: multilingual (52 languages; Turkish included;
-# speech + singing/BGM), high accuracy. LLM-based; runs with the imagegen
-# venv (torch cu130 + transformers 5.x). Model files are downloaded from HF (size-verified).
-$script:AsrRepo = 'https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf/resolve/main/'
-$script:AsrModels = @(
-    @{ file = 'config.json'; bytes = 2399 },
-    @{ file = 'generation_config.json'; bytes = 165 },
-    @{ file = 'model.safetensors'; bytes = 4076193080 },
-    @{ file = 'processor_config.json'; bytes = 487 },
-    @{ file = 'tokenizer.json'; bytes = 11429653 },
-    @{ file = 'tokenizer_config.json'; bytes = 998 },
-    @{ file = 'chat_template.jinja'; bytes = 1434 }
-)
+# Audio transcription models (faster-whisper + AST). Prefetched into the HF cache
+# (HF_HOME = root\tools\hf-home) at install time; no network needed at runtime. Whisper is
+# the standard large-v3 English edition (CTranslate2 float16).
+$script:AsrWhisperModel = 'Systran/faster-whisper-large-v3'
+$script:AsrEventsModel = 'MIT/ast-finetuned-audioset-10-10-0.4593'
 $script:LlamaBuild = 'b10998'
 $script:ComfyRepo = 'https://github.com/comfyanonymous/ComfyUI.git'
 # Commit verified end to end with image and video generation.
@@ -114,6 +106,10 @@ $script:AppPackages = Read-Requirements 'app.txt'
 $script:ImagegenTorch = @('torch', 'torchvision', 'torchaudio')
 $script:ImagegenTorchIndex = 'https://download.pytorch.org/whl/cu130'
 $script:ImagegenPackages = Read-Requirements 'imagegen.txt'
+# Audio (ASR) environment: faster-whisper (Whisper large-v3) + AST audio events + pyannote.
+# torch/torchaudio come from the CUDA 13.0 index separately (same index as imagegen).
+$script:AsrTorch = @('torch', 'torchaudio')
+$script:AsrPackages = Read-Requirements 'asr.txt'
 
 # Minimum hardware per profile. On Lite it was chosen based on what is left after the
 # ~1 GB of VRAM held by the Windows desktop.
@@ -426,20 +422,36 @@ function Invoke-Llama {
     Write-Ok 'llama.cpp and the CUDA runtime extracted'
 }
 
-# ------------------------------------------------------------- Qwen3-ASR (audio transcription)
+# ------------------------------------------------------------------ audio (ASR)
+# Speech transcription: faster-whisper (Whisper large-v3) + AST audio events. Models are
+# prefetched into the HF cache (HF_HOME = root\tools\hf-home) at install time; no network is
+# needed at runtime. venv\asr is created in the "python" stage (see Invoke-Python).
 function Invoke-Asr {
-    Write-Step 'Qwen3-ASR audio transcription engine (1.7B)'
-    if ($SkipAudio) { Write-Skip 'Qwen3-ASR (-SkipAudio)'; return }
-    # The engine code runs in the imagegen venv (torch + transformers); there is no separate binary.
-    $modelDir = Join-Path $Root 'models\qwen3-asr'
-    New-Item -ItemType Directory -Path $modelDir -Force | Out-Null
-    foreach ($m in $script:AsrModels) {
-        $dst = Join-Path $modelDir $m.file
-        if ((Test-Path -LiteralPath $dst -PathType Leaf) -and (Get-Item $dst).Length -eq [long]$m.bytes -and !$Force) {
-            Write-Skip ($m.file + ' already downloaded'); continue
-        }
-        Invoke-Download ($script:AsrRepo + $m.file) $dst $m.bytes
-        Write-Ok ($m.file + ' downloaded')
+    Write-Step 'Audio transcription models (Whisper large-v3 + AST)'
+    if ($SkipAudio) { Write-Skip 'Audio transcription models (-SkipAudio)'; return }
+    $python = Join-Path $Root 'venv\asr\Scripts\python.exe'
+    if (!(Test-Path -LiteralPath $python -PathType Leaf)) {
+        Write-Warn 'venv\asr missing; run the "python" stage first.'
+        return
+    }
+    $env:HF_HOME = Join-Path $Root 'tools\hf-home'
+    $env:HF_HUB_DISABLE_TELEMETRY = '1'
+    $env:MAMIDLABS_ASR_WHISPER = $script:AsrWhisperModel
+    $env:MAMIDLABS_ASR_EVENTS = $script:AsrEventsModel
+    $code = @'
+import os
+from huggingface_hub import snapshot_download
+for repo in (os.environ["MAMIDLABS_ASR_WHISPER"], os.environ["MAMIDLABS_ASR_EVENTS"]):
+    print("downloading: " + repo, flush=True)
+    snapshot_download(repo_id=repo)
+    print("done: " + repo, flush=True)
+'@
+    try {
+        $output = Invoke-NativeText { $code | & $python - }
+        if ($output -match 'done:') { Write-Ok 'Audio transcription models ready (HF cache)' }
+        else { Write-Warn ('Audio models could not be verified: ' + $output) }
+    } catch {
+        Write-Warn ('Audio models could not be downloaded: ' + $_.Exception.Message)
     }
 }
 
@@ -472,6 +484,15 @@ function Invoke-Python {
     Write-Step 'Python environments'
     $appPython = New-Venv (Join-Path $Root 'venv\app') 'app'
     Install-Packages $appPython $script:AppPackages 'app' $null
+
+    # The audio (ASR) environment is independent of media: skipped only when audio is not wanted.
+    if (!$SkipAudio) {
+        $asrPython = New-Venv (Join-Path $Root 'venv\asr') 'audio (ASR)'
+        Install-Packages $asrPython $script:AsrTorch 'audio torch (CUDA 13.0)' $script:ImagegenTorchIndex
+        Install-Packages $asrPython $script:AsrPackages 'audio (ASR)' $null
+    } else {
+        Write-Skip 'audio (ASR) environment (audio not requested)'
+    }
 
     if ($SkipMedia -and $SkipAudio) {
         Write-Skip 'imagegen environment (neither media nor audio requested)'
@@ -610,7 +631,8 @@ function Invoke-Verify {
         $checks += @{ label = 'Photo editing nodes'; path = 'ComfyUI\custom_nodes\comfyui-krea2edit\__init__.py' }
     }
     if (!$SkipAudio) {
-        $checks += @{ label = 'Qwen3-ASR model'; path = 'models\qwen3-asr\model.safetensors' }
+        $checks += @{ label = 'audio (ASR) environment'; path = 'venv\asr\Scripts\python.exe' }
+        $checks += @{ label = 'whisper-tools.py'; path = 'agent\whisper-tools.py' }
     }
     foreach ($check in $checks) {
         # The folder inside the zip (e.g. 'Release\') can vary by version; if glob is set,
@@ -672,8 +694,8 @@ $stages = [ordered]@{
     layout    = { Invoke-Layout }
     runtime   = { Invoke-Runtime }
     llama     = { Invoke-Llama }
-    asr       = { Invoke-Asr }
     python    = { Invoke-Python }
+    asr       = { Invoke-Asr }
     comfyui   = { Invoke-ComfyUI }
     verify    = { Invoke-Verify }
 }

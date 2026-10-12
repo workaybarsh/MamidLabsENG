@@ -64,15 +64,17 @@ def make_catalog(tmp_path: Path) -> Path:
 
 
 def test_profile_file_component_classification():
-    """Component filter: ComfyUI -> media, models\\qwen3-asr -> audio, the rest (LM/mmproj) -> core."""
+    """Component filter: ComfyUI -> media, venv\\asr and whisper models -> audio,
+    the rest (LM/mmproj) -> core."""
     out = run_ps(r"""
 'ComfyUI/models/unet/x.gguf' | ForEach-Object { Get-ProfileFileComponent $_ }
 'ComfyUI\\models\\vae\\y.safetensors' | ForEach-Object { Get-ProfileFileComponent $_ }
-'models/qwen3-asr/model.safetensors' | ForEach-Object { Get-ProfileFileComponent $_ }
+'models/whisper-large-v3/model.bin' | ForEach-Object { Get-ProfileFileComponent $_ }
+'venv/asr/Scripts/python.exe' | ForEach-Object { Get-ProfileFileComponent $_ }
 'models/Huihui-Qwen3.5-9B/x.gguf' | ForEach-Object { Get-ProfileFileComponent $_ }
 """)
     lines = [line.strip() for line in out.splitlines() if line.strip()]
-    assert lines == ["media", "media", "audio", "core"]
+    assert lines == ["media", "media", "audio", "audio", "core"]
 
 
 def test_unique_targets_exclude_shared_files_but_keep_aliases(tmp_path):

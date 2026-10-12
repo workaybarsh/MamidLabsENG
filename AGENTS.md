@@ -46,6 +46,7 @@ Repository: `github.com/workaybarsh/MamidLabsENG`. Default install root:
 | `agent/model-registry.ps1` | Model selector entries, profile aliases |
 | `agent/profile-catalog.ps1`, `agent/profiles.json` | Profile file catalog, Profiles window, downloading missing files, update check |
 | `agent/process-launch.ps1` | `Start-DetachedProcess`: start a child process without inheriting the stdout pipe |
+| `agent/whisper-tools.py`, `agent/transcriber/` | Audio transcription (faster-whisper large-v3 + AST audio events + pyannote diarization); the worker `whisper-tools.py` calls the package |
 | `agent/qwen-agent-tools.py` | Web search (ddgs), page reading, bound-folder tools |
 | `agent/office-tools.py` | Reading PDF/Word/Excel/PowerPoint/ZIP/RAR, creating PDF/DOCX/PPTX |
 | `agent/ocr-tools.py` | PaddleOCR worker (GPU image, CPU PDF) |
@@ -75,6 +76,8 @@ runtime\pwsh\pwsh.exe            bundled PowerShell 7.6.6 (the app runs ONLY wit
 llama.cpp\b10998\llama-server.exe CUDA 13.4 build
 venv\app\                        the app's Python (tools, HF, documents)
 venv\imagegen\                   ComfyUI + torch cu130 + PyAV
+venv\asr\                        audio transcription (faster-whisper + transformers/AST + pyannote; torch cu130)
+tools\hf-home\                   HF cache (whisper large-v3 + AST models live here)
 venv\ocr\ venv\ocr-cpu\          PaddleOCR (optional, checked by default in the wizard; install-ocr.ps1)
 ComfyUI\                         pinned commit; custom_nodes: ComfyUI-GGUF, comfyui-krea2edit
 ComfyUI\models\{diffusion_models,unet,text_encoders,vae,loras}\
@@ -117,7 +120,7 @@ setup-source\                    the source package extracted by the setup wizar
 | Profile | Alias | Model | Important flags |
 |---|---|---|---|
 | MAX | `qwen3.8-27b-max` | Qwen3.8 27B IQ4_XS + mmproj F16 | `--no-mmproj-offload` (projector on the CPU), ctx 32768, predict 8192, `--reasoning-effort xhigh`, q4_0 KV, batch 512/256, `--spec-type draft-mtp` |
-| FLASH | `qwen3.8-27b-flash` | same files | predict 4096, `--reasoning-effort low`, `--spec-type draft-mtp` |
+| FLASH | `qwen3.8-27b-flash` | same files | predict 8192, `--reasoning-effort low`, `--spec-type draft-mtp` |
 | LITE | `qwen3.5-9b-lite` | Huihui-Qwen3.5 9B Q5_K_M + mmproj Q8_0 | ctx 32768, predict **8192** (thinking tokens share the output budget, so 3072 was too small), thinking on and **unlimited** (`--reasoning-budget` not passed; the system prompt tells it to think deeply and not cap its thinking time), batch 256/128, projector on the GPU, `--spec-type draft-mtp` (added on download) |
 
 **MTP (Multi-Token Prediction).** The Qwen3.8 27B GGUF carries a built-in MTP/nextn draft head
@@ -342,6 +345,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
   - UI: `uiPreferences.{internet, agent, accessMode}`, `firstRunApiSettings`.
   - LITE settings: `liteModel`, `liteContext`.
   - Media: `comfyKeepAlive` (default `false`; ComfyUI runs only during media generation and holds no VRAM/RAM while idle; set `true` on LITE to keep it open between media jobs, see section 5).
+  - Audio: `audioEvents` (default `true`; the microphone-menu **"Non-speech sounds"** checkbox. When checked, AST non-speech events are added to the transcript; when unchecked only the Whisper speech text is written).
 - Chats are encrypted under `chats\` with the `MAMIDLABS-CHAT-DPAPI-V2` prefix.
 - `logs\audit.jsonl`: a record of tool calls (not content; path/command identity).
 
@@ -370,9 +374,10 @@ python -m pytest -q          # ~320 tests, ~115 s; no extra setup needed (tests/
   model must be ready, one turn with the real worker the UI uses must answer with no
   "connection dropped"/watchdog text, and MTP must work; skippable with `-SkipUi`). `ui` runs last
   because the app stops the server on exit. Audio input (transcription) is verified through the
-  real worker's `transcript` event and `tests/test_qwen3_asr.py`, not via `/completion`. The engine
-  is **Qwen3-ASR-1.7B** (`agent/qwen3-asr-tools.py`, `models\qwen3-asr`); it is LLM-based and runs
-  in the imagegen venv (torch + transformers).
+  real worker's `transcript` event and `tests/test_transcriber.py`, not via `/completion`. The engine
+  is **faster-whisper large-v3** + AST audio events; the `agent/whisper-tools.py` worker calls the
+  `agent/transcriber/` package and runs in `venv\asr` (torch cu130 + faster-whisper + transformers +
+  pyannote). The output is chronological and timestamp-free: `(footsteps)` / `Speaker: ...` lines.
 - **CI:** `tests.yml` (windows-latest, Python 3.12) on every push/PR; `installer.yml` when
   package-related paths change. Merged into `master` via PR.
 
@@ -508,6 +513,9 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-12 | **Added a language profile (download + delete) to the Profiles window:** the user picks the UI language (Turkish/English) and downloads and installs the other language edition's setup package right there (into the same folder, `UsePreviousAppDir`; `settings\`/`chats\` kept) or **deletes** the downloaded package. The downloaded package is stored persistently in `tools\editions\MamidLabs_Setup_<lang>.exe` with an `edition.json` record; "Delete language edition" removes the package + record. `agent/profile-catalog.ps1`: `MamidLabsEditionLang`, `OtherEditionRepo`, `Get-EditionRelease`, `Get-EditionDownloadDir`/`Get-EditionRecord`, a language ComboBox plus "Download selected language edition" and "Delete language edition" buttons. | agent/profile-catalog.ps1, AGENTS.md, CHANGELOG.md |
+| 2026-10-12 | **FLASH output cap 4096 -> 8192:** all three profiles now use 8192 for `--predict` and the UI `max_tokens` (a ceiling, not a target; generation stops at EOS so normal answer speed is unchanged). The MAX/FLASH distinction is carried by `--reasoning-effort`. | scripts/manage-qwen.ps1, qwen-desktop.ps1, AGENTS.md, docs/technical-notes.md, CHANGELOG.md |
+| 2026-10-12 | **Audio transcription engine moved from Qwen3-ASR to the `agent/transcriber/` pipeline (faster-whisper + AST); Qwen3-ASR and whisper.cpp were fully removed.** New package: `config` (PC1/PC2 profile from GPU VRAM: PC1 int8_float16 + sequential, PC2 float16 + parallel), `audio` (PyAV 16 kHz mono WAV), `vad` (Silero), `asr` (**faster-whisper `Systran/faster-whisper-large-v3`**, hallucination controls: VAD, `condition_on_previous_text=False`, `no_speech/logprob/compression` thresholds, low-temperature fallback, known-phrase/repeat filtering), `events` (AST AudioSet -> readable phrases; "Speech" labels filtered), `diarize` (pyannote, optional), `merge` (**chronological, timestamp-free**: `(footsteps)` / `Speaker: ...`), `main` (txt+json). The installer creates **`venv\asr`** (faster-whisper + transformers/AST + pyannote + torch cu130) and prefetches models into the HF cache. Audio events default **on**; the microphone menu gained a **"Non-speech sounds"** checkbox (off -> speech only; `settings\api.json -> audioEvents`). The red microphone button now **cancels** the recording (stop+delete; sending is via the right-click menu/Send). Both language editions (TR: tr-Turkish tuned / ENG: auto + English labels). | agent/transcriber/*, agent/whisper-tools.py, agent/qwen-inference.ps1, qwen-desktop.ps1, scripts/install-mamidlabs.ps1, requirements/asr.txt, agent/profile-catalog.ps1, packaging/windows/mamidlabs.iss, tests/test_transcriber.py, AGENTS.md, CHANGELOG.md |
 | 2026-10-12 | **Fixed an audio-transcript parsing bug (found in the UI test).** On a silent/short recording the Qwen3-ASR output parser (`_extract_text`) mistook the raw `language None<asr_text>` text for the transcript and sent it to the model. The `<asr_text>` tag and the `language ...` wrapper are now ALWAYS stripped; a silent result returns an **empty** text and the UI/worker continues without a transcript ("speech recognition produced no text"). Verified with a real silent recording + a TTS speech recording. | agent/qwen3-asr-tools.py, tests/test_qwen3_asr.py, CHANGELOG.md |
 | 2026-10-11 | **LITE output cap raised 3072 → 8192 (`--predict`).** Because thinking is ON and **unlimited**, thinking tokens share the `--predict` **output** budget (a different thing from the 32768 context window). At 3072 even a simple request could be consumed entirely by thinking and cut off **with no visible answer** ("empty answer"). The UI already sends `max_tokens=8192` for LITE, so the server now matches. The smoke chat probe also uses 8192. | scripts/manage-qwen.ps1, scripts/smoke-test.ps1, AGENTS.md, docs/technical-notes.md |
 | 2026-10-11 | **"Stop" now cancels EVERYTHING running at that moment instantly** (the answer, long-running Python subprocesses such as ASR/OCR/search, media generation); the language model is then loaded in the background and chat continues on the next message. `Invoke-PythonTool` now collects output **asynchronously** and polls `$Shared.Cancel` in the wait loop; on cancel the subprocess tree is killed **immediately** (`$p.Kill($true)`), the ASR device loop breaks without the CPU fallback, and tool/ASR cancels are not shown as errors. **The one exception: a language-model LOAD is not cut** — `Cancel-Generation` does not touch `switchProcess`/`pendingModelChange`; the load completes in the background. | agent/qwen-inference.ps1, qwen-desktop.ps1, tests/test_qwen3_asr.py |

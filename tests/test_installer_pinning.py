@@ -22,13 +22,13 @@ def test_runtime_packages_carry_source_and_verified_size():
     assert "The file was deleted, run again." in installer
 
 
-def test_installer_downloads_qwen3_asr_model_files():
-    """The audio transcription engine is Qwen3-ASR. The installer downloads its model files from
-    HF with size verification (the whisper binaries/model were removed)."""
+def test_installer_builds_asr_venv_and_prefetches_models():
+    """Engine is faster-whisper (Whisper large-v3) + AST. The installer creates venv\\asr and
+    prefetches models into the HF cache (whisper.cpp and Qwen3-ASR removed)."""
     installer = read_text("scripts/install-mamidlabs.ps1")
-    assert "Qwen/Qwen3-ASR-1.7B-hf" in installer
-    assert "models\\qwen3-asr" in installer
-    assert "'model.safetensors'" in installer
+    assert "venv\\asr" in installer
+    assert "Systran/faster-whisper-large-v3" in installer
+    assert "snapshot_download" in installer
     assert "asr       = { Invoke-Asr }" in installer
 
 

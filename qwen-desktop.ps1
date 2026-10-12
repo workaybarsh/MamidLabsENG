@@ -111,12 +111,15 @@ $script:currentTurnHasImage = $false
 $script:currentTurnImagePaths = @()
 $script:currentTurnAudioPaths = @()
 $script:micRecording = $false
+# Non-speech audio events (AST): toggled by the microphone-menu "Non-speech sounds" checkbox;
+# stored in settings (api.json -> audioEvents).
+$script:audioEvents = $true
 $script:currentTurnMultiImageOcr = $false
 $script:multiImageOcrMode = $false
 $script:selectedVideos = New-Object System.Collections.Generic.List[string]
 $script:lastUserVideo = $null
 $script:selectedDocuments = New-Object System.Collections.Generic.List[string]
-# Audio files (transcribed with Qwen3-ASR; the audio counterpart of image OCR).
+# Audio files (transcribed with faster-whisper large-v3; the audio counterpart of image OCR).
 $script:selectedAudio = New-Object System.Collections.Generic.List[string]
 $script:attachedDocuments = New-Object System.Collections.Generic.List[string]
 $script:videoJob = $null
@@ -1159,11 +1162,11 @@ $send.FlatAppearance.BorderSize = 0
 $composer.Controls.Add($send)
 
 # Microphone button: immediately left of Send. While the microphone is RED (recording) clicking
-# the button finishes the recording and SENDS it; when idle it opens a small menu
-# ("Use microphone" / "Cancel"). When audio is attached it is
-# transcribed automatically (Qwen3-ASR) and the findings are given to the language
-# model (the audio counterpart of OCR). Right-click ALWAYS opens the menu, so a recording can be
-# cancelled even while it is running (the file is deleted and nothing is sent).
+# the button CANCELS the recording (stops it, deletes the file, nothing is sent); when idle it
+# opens a small menu ("Use microphone" / "Non-speech sounds" / "Cancel"). Audio is transcribed
+# automatically (faster-whisper) and the findings are given to the language model (the audio
+# counterpart of OCR). Right-click ALWAYS opens the menu, so a recording can be finished+sent or
+# cancelled even while it is running.
 # GDI cannot draw color emoji; the Segoe MDL2 Assets microphone glyph (U+E720) is used.
 $micBtn = New-Object System.Windows.Forms.Button
 $micBtn.Text = [string][char]0xE720
@@ -1178,6 +1181,14 @@ $composer.Controls.Add($micBtn)
 $micMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $micUse = $micMenu.Items.Add('Use microphone')
 [void]$micMenu.Items.Add('-')
+# Non-speech sounds: when checked, AST audio events are captured (default on); when
+# unchecked only the Whisper speech transcript is produced.
+$script:audioEvents = if ($null -ne $script:apiSettings.audioEvents) { [bool]$script:apiSettings.audioEvents } else { $true }
+$micEvents = New-Object System.Windows.Forms.ToolStripMenuItem('Non-speech sounds')
+$micEvents.CheckOnClick = $true
+$micEvents.Checked = $script:audioEvents
+[void]$micMenu.Items.Add($micEvents)
+[void]$micMenu.Items.Add('-')
 $micCancel = $micMenu.Items.Add('Cancel')
 # While recording the labels become "Finish and send" / "Cancel recording".
 function Show-MicMenu {
@@ -1190,9 +1201,10 @@ function Show-MicMenu {
     }
     $micMenu.Show($micBtn, 0, $micBtn.Height)
 }
-# Left click: finish+send while recording; otherwise open the menu.
+# Left click: CANCEL while recording (stop, delete, send nothing); otherwise open the menu.
+# To finish and SEND, use the right-click menu or the Send button.
 $micBtn.Add_Click({
-    if ($script:micRecording) { Complete-MicrophoneCapture }
+    if ($script:micRecording) { Cancel-MicrophoneCapture }
     else { Show-MicMenu }
 })
 # Right click: always the menu (cancel is reachable while recording).
@@ -1203,6 +1215,12 @@ $micBtn.Add_MouseUp({
 $micUse.Add_Click({
     if ($script:micRecording) { Complete-MicrophoneCapture }
     else { Start-MicrophoneCapture }
+})
+$micEvents.Add_Click({
+    $script:audioEvents = [bool]$micEvents.Checked
+    $script:apiSettings.audioEvents = $script:audioEvents
+    Save-ApiSettings
+    $metric.Text = if ($script:audioEvents) { 'Non-speech sounds: on' } else { 'Non-speech sounds: off' }
 })
 $micCancel.Add_Click({
     if ($script:micRecording) { Cancel-MicrophoneCapture }
@@ -1445,9 +1463,9 @@ function Pick-AudioFile {
 }
 # Microphone capture (dependency-free): records via winmm mciSendString. `open new type
 # waveaudio` uses the Windows DEFAULT recording device (WAVE_MAPPER) — no device selection needed.
-# The recording format is the device default; qwen3-asr-tools.py converts it to 16 kHz mono and
-# transcribes with Qwen3-ASR. When finished the WAV is attached as an audio attachment and sent
-# automatically (transcript + language-model answer).
+# The recording format is the device default; whisper-tools.py converts it to 16 kHz mono and
+# transcribes with faster-whisper large-v3. When finished the WAV is attached as an audio
+# attachment and sent automatically (transcript + language-model answer).
 function Add-MamidMciType {
     if (-not ([System.Management.Automation.PSTypeName]'MamidMci').Type) {
         Add-Type @'
@@ -1470,7 +1488,7 @@ function Start-MicrophoneCapture {
         if ($recCode -ne 0) { throw ('mci record: ' + $recCode) }
         $script:micRecording = $true
         $micBtn.BackColor = [System.Drawing.Color]::FromArgb(180, 60, 60)
-        $metric.Text = 'Recording started — press the microphone button to finish and send.'
+        $metric.Text = 'Recording started — press the microphone button to cancel; use the right-click menu or Send to finish and send.'
     } catch {
         $script:micRecording = $false
         $metric.Text = 'Could not open the microphone: ' + $_.Exception.Message
@@ -2390,6 +2408,7 @@ function Begin-Generation {
         currentImagePath = $(if ($script:currentTurnImagePaths.Count -gt 0) { [string]$script:currentTurnImagePaths[0] } else { '' })
         currentImagePaths = @($script:currentTurnImagePaths)
         currentAudioPaths = @($script:currentTurnAudioPaths)
+        audioEvents = [bool]$script:audioEvents
         multiImageOcr = [bool]($script:currentTurnMultiImageOcr -and $hasOcr)
         multiImageOcrMode = [bool]$script:multiImageOcrMode
         profile = $profile
@@ -2399,7 +2418,7 @@ function Begin-Generation {
         hasSourceVideo = [bool]$script:lastUserVideo
         attachedDocuments = @($script:attachedDocuments.ToArray())
         model = $script:activeModel
-        maxTokens = $(if ($profile -eq 'flash') { 4096 } else { 8192 })
+        maxTokens = 8192
         compact = ($script:contextTokens -gt $script:compactAt)
         contextLimit = $script:ctxLimit
         effort = $null
@@ -2655,14 +2674,14 @@ function Render-JobEvent($jobEvent) {
             $metric.Text = "OCR complete ($confidence confidence)"
         }
         'transcript' {
-            # The attached audio was transcribed (Qwen3-ASR). The transcript is shown in the
+            # The attached audio was transcribed (Whisper). The transcript is shown in the
             # bubble and the language model answers over the findings (like OCR).
             if ($b) {
                 $b.transcriptText = [string]$jobEvent.text
                 if (![string]::IsNullOrWhiteSpace($b.transcriptText)) { $b.body.Text = $b.transcriptText }
                 $script:dirty = $true
             }
-            $modelLabel = if ($jobEvent.data -and $jobEvent.data.model) { [string]$jobEvent.data.model } else { 'Qwen3-ASR' }
+            $modelLabel = if ($jobEvent.data -and $jobEvent.data.model) { [string]$jobEvent.data.model } else { 'Whisper' }
             $metric.Text = "Transcript ready ($modelLabel)"
         }
         'thinking' {
@@ -2889,7 +2908,7 @@ $send.Add_Click({
         $content += @{ type = 'text'; text = "[The user attached a document: $doc]" }
     }
     foreach ($aud in $script:selectedAudio) {
-        # Audio will be transcribed with Qwen3-ASR into text (the audio counterpart of OCR).
+        # Audio will be transcribed with Whisper into text (the audio counterpart of OCR).
         $content += @{ type = 'text'; text = "[The user attached an audio file: $([IO.Path]::GetFileName($aud))]" }
     }
     if ($activatingMode) {
