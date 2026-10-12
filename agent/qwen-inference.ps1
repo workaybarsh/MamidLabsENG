@@ -504,7 +504,7 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
     if ($Shared.Cancel) { throw [OperationCanceledException]::new() }
     if (!$path -or !(Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Audio file not found.' }
     if ($swapModel) {
-        Emit 'status' 'Moving the language model to RAM; freeing VRAM for transcription…' | Out-Null
+        Emit 'status' 'Temporarily stopping the language model; freeing VRAM for transcription…' | Out-Null
         try { & (Get-ManageQwenPath) -Action stop | Out-Null; Wait-LocalModelStopped } catch { $err = $_ }
     }
     if (!$err) {

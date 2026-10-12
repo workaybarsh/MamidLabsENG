@@ -168,32 +168,38 @@ def test_choose_plan_priority_vram_then_ram_then_swap():
 
 
 def test_choose_plan_lite_short_uses_cpu_long_uses_gpu_swap():
-    """LITE policy (threshold: cpu_max_seconds = LITE_CPU_MAX_SECONDS = 15 s): when VRAM does
-    not fit, the CPU co-resident path is chosen ONLY when the recording is SHORTER than the
-    threshold AND system RAM suffices (('cpu', False); the language model stays in VRAM, the
-    audio model runs on the CPU, NO swap). A LONG recording or insufficient RAM -> GPU +
-    mandatory swap (('cuda', True))."""
+    """LITE policy (threshold: cpu_max_seconds = LITE_CPU_MAX_SECONDS = 15 s; the CPU branch
+    needs LITE_AUDIO_RAM_MIB = 3584 MiB of system RAM, measured peak commit ~3775 MiB): when
+    VRAM does not fit, the CPU co-resident path is chosen ONLY when the recording is SHORTER
+    than the threshold AND system RAM suffices (('cpu', False); the language model stays in
+    VRAM, the audio model runs on the CPU, NO swap). A LONG recording or insufficient RAM ->
+    GPU + mandatory swap (('cuda', True))."""
     from transcriber import config
 
     profile = config.select_profile(total_mib=8000)
     threshold = profile.cpu_max_seconds
     assert threshold == config.LITE_CPU_MAX_SECONDS
+    # The LITE CPU-branch RAM threshold was lowered to the measured value; PRO is unchanged.
+    assert profile.audio_ram_mib == config.LITE_AUDIO_RAM_MIB
+    assert config.LITE_AUDIO_RAM_MIB < config.DEFAULT_AUDIO_RAM_MIB
+    assert config.select_profile(total_mib=16311).audio_ram_mib == config.DEFAULT_AUDIO_RAM_MIB
+    ram_ok = profile.audio_ram_mib          # exactly the threshold counts as "enough"
     # Enough free VRAM -> GPU, no swap (previous rule preserved).
     assert config.choose_plan(profile, vram_free_mib=profile.audio_vram_mib,
                              ram_free_mib=0) == ("cuda", False)
     # SHORT recording + enough RAM -> CPU co-resident, no swap.
     assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=0,
-                             ram_free_mib=10 ** 6) == ("cpu", False)
+                             ram_free_mib=ram_ok) == ("cpu", False)
     assert config.choose_plan(profile, duration_seconds=threshold, vram_free_mib=0,
-                             ram_free_mib=10 ** 6) == ("cpu", False)
+                             ram_free_mib=ram_ok) == ("cpu", False)
     # LONG recording (including just above the threshold) -> GPU + mandatory swap.
     assert config.choose_plan(profile, duration_seconds=threshold + 1, vram_free_mib=0,
-                             ram_free_mib=10 ** 6) == ("cuda", True)
+                             ram_free_mib=ram_ok) == ("cuda", True)
     assert config.choose_plan(profile, duration_seconds=3600, vram_free_mib=0,
-                             ram_free_mib=10 ** 6) == ("cuda", True)
-    # SHORT but RAM INSUFFICIENT -> mandatory swap.
+                             ram_free_mib=ram_ok) == ("cuda", True)
+    # SHORT but RAM INSUFFICIENT (below the threshold) -> mandatory swap.
     assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=0,
-                             ram_free_mib=profile.audio_ram_mib - 1) == ("cuda", True)
+                             ram_free_mib=ram_ok - 1) == ("cuda", True)
 
 
 def test_choose_plan_without_local_model_never_swaps():
@@ -679,6 +685,16 @@ def test_transcription_uses_model_swap_for_local_provider():
     assert "need_swap = $needSwap" in block
     # The profile-name decision (LITE exception) was REMOVED; LITE also swaps per VRAM/RAM.
     assert "([string]$JobData.profile) -ne 'lite'" not in worker
+
+
+def test_swap_status_message_reflects_process_stop():
+    """Cosmetic but important: during the swap the language model is NOT moved to RAM;
+    `manage-qwen -Action stop` STOPS the process (RAM-friendly). The status text must reflect
+    that (not the misleading "Moving the language model to RAM"). Code behavior is unchanged."""
+    worker = read_text("agent/qwen-inference.ps1")
+    block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
+    assert "stopping the language model" in block
+    assert "Moving the language model to RAM" not in block
 
 
 def test_transcription_honors_cancel_and_stop_does_not_wait_for_restore():

@@ -76,6 +76,16 @@ DEFAULT_AUDIO_VRAM_MIB = 4096
 # chunk/decode buffers (30 min float32 ~0.15 GB; chunked transcription).
 DEFAULT_AUDIO_RAM_MIB = 5120
 
+# LITE (8 GB card) CPU co-resident audio-pipeline RAM threshold. Measured (with llama-server
+# resident in VRAM, on this machine): the CPU ASR pipeline peaks at ~3775 MiB commit / ~3292
+# MiB working set; private ~2870 MiB. The 5120 MiB worst-case margin NEVER enabled the LITE
+# CPU branch (available RAM < 5120). So the LITE threshold is lowered to 3584 MiB (close to
+# the measured peak, a small margin; Windows trims the mmap cache, so it empirically FITS).
+# Because the threshold is compared against "available RAM", the plan automatically falls back
+# to the swap when RAM is squeezed by a browser/OCR/comfyKeepAlive (the safety net is kept).
+# The PRO threshold (DEFAULT_AUDIO_RAM_MIB) is UNCHANGED.
+LITE_AUDIO_RAM_MIB = 3584
+
 
 @dataclass(frozen=True)
 class Profile:
@@ -109,8 +119,10 @@ PROFILES = {
         # VRAM, the audio model runs on the CPU/system RAM; NO swap). For a long recording or
         # insufficient RAM it is GPU + mandatory swap (the swap costs ~9-14 s but GPU
         # transcription is much faster, so the total time is shorter; see choose_plan).
-        # The threshold is LITE_CPU_MAX_SECONDS (15 s).
+        # The threshold is LITE_CPU_MAX_SECONDS (15 s); the CPU branch requires
+        # LITE_AUDIO_RAM_MIB (3584 MiB; measured peak ~3775 MiB) of system RAM.
         cpu_max_seconds=LITE_CPU_MAX_SECONDS,
+        audio_ram_mib=LITE_AUDIO_RAM_MIB,
     ),
 }
 
@@ -248,7 +260,8 @@ def choose_plan(profile: Profile, duration_seconds: float | None = None,
       2) They do not fit and the CPU co-resident condition holds -> ('cpu', False): the
          language model STAYS in VRAM and the audio model runs on the CPU/system RAM (NO swap;
          slower). Condition: the recording is SHORTER than the threshold **AND** the pipeline
-         fits in system RAM (`audio_ram_mib`). On a short recording the swap cost outweighs
+         fits in system RAM (`audio_ram_mib`; LITE 3584 MiB, PRO 5120 MiB). On a short
+         recording the swap cost outweighs
          the gain. Threshold: `cpu_max_seconds` / `profile.cpu_max_seconds` /
          `DEFAULT_CPU_MAX_SECONDS` (LITE 15 s, PRO 20 s).
       3) Otherwise (LONG recording or insufficient RAM) -> ('cuda', True): GPU transcription.

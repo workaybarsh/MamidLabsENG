@@ -100,14 +100,19 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   RAM suffices; for a long recording or insufficient RAM it uses **GPU + mandatory swap**
   (`('cuda', True)`). The CPU path is never a forced choice: if the chosen device fails it falls
   back to the CPU, and it remains the last resort when there is no GPU. PRO behavior is unchanged
-  (20 s). (2) `requirements\asr.txt` gained `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` (CTranslate2
+  (20 s). Measurement verdict: LITE co-resident FITS in RAM (with llama-server resident in VRAM the
+  CPU ASR transcription succeeds without OOM; the CPU pipeline peaks at ~3775 MiB commit), so the
+  LITE `audio_ram_mib` was lowered 5120 -> **3584 MiB** (PRO stays at 5120) and the LITE CPU branch
+  can now actually be selected (at 5120 it always fell back to the swap). (2) `requirements\asr.txt` gained `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` (CTranslate2
   4.x on Windows looks for `cublas64_12.dll` / `cudnn_*64_9.dll`; torch's cu130 wheels ship
   `cublas64_13.dll`) and `asr.py` `_add_cuda_dll_dirs` adds `site-packages\nvidia\*\bin` to the DLL
   search path; **GPU transcription now works** (verified with a real recording, `device=cuda`).
   (3) The transcribe request now carries a finite `timeoutSeconds` derived from the recording
   duration (`max(600, d*4+300)`, capped at 3600; 1800 when unknown) so a long CPU co-resident/swap
   transcription is not cut off at the fixed 180 s; "Stop" still takes effect instantly.
-  `tests/test_transcriber.py` and `tests/test_requirements_files.py` guard these contracts.
+  `tests/test_transcriber.py` and `tests/test_requirements_files.py` guard these contracts. The
+  swap status text was also fixed: the language model is not moved to RAM, `manage-qwen -Action
+  stop` **stops the process** (no code behavior change).
 - **Audio transcription: the CPU fallback never ran because of a PowerShell dictionary bug (found
   in the end-to-end audio test).** When the primary device (GPU) failed, `Invoke-TranscribeWithModelSwap`
   built the CPU retry payload with `$payloadBase + @{ device = 'cpu' }`; in PowerShell a Hashtable
