@@ -10,4 +10,8 @@ Modules:
     merge    chronological merge -> text
     main     runs the pipeline; writes txt + json
 """
+# The PACKAGE release of agent/transcriber, independent of the application's version:
+# the app's single source of version is MyAppVersion in packaging/windows/mamidlabs.iss
+# (the release tag and the updater use that value). Bumping this package version is not
+# an application release.
 __version__ = '1.0.0'

@@ -5,6 +5,10 @@
 <h1 align="center">MamidLabs</h1>
 
 <p align="center">
+  <a href="https://github.com/workaybarsh/MamidLabsTR"><b>For Türkçe</b></a>
+</p>
+
+<p align="center">
   <b>A fully local, multimodal AI workspace</b><br>
   Chat · Web search · Documents · OCR · Audio transcription · Image understanding · Image and video generation · Photo editing
 </p>

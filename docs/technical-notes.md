@@ -65,7 +65,7 @@ The LITE 9B GGUF loses that head in the conversion, so it is re-injected on down
 `agent/mtp_inject.py` (source: the `huihui-ai/Huihui-Qwen3.5-9B-abliterated` MTP tensors); therefore
 `--spec-type draft-mtp` is used on LITE too. No separate draft model is needed; output is lossless
 (accepted tokens are verified against the target model) and it gives ~2x speed (acceptance on LITE
-~0.31–0.96; the model card reports 0.35–0.53 on Q4_K_M for the 27B). The flag is added only if the
+~0.93 (content-dependent 0.31–0.96); the model card reports 0.35–0.53 on Q4_K_M for the 27B). The flag is added only if the
 GGUF really carries MTP layers (`Test-GgufHasMtp`); passing it to one that does not makes llama.cpp
 fail with "model doesn't contain MTP layers". It can be disabled by putting `"mtp": false` in
 `%LOCALAPPDATA%\Programs\MamidLabs\settings\api.json`.
@@ -113,8 +113,11 @@ media pipeline:
 
 Memory budget: measured on an RTX 4060 Laptop with the default Q5_K_M and 32K context, with the
 vision projector (mmproj Q8_0) on the CPU (`--no-mmproj-offload`) — **~7249 / 8188 MiB** (708 MiB
-stays free; a comfortable margin), generation **content-dependent ~40–79 tok/s** (MTP on;
-acceptance 0.31–0.96), prefill ~270 tok/s. On a 16 GB card LITE goes up to ~97 tok/s. **Before** the
+free after loading; note the admission gate is deliberately small on LITE — only **300 MiB** of
+model-file overhead is reserved, because the model already runs at the card's limit and llama.cpp
+keeps the big embedding tensor on the CPU, so a wider gate would reject a working install),
+generation **content-dependent ~40–79 tok/s** (MTP on;
+acceptance ~0.93 (content-dependent 0.31–0.96)), prefill ~270 tok/s. On a 16 GB card LITE goes up to ~97 tok/s. **Before** the
 projector was moved to the CPU (it ran on the GPU) the same setup used **~7885 / 8188 MiB** (~72 MiB
 free) — llama.cpp's own automatic fit check marked that as "does not fully fit" and pushed the big
 embedding tensor onto the CPU; since `--gpu-layers 99` is forced manually it loaded anyway. If you

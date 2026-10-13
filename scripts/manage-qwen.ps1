@@ -26,7 +26,7 @@ if ($Action -notin @('stop', 'closecomfy') -and (Test-Path -LiteralPath $setting
 }
 
 if ($Profile -eq 'lite') {
-    # The default is Q5_K_M (~6.6 GB). Measured on a real machine (RTX 4060 Laptop, 8 GB)
+    # The default is Q5_K_M (~6.5 GB file + ~0.46 GB MTP head). Measured on a real machine (RTX 4060 Laptop, 8 GB)
     # with 32K context: it uses 7500 MiB VRAM, ~450-500 MiB stays free -
     # tight but a margin the user accepted (the other MAX/FLASH profiles run with
     # similar margins on other machines). llama.cpp's own automatic fit check marks
@@ -325,7 +325,7 @@ try {
     # llama.cpp template are still sent as low/xhigh.
     $reasoningEffort = if ($Profile -eq 'max') { 'xhigh' } else { 'low' }
     if ($Profile -eq 'lite') {
-        # 8 GB VRAM budget: ~6.8 GB weights + q4_0 KV cache + compute buffer.
+        # 8 GB VRAM budget: ~6.5 GB weights (+ ~0.46 GB MTP head) + q4_0 KV cache + compute buffer.
         # The image projector runs on the CPU (--no-mmproj-offload): the Q8_0 mmproj
         # (595 MiB) did not fit an 8 GB card on the GPU. Since the Windows desktop also
         # holds 0.5-1 GB VRAM the default is 32K context ($liteCtx above, overridable via

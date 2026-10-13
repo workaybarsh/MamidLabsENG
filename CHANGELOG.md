@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/).
 ### Changed
 - **LITE vision projector moved to the CPU (`--no-mmproj-offload`); it no longer counts toward the
   LITE VRAM budget.** Measured 7885→7249 MiB used (72→708 MiB free); chat speed unchanged.
+- **Documentation/comment consistency pass (no behavior change).** Stale or hard-coded figures and
+  missing items were fixed: `packaging/windows/mamidlabs.iss` (the header no longer hard-codes
+  `v1.0.0`), `AGENTS.md` (the `asr` install stage, `requirements/asr.txt` in the repo map, the
+  `chart` smoke step, the real test figures, the reconciled MTP acceptance `~0.93 (content-dependent
+  0.31–0.96)`, and an explicit "at that time" framing for the 7885/8188 MiB LITE row),
+  `docs/installation.md` (the `asr` stage), `docs/technical-notes.md` (MTP acceptance and the LITE
+  margin wording), `scripts/manage-qwen.ps1` (a single LITE size figure, `~6.5 GB + ~0.46 GB MTP
+  head`), `README.md` (a "For Türkçe" link) and the `agent/transcriber` package-version comment.
 
 ### Fixed
 - **Install/update correctness: script installs record `DisplayVersion` (and the in-app updater reads

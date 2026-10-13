@@ -9,7 +9,7 @@
 ; welcome, license, folder, profile report, profile choice, your own models, API,
 ; additional tasks, ready, installing, summary, finish.
 
-; The single source of the version. CI compares the tag (v1.0.0) with this value;
+; The single source of the version. CI compares the pushed tag (v<version>) with this value;
 ; CHANGELOG.md must have a section with the same number.
 #define MyAppVersion "1.1.0"
 #define MyAppName "MamidLabs"
