@@ -81,11 +81,13 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     } catch { return }  # If nvidia-smi gives unexpected output skip the check, do not block the installation.
     if ($freeMiB -le 0) { return }
     $modelMiB = [math]::Ceiling((Get-Item -LiteralPath $modelPath).Length / 1MB)
-    # On Lite the image projector is loaded into VRAM together with the model; on MAX/FLASH
-    # it runs on the CPU with --no-mmproj-offload and does not count toward the VRAM budget.
-    if ($profileName -eq 'lite' -and $projectorPath -and (Test-Path -LiteralPath $projectorPath -PathType Leaf)) {
-        $modelMiB += [math]::Ceiling((Get-Item -LiteralPath $projectorPath).Length / 1MB)
-    }
+    # The image projector (mmproj) now runs on the CPU in all three profiles
+    # (--no-mmproj-offload), so it does not count toward the VRAM budget. On LITE the
+    # Q8_0 mmproj (595 MiB) did not fit an 8 GB card and forced llama.cpp to push the
+    # big embedding tensor to the CPU, overflowing the VRAM limit, so it was moved to
+    # the CPU: ~636 MiB VRAM is freed (measured: 7249/8188 MiB, 708 MiB free); chat
+    # speed is unchanged (80/61/40 tok/s - the same as with the mmproj on the GPU),
+    # image reading is only a little slower.
     # Real measurement (Lite, Q5_K_M, 32K context, RTX 4060 Laptop, default profile):
     # when the 6220 MiB file was loaded total VRAM use reached ~7500 MiB,
     # leaving ~450-500 MiB free on the card - tight but a margin the user explicitly
@@ -323,10 +325,11 @@ try {
     # llama.cpp template are still sent as low/xhigh.
     $reasoningEffort = if ($Profile -eq 'max') { 'xhigh' } else { 'low' }
     if ($Profile -eq 'lite') {
-        # 8 GB VRAM budget: ~5.7 GB weights + q4_0 KV cache + compute buffer.
-        # Since the Windows desktop also holds 0.5-1 GB VRAM the default is 32K context
-        # ($liteCtx above, overridable via settings.liteContext); the peak VRAM is pulled
-        # down further by shrinking the batch.
+        # 8 GB VRAM budget: ~6.8 GB weights + q4_0 KV cache + compute buffer.
+        # The image projector runs on the CPU (--no-mmproj-offload): the Q8_0 mmproj
+        # (595 MiB) did not fit an 8 GB card on the GPU. Since the Windows desktop also
+        # holds 0.5-1 GB VRAM the default is 32K context ($liteCtx above, overridable via
+        # settings.liteContext); the peak VRAM is pulled down further by shrinking the batch.
         $serverArgs = @(
             '--model', $model,
             '--alias', $desiredAlias, '--host', '127.0.0.1', '--port', '8080',
@@ -338,7 +341,10 @@ try {
             '--metrics', '--no-context-shift'
         )
         # The projector is added only if it is in the folder; otherwise Lite runs text-only.
-        if ($projector) { $serverArgs += @('--mmproj', $projector, '--image-min-tokens', '512') }
+        # --no-mmproj-offload: the Q8_0 mmproj (595 MiB) did not fit an 8 GB card and pushed
+        # the big embedding tensor onto the CPU, overflowing the VRAM limit; on the CPU ~636
+        # MiB VRAM is freed, chat speed is unchanged, image reading is only a little slower.
+        if ($projector) { $serverArgs += @('--mmproj', $projector, '--no-mmproj-offload', '--image-min-tokens', '512') }
     }
     else {
         # The image projector runs on the CPU (--no-mmproj-offload). mmproj F16 on the GPU needs

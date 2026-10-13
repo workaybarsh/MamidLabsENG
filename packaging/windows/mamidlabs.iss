@@ -11,7 +11,7 @@
 
 ; The single source of the version. CI compares the tag (v1.0.0) with this value;
 ; CHANGELOG.md must have a section with the same number.
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppName "MamidLabs"
 #define MyAppPublisher "workaybarsh"
 #define MyAppURL "https://github.com/workaybarsh/MamidLabsENG"
@@ -116,11 +116,13 @@ Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\llama.cpp"
 Type: filesandordirs; Name: "{app}\venv"
 Type: filesandordirs; Name: "{app}\tools"
+Type: filesandordirs; Name: "{app}\requirements"
 Type: filesandordirs; Name: "{app}\logs"
 Type: files; Name: "{app}\qwen-desktop.ps1"
 Type: files; Name: "{app}\launch-qwen-desktop.vbs"
 Type: files; Name: "{app}\README.md"
 Type: files; Name: "{app}\LICENSE"
+Type: files; Name: "{app}\EULA.txt"
 ; The folder may be a user-chosen place containing other files; it is deleted only if empty.
 Type: dirifempty; Name: "{app}"
 

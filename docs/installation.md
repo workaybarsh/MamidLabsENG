@@ -179,7 +179,7 @@ does not use it.
 %LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\manage-qwen.ps1 -Action stop
 ```
 
-`-Action` values: `start`, `switch`, `stop`. Profile values: `max`, `flash`, `lite`.
+`-Action` values: `start`, `switch`, `stop`, `closecomfy`. Profile values: `max`, `flash`, `lite`.
 
 ## Troubleshooting
 

@@ -45,7 +45,7 @@ web search and optional API providers.
 | **Document reading** | PDF, Word, Excel, PowerPoint, ZIP and RAR |
 | **Document creation** | PDF, Word and PowerPoint; with user approval |
 | **OCR** | PaddleOCR: images on the GPU, scanned PDFs on the CPU |
-| **Audio transcription** | Whisper large-v3 + Silero VAD; a microphone recording or audio file becomes chronological text |
+| **Audio transcription** | faster-whisper large-v3 + Silero VAD; a microphone recording or audio file becomes chronological text |
 | **Non-speech sounds** | AST (AudioSet) tags events such as footsteps or a door in parentheses; optional speaker diarization |
 | **Image understanding** | The language model interprets the attached image directly |
 | **Image generation** | Krea-2 Turbo; regeneration, style reference and a realism LoRA on request |
@@ -125,8 +125,9 @@ flowchart TD
 ```
 
 The core principle: only one heavy model is in VRAM at a time. On an image or video request the
-language model is stopped and reloaded after generation. ComfyUI stays open between jobs; it is closed
-if memory runs short and its queue is empty.
+language model is stopped and reloaded after generation. By default ComfyUI runs only during media
+generation (it holds neither VRAM nor RAM when idle); on LITE it can be kept open between media jobs
+with `comfyKeepAlive=true`.
 
 ## Security
 

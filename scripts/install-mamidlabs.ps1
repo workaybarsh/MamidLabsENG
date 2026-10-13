@@ -33,6 +33,9 @@ param(
     [ValidateSet('max', 'flash', 'lite')][string]$Profile = 'lite',
     [string]$Root = (Join-Path $env:LOCALAPPDATA 'Programs\MamidLabs'),
     [string]$Source,
+    # Optional: the version written to the script-based uninstall entry (DisplayVersion),
+    # read by the in-app update check. Defaults to MyAppVersion in the .iss under $Source.
+    [string]$AppVersion,
     [switch]$SkipMedia,
     # The audio transcription environment (venv\asr) is separate from media: -SkipMedia skips media but not
     # audio; only when audio is not wanted is -SkipAudio given.
@@ -90,6 +93,11 @@ $script:ComfyGgufCommit = '6ea2651e7df66d7585f6ffee804b20e92fb38b8a'
 # Custom node needed for photo editing (Krea 2 Identity Edit); no extra Python dependency.
 $script:Krea2EditRepo = 'https://github.com/lbouaraba/comfyui-krea2edit'
 $script:Krea2EditCommit = '86f886dac23013d88996e3a2e99093ba44d322fb'
+
+# Inno Setup's AppId (must match packaging\windows\mamidlabs.iss). It identifies the
+# wizard's {AppId}_is1 uninstall key; the script checks for it so a repeated "layout" run
+# does not add a second, duplicate entry next to the wizard's own.
+$script:MamidLabsAppId = '{BB5BDCB4-3C19-4599-88C4-5CEA1A7942CB}'
 
 # Package lists are read from the files under requirements\ (single source of truth;
 # derived from the actual imports in agent/*.py). If a file is not found the
@@ -258,9 +266,13 @@ function Invoke-Preflight {
 # ------------------------------------------------------------------- folders
 function Invoke-Layout {
     Write-Step 'Folder layout and program files'
+    # Running from a copy of the install root itself (for example {root}\scripts\...) makes
+    # the prune below delete the running script's own folder; the root program files are then
+    # left untouched (they are already in place) while setup-source is still refreshed.
+    $sameRoot = [IO.Path]::GetFullPath($Source).TrimEnd('\') -ieq [IO.Path]::GetFullPath($Root).TrimEnd('\')
     $folders = @(
         'agent', 'scripts', 'assets', 'models', 'logs', 'chats', 'settings',
-        'llama.cpp', 'ComfyUI', 'venv', 'runtime', 'tools',
+        'llama.cpp', 'ComfyUI', 'venv', 'runtime', 'tools', 'requirements',
         'outputs', 'outputs\images', 'outputs\videos', 'outputs\documents',
         'outputs\refs', 'outputs\thumbs', 'outputs\input'
     )
@@ -278,17 +290,28 @@ function Invoke-Layout {
 
     # EULA.txt is shown on the wizard's license page and the .iss [Files] embeds it into the
     # source package; a script-based install must copy it to the root (and to setup-source) too.
-    foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE', 'EULA.txt')) {
-        $from = Join-Path $Source $file
-        if (Test-Path -LiteralPath $from -PathType Leaf) {
-            Copy-Item -LiteralPath $from -Destination (Join-Path $Root $file) -Force
+    # Source == Root: the files are already in place; copying a file onto itself errors.
+    if (!$sameRoot) {
+        foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE', 'EULA.txt')) {
+            $from = Join-Path $Source $file
+            if (Test-Path -LiteralPath $from -PathType Leaf) {
+                Copy-Item -LiteralPath $from -Destination (Join-Path $Root $file) -Force
+            }
         }
     }
-    foreach ($folder in @('agent', 'scripts', 'assets')) {
+    foreach ($folder in @('agent', 'scripts', 'assets', 'requirements')) {
         $from = Join-Path $Source $folder
-        if (Test-Path -LiteralPath $from) {
-            Copy-Item -LiteralPath $from -Destination $Root -Recurse -Force
-        }
+        if (!(Test-Path -LiteralPath $from)) { continue }
+        # Source == Root: the files are already in place; pruning would delete the running
+        # script's own folder. Only an explicit source (repo or setup package) refreshes here.
+        if ($sameRoot) { continue }
+        $to = Join-Path $Root $folder
+        # Owned program folders are pruned before copying so files removed from the source
+        # (renamed/moved modules, build artifacts) do not linger in the install root. User
+        # data (settings, chats, models, logs, outputs, tools, venvs, ComfyUI) is never pruned.
+        if (Test-Path -LiteralPath $to) { Remove-Item -LiteralPath $to -Recurse -Force }
+        Copy-Item -LiteralPath $from -Destination $Root -Recurse -Force
+        Remove-ExcludedFromOwned $to $folder
     }
     Write-Ok ('Program files copied -> ' + $Root)
 
@@ -297,7 +320,14 @@ function Invoke-Layout {
     # that folder, so it stayed at the previous version; if present it is refreshed with the
     # same [Files] set. It is not created for a script-based install (folder absent).
     $setupSource = Join-Path $Root 'setup-source'
-    if (Test-Path -LiteralPath $setupSource -PathType Container) {
+    # The wizard runs this stage with -Source {root}\setup-source; refreshing the package from
+    # itself would copy every top-level file/folder onto itself ("cannot overwrite itself") and
+    # empty the package. Skip the refresh when the source IS the setup-source. Note that a
+    # source merely INSIDE the root (this nested package) must still copy the program files
+    # into the root, so the $sameRoot guard above stays equality-only.
+    $setupSourceFull = [IO.Path]::GetFullPath($setupSource).TrimEnd('\')
+    $sourceFull = [IO.Path]::GetFullPath($Source).TrimEnd('\')
+    if ((Test-Path -LiteralPath $setupSource -PathType Container) -and ($sourceFull -ine $setupSourceFull)) {
         # The same top-level file list (including EULA.txt) is also written to the source package.
         foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE', 'EULA.txt')) {
             $from = Join-Path $Source $file
@@ -305,14 +335,21 @@ function Invoke-Layout {
         }
         foreach ($folder in @('agent', 'scripts', 'requirements')) {
             $from = Join-Path $Source $folder
-            if (Test-Path -LiteralPath $from) { Copy-Item -LiteralPath $from -Destination $setupSource -Recurse -Force }
+            if (!(Test-Path -LiteralPath $from)) { continue }
+            $to = Join-Path $setupSource $folder
+            # Same prune before copy as the install root, with the same .iss excludes.
+            if (Test-Path -LiteralPath $to) { Remove-Item -LiteralPath $to -Recurse -Force }
+            Copy-Item -LiteralPath $from -Destination $setupSource -Recurse -Force
+            Remove-ExcludedFromOwned $to $folder
         }
         $assets = Join-Path $Source 'assets'
         if (Test-Path -LiteralPath $assets) {
             # assets\installer is only used to build the wizard; the .iss excludes it too.
-            New-Item -ItemType Directory -Path (Join-Path $setupSource 'assets') -Force | Out-Null
+            $assetsTarget = Join-Path $setupSource 'assets'
+            if (Test-Path -LiteralPath $assetsTarget) { Remove-Item -LiteralPath $assetsTarget -Recurse -Force }
+            New-Item -ItemType Directory -Path $assetsTarget -Force | Out-Null
             Get-ChildItem -LiteralPath $assets -Force | Where-Object { $_.Name -ne 'installer' } | ForEach-Object {
-                Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $setupSource 'assets') -Recurse -Force
+                Copy-Item -LiteralPath $_.FullName -Destination $assetsTarget -Recurse -Force
             }
         }
         $doc = Join-Path $Source 'docs\installation.md'
@@ -354,6 +391,13 @@ function Invoke-Layout {
 
     # Shows up in the Settings > Apps list; "Uninstall" runs uninstall-mamidlabs.ps1.
     if ($NoUninstallEntry) { return }
+    # The setup wizard already wrote its own ({AppId}_is1) entry for this root; writing the
+    # script key too would show MamidLabs twice in the Apps list. A repeated "layout" run
+    # must not add a duplicate.
+    if (Test-InnoUninstallEntryExists $Root) {
+        Write-Skip 'Windows uninstall entry already present (setup wizard)'
+        return
+    }
     try {
         $key = Join-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' (Get-UninstallKeyName $Root)
         $uninstaller = Join-Path $Root 'scripts\uninstall-mamidlabs.ps1'
@@ -364,6 +408,10 @@ function Invoke-Layout {
             Publisher = 'workaybarsh'; InstallLocation = $Root; UninstallString = $command
             DisplayIcon = (Join-Path $Root 'assets\icons\mamidlabs.ico'); URLInfoAbout = 'https://github.com/workaybarsh/MamidLabsENG'
         }
+        # The in-app update check reads DisplayVersion; the script-based entry must carry it
+        # too (from -AppVersion or MyAppVersion in the .iss under $Source, x.y.z).
+        $appVersion = if ($AppVersion) { $AppVersion } else { Get-AppVersionFromSource $Source }
+        if ($appVersion) { $values['DisplayVersion'] = $appVersion }
         foreach ($name in $values.Keys) { Set-ItemProperty -Path $key -Name $name -Value $values[$name] }
         foreach ($name in @('NoModify', 'NoRepair')) { Set-ItemProperty -Path $key -Name $name -Value 1 -Type DWord }
         Write-Ok 'Windows uninstall entry written (Settings > Apps > MamidLabs)'
@@ -379,6 +427,52 @@ function Get-UninstallKeyName([string]$path) {
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalized)) } finally { $sha.Dispose() }
     return 'MamidLabs-' + (($hash[0..3] | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+# Does an Inno Setup ({AppId}_is1) uninstall entry for this root already exist? A wizard
+# install writes one; the script-based entry must not be added a second time on top of it.
+function Test-InnoUninstallEntryExists([string]$path) {
+    $normalized = [IO.Path]::GetFullPath($path).TrimEnd('\')
+    foreach ($hive in @('HKCU:', 'HKLM:')) {
+        $key = Join-Path ($hive + '\Software\Microsoft\Windows\CurrentVersion\Uninstall') ($script:MamidLabsAppId + '_is1')
+        if (!(Test-Path -LiteralPath $key)) { continue }
+        try {
+            $props = Get-ItemProperty -LiteralPath $key -ErrorAction Stop
+            if ($props.InstallLocation -and (([string]$props.InstallLocation).TrimEnd('\') -ieq $normalized)) { return $true }
+        } catch { }
+    }
+    return $false
+}
+
+# MyAppVersion in packaging\windows\mamidlabs.iss is the single source of the version
+# (Semantic Versioning, MAJOR.MINOR.PATCH -> x.y.z). The script-based uninstall entry stores
+# it as DisplayVersion so the in-app update check can read the local version even without a
+# wizard install. Only a strict x.y.z value is accepted: the updater parses DisplayVersion as
+# a [version] (see Test-MamidLabsUpdateAvailable), so any other value (a partial/extra part,
+# a placeholder) is ignored and DisplayVersion is not written at all - a silently broken
+# comparison is worse than no local version.
+function Get-AppVersionFromSource([string]$source) {
+    $iss = Join-Path $source 'packaging\windows\mamidlabs.iss'
+    if (!(Test-Path -LiteralPath $iss -PathType Leaf)) { return $null }
+    $match = [regex]::Match((Get-Content -LiteralPath $iss -Raw), '#define\s+MyAppVersion\s+"(\d+\.\d+\.\d+)"')
+    if ($match.Success) { return $match.Groups[1].Value }
+    return $null
+}
+
+# The Inno Setup [Files] section excludes build artifacts (agent\__pycache__\*, *.pyc) and
+# assets\installer\* (only used to build the wizard). The script copy applies the same
+# excludes so the install root and the setup-source package do not drift from the .iss.
+function Remove-ExcludedFromOwned([string]$path, [string]$name) {
+    if (!(Test-Path -LiteralPath $path)) { return }
+    if ($name -eq 'agent') {
+        Get-ChildItem -LiteralPath $path -Recurse -Force -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $path -Recurse -Force -File -Filter '*.pyc' -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    } elseif ($name -eq 'assets') {
+        $installer = Join-Path $path 'installer'
+        if (Test-Path -LiteralPath $installer) { Remove-Item -LiteralPath $installer -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 # --------------------------------------------------------- bundled PowerShell 7

@@ -52,7 +52,7 @@ Launch: the **MamidLabs** shortcut on the desktop → `launch-qwen-desktop.vbs`
 |---|---|---|---|---|---|
 | MAX (deep) | Qwen3.8 27B IQ4_XS | 32K | `xhigh` | 8192 | ~42–58 token/s |
 | FLASH (fast) | Qwen3.8 27B IQ4_XS | 32K | `low` | 8192 | ~42-58 token/s |
-| LITE (8 GB) | Huihui-Qwen3.5 9B Q5_K_M | 32K | `low` | 8192 | ~97 token/s (on 16 GB) |
+| LITE (8 GB) | Huihui-Qwen3.5 9B Q5_K_M | 32K | unlimited (no budget) | 8192 | ~40–79 token/s (8 GB) · ~97 token/s (16 GB) |
 
 MAX and FLASH share the same 27B file: 32K context, `--gpu-layers 99`, flash-attn on, KV cache q4_0,
 the image projector (mmproj) on the CPU (`--no-mmproj-offload`; on the GPU it did not fit on a 16 GB
@@ -61,10 +61,14 @@ card and spilled into shared memory). **If you do not change** the selector at t
 
 **MTP (Multi-Token Prediction).** MAX/FLASH start with `--spec-type draft-mtp` using the built-in
 MTP/nextn draft head of the Qwen3.8 27B GGUF (`qwen35.nextn_predict_layers = 1`, `blk.64.nextn.*`).
-No separate draft model is needed; output is lossless (accepted tokens are verified against the
-target model) and ~1.2–1.5x speed is expected (model card: acceptance 0.35–0.53, mean accepted
-length 2.05–2.58 on Q4_K_M). The LITE model has no MTP layers, so it is not added there. It can be
-disabled by putting `"mtp": false` in `%LOCALAPPDATA%\Programs\MamidLabs\settings\api.json`.
+The LITE 9B GGUF loses that head in the conversion, so it is re-injected on download by
+`agent/mtp_inject.py` (source: the `huihui-ai/Huihui-Qwen3.5-9B-abliterated` MTP tensors); therefore
+`--spec-type draft-mtp` is used on LITE too. No separate draft model is needed; output is lossless
+(accepted tokens are verified against the target model) and it gives ~2x speed (acceptance on LITE
+~0.31–0.96; the model card reports 0.35–0.53 on Q4_K_M for the 27B). The flag is added only if the
+GGUF really carries MTP layers (`Test-GgufHasMtp`); passing it to one that does not makes llama.cpp
+fail with "model doesn't contain MTP layers". It can be disabled by putting `"mtp": false` in
+`%LOCALAPPDATA%\Programs\MamidLabs\settings\api.json`.
 
 ### 16 GB memory budget (MAX/FLASH)
 
@@ -82,10 +86,14 @@ On the GPU the image projector asked for another 1,133 MiB with weights and comp
 exceeded the total free space and spilled ~420 MiB into shared memory. With the projector moved to
 the CPU, chat went from 19.6 to 25.0 tok/s and reading a single image from 56–58 s to 29 s. The
 memory check in `scripts/manage-qwen.ps1` asks for the model file + 600 MiB. **ComfyUI lifecycle**
-(`settings/api.json` → `comfyKeepAlive`, default `true`): ComfyUI stays open and is not reopened
-between media jobs. This does **not** spill (measured: identical GPU buffer layout whether ComfyUI
-is open or closed; graph splits 2); only chat slows by ~11% (49.7 → 44.2 tok/s). `false` restores
-full speed. If memory is short (empty queue) ComfyUI is closed and measured again.
+(`settings/api.json` → `comfyKeepAlive`, default `false`): ComfyUI runs **only during image/video
+generation**; it is closed when the job ends and before the language model loads, so it holds
+**neither VRAM nor RAM while idle** (an idle ComfyUI kept ~300 MiB of CUDA context plus RAM). It
+reopens on demand (~27 s). On MAX/FLASH it is **always** closed before the language model loads; on
+LITE it can be kept open between media jobs with `comfyKeepAlive=true` (then it does **not** spill —
+measured: identical GPU buffer layout whether ComfyUI is open or closed; graph splits 2 — only chat
+slows by ~11%, 49.7 → 44.2 tok/s). If memory is short (empty queue) ComfyUI is closed and measured
+again.
 
 ### Lite profile (8 GB VRAM / 16 GB RAM)
 
@@ -96,18 +104,22 @@ media pipeline:
 |---|---|---|
 | Language model | Qwen3.8 27B IQ4_XS (~15 GB) | Huihui-Qwen3.5 9B Q5_K_M (~6.6 GB) |
 | Context | 32K | 32K |
-| Image reading (mmproj) | F16, on the CPU | Q8_0, on the GPU |
+| Image reading (mmproj) | F16, on the CPU | Q8_0, on the CPU |
 | Image generation | Krea-2 Turbo (fp8, ~13.1 GB) | Krea-2 Turbo GGUF Q4_K_M (~7.5 GB, with the `ComfyUI-GGUF` custom node) |
 | Style reference / realism | With LoRA | With LoRA (the same files as MAX/FLASH) |
 | Thinking | unlimited | unlimited (thinking on, no budget) |
 | Video | 832×480, up to 5 s | 832×480 cap, 3 s cap |
 | ComfyUI | normal | `--lowvram` (weights stream layer by layer from RAM) |
 
-Memory budget: measured on an RTX 4060 Laptop with the default Q5_K_M and 32K context —
-**~7500 / 8188 MiB** (~450–500 MiB stays free; a tight but usable margin — llama.cpp's own automatic
-fit check marks this as "does not fully fit", but since `--gpu-layers 99` is forced manually it
-loads anyway), generation **~35 tok/s**, prefill ~270 tok/s. If you want a more comfortable margin
-you can go back to Q4_K_M with the `liteModel` setting below (~40 tok/s, ~1.7 GB of VRAM stays free).
+Memory budget: measured on an RTX 4060 Laptop with the default Q5_K_M and 32K context, with the
+vision projector (mmproj Q8_0) on the CPU (`--no-mmproj-offload`) — **~7249 / 8188 MiB** (708 MiB
+stays free; a comfortable margin), generation **content-dependent ~40–79 tok/s** (MTP on;
+acceptance 0.31–0.96), prefill ~270 tok/s. On a 16 GB card LITE goes up to ~97 tok/s. **Before** the
+projector was moved to the CPU (it ran on the GPU) the same setup used **~7885 / 8188 MiB** (~72 MiB
+free) — llama.cpp's own automatic fit check marked that as "does not fully fit" and pushed the big
+embedding tensor onto the CPU; since `--gpu-layers 99` is forced manually it loaded anyway. If you
+want a more comfortable margin you can go back to Q4_K_M with the `liteModel` setting below
+(~40 tok/s, ~1.7 GB of VRAM stays free).
 
 **Thinking (unlimited) and the guaranteed answer.** The Qwen3.5 template ignores the
 `--reasoning-effort` value; thinking stays ON (`--reasoning on`, `--reasoning-format deepseek`) and
@@ -367,10 +379,11 @@ Since two models do not fit into 16 GB of VRAM at the same time, the order is:
 1. The language model writes the image prompt **in English** (the `generate_image` tool).
 2. llama-server is stopped → VRAM is freed (the model file stays in the Windows file cache).
 3. ComfyUI + Krea-2 Turbo are loaded, the image is generated (8 steps, cfg 1, euler/simple).
-4. The models in ComfyUI are unloaded but the process stays open (~130–370 MiB VRAM idle; if memory
-   runs short and its queue is empty it is closed),
-   the language model is reloaded and the chat continues where it left off. The next image/video
-   does not have to reopen ComfyUI (~15-20 s); on an error or cancel the process is closed.
+4. The models in ComfyUI are unloaded and the process is closed by default (it holds neither VRAM
+   nor RAM while idle); with `comfyKeepAlive=true` (LITE only) the process is kept open (~130–370
+   MiB VRAM idle). The language model is reloaded and the chat continues where it left off. If it
+   was closed, the next image/video reopens ComfyUI (~27 s); on an error or cancel the process is
+   closed again.
 
 Measurement (RTX 5060 Ti 16 GB): generation **25–58 s**, end to end in the interface **60–95 s**
 (including unloading and reloading the language model). LITE (RTX 4060 Laptop): 68–139 s end to end;

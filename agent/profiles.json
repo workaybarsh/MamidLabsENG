@@ -5,7 +5,7 @@
       "id": "max",
       "label": "Qwen3.8 MAX",
       "hardware": "16 GB VRAM / 32 GB RAM",
-      "summary": "Deep reasoning, 32K context, image reading on. Measured speed ~25 tok/s.",
+      "summary": "Deep reasoning, 32K context, image reading on. Measured speed ~42–58 tok/s (MTP on).",
       "files": [
         {
           "label": "Language model (Qwen3.8 27B IQ4_XS)",
@@ -101,7 +101,7 @@
       "id": "flash",
       "label": "Qwen3.8 27B",
       "hardware": "16 GB VRAM / 32 GB RAM",
-      "summary": "Same files as MAX, shorter thinking effort. Measured speed ~23-24 tok/s.",
+      "summary": "Same files as MAX, shorter thinking effort. Measured speed ~42–58 tok/s (MTP on).",
       "files": [
         {
           "label": "Language model (Qwen3.8 27B IQ4_XS)",

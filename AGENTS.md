@@ -70,8 +70,8 @@ Repository: `github.com/workaybarsh/MamidLabsENG`. Default install root:
 ## 3. Install root layout (`%LOCALAPPDATA%\Programs\MamidLabs`)
 
 ```
-agent\ scripts\ assets\          program files (copied again from the source on every installation)
-qwen-desktop.ps1 launch-qwen-desktop.vbs README.md LICENSE
+agent\ scripts\ assets\ requirements\   program files (copied again from the source on every installation)
+qwen-desktop.ps1 launch-qwen-desktop.vbs README.md LICENSE EULA.txt
 runtime\pwsh\pwsh.exe            bundled PowerShell 7.6.6 (the app runs ONLY with this)
 llama.cpp\b10998\llama-server.exe CUDA 13.4 build
 venv\app\                        the app's Python (tools, HF, documents)
@@ -112,7 +112,7 @@ setup-source\                    the source package extracted by the setup wizar
 | Process | Port | Owner | Note |
 |---|---|---|---|
 | `llama-server.exe` | 8080 | `scripts/manage-qwen.ps1` | Mutex `Local\QwenLocalModelControl`; the profile is recognized via `--alias` |
-| ComfyUI (`venv\imagegen\Scripts\python.exe ComfyUI\main.py`) | 8188 | `agent/media-model-swap.ps1` | Stays open after a job, only unloads the models |
+| ComfyUI (`venv\imagegen\Scripts\python.exe ComfyUI\main.py`) | 8188 | `agent/media-model-swap.ps1` | Default: closed when the job ends (holds no VRAM/RAM while idle); `comfyKeepAlive=true` (LITE) keeps it open |
 | App | — | `pwsh.exe … qwen-desktop.ps1` | Workers are `Start-ThreadJob` runspaces in the same process |
 
 **Profiles** (`manage-qwen.ps1`; the aliases must match `model-registry.ps1` exactly):
@@ -121,7 +121,7 @@ setup-source\                    the source package extracted by the setup wizar
 |---|---|---|---|
 | MAX | `qwen3.8-27b-max` | Qwen3.8 27B IQ4_XS + mmproj F16 | `--no-mmproj-offload` (projector on the CPU), ctx 32768, predict 8192, `--reasoning-effort xhigh`, q4_0 KV, batch 512/256, `--spec-type draft-mtp` |
 | FLASH | `qwen3.8-27b-flash` | same files | predict 8192, `--reasoning-effort low`, `--spec-type draft-mtp` |
-| LITE | `qwen3.5-9b-lite` | Huihui-Qwen3.5 9B Q5_K_M + mmproj Q8_0 | ctx 32768, predict **8192** (thinking tokens share the output budget, so 3072 was too small), thinking on and **unlimited** (`--reasoning-budget` not passed), batch 256/128, projector on the GPU, `--spec-type draft-mtp` (added on download). The system prompt tells it to think enough and to **ALWAYS WRITE ITS ANSWER** (it does not encourage extending thinking endlessly); even if thinking consumes the budget on a hard question, the visible answer is **guaranteed by the thinking-off recovery** (`enable_thinking=$false`) |
+| LITE | `qwen3.5-9b-lite` | Huihui-Qwen3.5 9B Q5_K_M + mmproj Q8_0 | ctx 32768, predict **8192** (thinking tokens share the output budget, so 3072 was too small), thinking on and **unlimited** (`--reasoning-budget` not passed), batch 256/128, projector on the CPU (`--no-mmproj-offload`), `--spec-type draft-mtp` (added on download). The system prompt tells it to think enough and to **ALWAYS WRITE ITS ANSWER** (it does not encourage extending thinking endlessly); even if thinking consumes the budget on a hard question, the visible answer is **guaranteed by the thinking-off recovery** (`enable_thinking=$false`) |
 
 **MTP (Multi-Token Prediction).** The Qwen3.8 27B GGUF carries a built-in MTP/nextn draft head
 (`qwen35.nextn_predict_layers = 1`, `blk.64.nextn.*`); the LITE 9B GGUF loses that head in the
@@ -139,8 +139,9 @@ single "Qwen3.8 27B" entry (`Get-ProfileCatalogForDisplay`); switching happens i
 Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFilesPresent`) must use
 the full catalog (`Get-ProfileCatalog`).
 
-**VRAM check** (`Test-MemoryBudget`): required = model file (+ mmproj on LITE) + **600 MiB**
-(300 MiB on LITE). **ComfyUI lifecycle (default: runs only during generation):** ComfyUI runs **only
+**VRAM check** (`Test-MemoryBudget`): required = model file + **600 MiB**
+(300 MiB on LITE); the mmproj runs on the CPU in all profiles so it does not count toward the VRAM
+budget. **ComfyUI lifecycle (default: runs only during generation):** ComfyUI runs **only
 during image/video generation**; it is closed when the job ends and before the language model loads,
 so it holds **neither VRAM nor RAM while idle** (an idle ComfyUI kept ~300 MiB of CUDA context plus
 RAM; `comfyKeepAlive` default `false`). It reopens on demand (~27 s).
@@ -277,14 +278,28 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 
 ## 10. Installation, wizard, updates and uninstall
 
-- `install-mamidlabs.ps1 -Profile <p> [-Root] [-Stage a,b] [-SkipMedia] [-Force] [-NoUninstallEntry]`.
+- `install-mamidlabs.ps1 -Profile <p> [-Root] [-Stage a,b] [-SkipMedia] [-Force] [-NoUninstallEntry]
+  [-AppVersion]`.
   Stages in order: `preflight`, `layout` (program files, shortcut, Windows uninstall entry),
   `runtime`, `llama`, `python`, `comfyui` (brings the pinned commits, backs up local changes to
   `tools\backup\*.patch`), `verify`. If the app is open, `layout` stops because the files are
   locked. Package sizes are verified. The `-Root` default is `%LOCALAPPDATA%\Programs\MamidLabs`.
+  `requirements\` is created and copied into the root too (the `Read-Requirements` step reads from
+  `-Source`, but the root keeps a copy like the wizard does). `layout` prunes the owned program
+  folders (`agent\`, `scripts\`, `assets\`, `requirements\`) before copying and applies the same
+  excludes as the `.iss` (`agent\__pycache__\*`, `*.pyc`, `assets\installer\*`), so removed/renamed
+  files do not linger; user data (`settings\`, `chats\`, `models\`, `logs\`, `outputs\`, `tools\`,
+  venvs, `ComfyUI`) is never touched. Its script uninstall entry carries `DisplayVersion` (from
+  `-AppVersion` or `MyAppVersion` in the `.iss` under `-Source`) so the in-app update check
+  can read a script-installed copy; only a strict `x.y.z` `MyAppVersion` is accepted (the updater
+  parses `DisplayVersion` as a `[version]`, so a non-semver value is ignored and no
+  `DisplayVersion` is written at all). If an Inno `{AppId}_is1` key already points at the same root
+  (wizard install), the script key is not written again (no duplicate entry).
   In a wizard-installed root, `layout` also refreshes `setup-source` if present (the source package
   the wizard extracts, used for cancel/rollback and reinstall); it does not create it for a
-  script-based install.
+  script-based install. The `$sameRoot` guard is equality-only, so the wizard's nested
+  `-Source <root>\setup-source` still copies the program files into the root; the `setup-source`
+  refresh itself is skipped when the source IS `setup-source` (a self-copy would empty the package).
 - Pinned versions: PowerShell 7.6.6, llama.cpp b10998 (CUDA 13.4), ComfyUI `b0f4b7b`, ComfyUI-GGUF
   `6ea2651`, comfyui-krea2edit `86f886d`, torch cu130.
 - Disk thresholds (`profile-report.ps1` and `install-mamidlabs.ps1`, identical): LITE 58 GB,
@@ -318,7 +333,9 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 - **In-app updates:** the "Check for updates" button next to "Switch to this profile" in the Profiles
   window (`agent/profile-catalog.ps1` `Test-MamidLabsUpdateAvailable`,
   `Get-InstalledMamidLabsVersion`). It compares GitHub's `releases/latest` version with the local
-  version in Inno's uninstall key (`{AppId}_is1\DisplayVersion`). Three states: idle → check → if an
+  version. The local version is read primarily from Inno's uninstall key
+  (`{AppId}_is1\DisplayVersion`); if that key is absent (a script-based install) it falls back to the
+  script's own entry, matched by `InstallLocation`/`DisplayName`. Three states: idle → check → if an
   update exists "Update now" (downloads the setup file to `%TEMP%`, verifies its size, starts it and
   **closes the main window**, pitfall 21); otherwise "Up to date" or the error text, resetting after
   3 s. The result is also written to the window's status line. If the local version cannot be read,
@@ -329,7 +346,8 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 - **Uninstall:** Settings → Apps → MamidLabs, or
   `powershell -File <root>\scripts\uninstall-mamidlabs.ps1 [-DryRun] [-KeepUserData] [-KeepPrerequisites] [-PurgeSharedCaches] [-Yes]`.
   - First stops the processes running from the root.
-  - Deletes the known entries in the root, the `MamidLabs*.lnk` shortcuts pointing to this root, the
+  - Deletes the known entries in the root (including the `EULA.txt` and `requirements\` that
+    `layout` puts there), the `MamidLabs*.lnk` shortcuts pointing to this root, the
     Uninstall entries belonging to this root and the winget packages in the record.
   - Does not touch files outside the root. Refuses to run in system and user folders.
   - The wizard's uninstaller calls the script with `-Yes -FromWizard`.
@@ -353,7 +371,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 
 ```powershell
 python -m pip install pytest -r requirements\app.txt
-python -m pytest -q          # ~320 tests, ~115 s; no extra setup needed (tests/conftest.py)
+python -m pytest -q          # ~435 tests, ~170 s; no extra setup needed (tests/conftest.py)
 %LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\smoke-test.ps1 -Profile flash -SkipVideo
 ```
 
@@ -426,9 +444,9 @@ has no LoRA.
 7. **The VRAM margin is profile-based** (MAX/FLASH 600 MiB, LITE 300 MiB) and the tolerance is
    LITE 1024 / MAX/FLASH 0. On a 16 GB card a margin that is too large keeps MAX from
    ever starting, while too small lets the 27B model spill into shared memory and drop to ~6 tok/s.
-   **ComfyUI** by default runs only during media generation (it holds no VRAM/RAM while idle) and is closed before the language model loads; on LITE it can be kept open between media jobs with `comfyKeepAlive=true`. A leaked/duplicate instance is cleaned in every profile (ComfyUI is a process pair, so instance roots - not process count - decide). A leaked instance spills the 27B to 0.89 tok/s. On MAX/FLASH the mmproj runs on the CPU
-   (`--no-mmproj-offload`). On the GPU it spills
-   ~420 MiB into shared memory and speed drops from 25 to 19 tok/s.
+   **ComfyUI** by default runs only during media generation (it holds no VRAM/RAM while idle) and is closed before the language model loads; on LITE it can be kept open between media jobs with `comfyKeepAlive=true`. A leaked/duplicate instance is cleaned in every profile (ComfyUI is a process pair, so instance roots - not process count - decide). A leaked instance spills the 27B to 0.89 tok/s. The mmproj runs on the CPU in **all three profiles**
+   (`--no-mmproj-offload`). On the GPU it spilled
+   ~420 MiB into shared memory on MAX/FLASH (speed 25 → 19 tok/s) and overflowed the 8 GB LITE budget.
 8. **Single image rule:** only one image at a time goes to chat (multiple images only in the
    "multi-image reading mode", via OCR).
 9. **Testing with UI Automation:** UIA `Invoke` on a menu item that opens a modal window does not
@@ -501,6 +519,10 @@ has no LoRA.
 - [ ] Is user-facing text in English and saved with the right encoding (BOM)?
 - [ ] Install/uninstall impact: does a new file or folder write outside the root? If so, add it to
       the uninstaller. By default everything must stay under the root.
+- [ ] The install root copy, the `setup-source` refresh, the uninstaller `$programEntries` and the
+      `.iss` `[Files]`/`[UninstallDelete]` must stay in sync: when you add or remove a file/folder
+      copied into the root (or an exclude such as `assets\installer\*`), update all of them in the
+      same change. `tests/test_install_layout_source.py` and `tests/test_uninstall.py` guard this.
 - [ ] Are `README.md`, `docs/installation.md`, `docs/technical-notes.md`, `CHANGELOG.md` and **this
       file** up to date?
 - [ ] Does the Turkish edition need the same change? Identifiers there are Turkish.
@@ -513,6 +535,10 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-13 | **Version/updater parity with TR: only a strict `x.y.z` `MyAppVersion` is accepted, and the wizard's nested source no longer breaks `layout`.** `Get-AppVersionFromSource` now matches `#define\s+MyAppVersion\s+"(\d+\.\d+\.\d+)"` and returns `$null` otherwise (a non-semver `MyAppVersion` was previously written as `DisplayVersion` and broke the in-app updater's `[version]` comparison); a non-`x.y.z` value now writes no `DisplayVersion`. The `$sameRoot` guard is equality-only (so the wizard's nested `-Source <root>\setup-source` still copies the program files into the root), and the `setup-source` refresh is skipped when the source IS `setup-source` (copying the package onto itself emptied it and stopped the script). New functional tests (strict-semver; nested-source; install-root-without-source) and a static guard test in `tests/test_install_layout_source.py`. | scripts/install-mamidlabs.ps1, tests/test_install_layout_source.py, AGENTS.md, CHANGELOG.md |
+| 2026-10-13 | **Install/update correctness: the script install and the in-app updater now agree, and stale/leftover files are handled.** (1) `Invoke-Layout` writes `DisplayVersion` (from `-AppVersion` or `MyAppVersion` in the `.iss` under `-Source`, `x.y.z`) into its `MamidLabs-<hash8>` uninstall entry, and `Get-InstalledMamidLabsVersion` falls back to that script key (matched by `InstallLocation`/`DisplayName`) when Inno's `{AppId}_is1` key is absent — previously a script install had no readable local version and "Check for updates" assumed an update every time. (2) The owned program folders (`agent\`, `scripts\`, `assets\`, plus `requirements\`) are pruned before copying in `layout` **and** in the `setup-source` refresh, so files removed from the source no longer linger; user data is never touched. (3) `requirements\` was missing from the install root: it is now in the root folder creation and copy lists. (4) The `.iss` excludes (`agent\__pycache__\*`, `*.pyc`, `assets\installer\*`) are applied in the script copy and the bundle refresh so the root matches the wizard package. (5) A repeated `layout` skips writing the script uninstall key when a matching Inno `{AppId}_is1` key already exists (no duplicate Apps entry). (6) The uninstaller now removes `EULA.txt` and `requirements\` (added to `$programEntries`; the `.iss` gained `Type: files; Name: "{app}\EULA.txt"`). AGENTS §3 lists `EULA.txt`/`requirements\`; new tests in `tests/test_uninstall.py`, `tests/test_install_layout_source.py` and `tests/test_profile_update_check.py`. | scripts/install-mamidlabs.ps1, agent/profile-catalog.ps1, scripts/uninstall-mamidlabs.ps1, packaging/windows/mamidlabs.iss, tests/test_uninstall.py, tests/test_install_layout_source.py, tests/test_profile_update_check.py, AGENTS.md, CHANGELOG.md |
+| 2026-10-13 | **LITE vision projector moved to the CPU so the 9B model fits in 8 GB of VRAM without overflow.** The Q8_0 mmproj (595 MiB) did not fit on an 8 GB card and pushed llama.cpp's large embedding tensor onto the CPU, running VRAM over the limit; with `--no-mmproj-offload` the projector now runs on the CPU in all three profiles. Used VRAM drops from **7885 to 7249 MiB** (free **72 → 708 MiB**); chat speed is unchanged (~40–79 tok/s) and only image reading is slightly slower. `Test-MemoryBudget` no longer adds the projector size to the VRAM budget. | scripts/manage-qwen.ps1, agent/model-registry.ps1, agent/media-model-swap.ps1, tests/test_lite_profile.py, tests/test_memory_admission.py, AGENTS.md, CHANGELOG.md |
+| 2026-10-13 | **Documentation consistency: `docs/technical-notes.md` was aligned with the current code.** The MTP section was fixed: the LITE 9B GGUF loses its MTP/nextn head during conversion and gets it re-injected on download via `agent/mtp_inject.py`, so `--spec-type draft-mtp` is used on LITE too (same as §5). The LITE memory budget was updated to **7885/8188 MiB** (mmproj on the GPU) and its speed to **content-dependent ~40–79 tok/s** (~97 on 16 GB); the `reasoning` value in the LITE row was changed from `low` to **unlimited**. The ComfyUI lifecycle was corrected to `comfyKeepAlive` **default `false`** (runs only during media generation, holds no VRAM/RAM while idle); the same fixes were applied to `README.md`, `docs/installation.md` and `CHANGELOG.md`. The MAX/FLASH summary speeds in `agent/profiles.json` were set to ~42–58 tok/s; `closecomfy` was added to the `-Action` list in `docs/installation.md`. The §12 test count/time was set to the real value (~435 tests, ~170 s; 433 passed, 4 skipped). | docs/technical-notes.md, README.md, CHANGELOG.md, docs/installation.md, agent/profiles.json, AGENTS.md |
 | 2026-10-12 | **Fixed the empty visible-answer regression on hard questions: thinking consumed the whole output budget.** In an end-to-end math test LITE (9B), on a hard integral question, spent **all 8192 tokens** (~159.7 s) thinking and produced **no visible answer**; the bubble kept only "İntegral" (`logs\qwen-lite.stderr.log`: `eval 159714 ms / 8192 tokens`, `n_tokens 11990`). Root cause: thinking is "unlimited", the output cap `--predict 8192` and the UI `maxTokens 8192` **share the same budget**; the "double-check the steps TWICE" instruction made thinking even longer and the existing empty-answer fallback was stuck at the same 8192. (1) **Thinking-off recovery (the real guarantee):** the new `Set-NoThinkingRequest` puts `chat_template_kwargs = @{ enable_thinking = $false }` into the request body (the only guaranteed way, since LITE ignores `reasoning_effort`); the recovery message also gets `/no_think`, so the model writes the answer directly. The trigger was widened: it fires when the visible answer is **empty** OR was cut off at the output cap (`finishReason='length'`) leaving a broken short fragment. (2) **System prompt softened (TR+ENG):** "check at least TWICE" → "review the critical steps again BUT ALWAYS WRITE YOUR ANSWER; do not think endlessly and end up with no answer"; the LITE deep-thinking line was updated so it no longer encourages endless thinking. (3) **Budget decision:** since thinking is unlimited, raising `--predict` does **not** guarantee an answer and only lengthens thinking and latency (measured: 8192 tokens = 159.7 s); so (b) [guaranteed recovery] was chosen over (a), with no KV/context overflow. New regression tests: `test_empty_answer_recovery_disables_thinking` (static + real pwsh), system-prompt-softening assertions. | agent/qwen-inference.ps1, qwen-desktop.ps1, tests/test_transcriber.py, tests/test_lite_profile.py, tests/test_qwen_contracts.py, CHANGELOG.md, AGENTS.md |
 | 2026-10-12 | **Block LaTeX → readable text + a fixed "evidence-based / double-check" system instruction (found in an end-to-end math test).** (1) `Convert-MathText` now resolves block structures with a **balanced** parser (`Read-MathGroup`/`Read-MathAtom`/`Add-MathAccent`/`Expand-MathCommands`); a plain regex left raw `\frac`/`\boxed` because of nested groups and escaped `\{ \}` (even the final boxed result showed as `boxed{...}`). Supported: nested/parenthesised and escaped `\frac{A}{B}` → `(A)/(B)`, `\sqrt{X}`/`\sqrt[n]{X}` → `√(X)`/`ⁿ√(X)`, `\boxed`/`\fbox` → `[ X ]`, `\textbf`/`\textit`/`\mathrm`/`\text`/`\operatorname` → content, `\left`/`\right` → plain delimiters, `\overline`/`\bar`/`\vec`/`\hat` → combining marks, `\begin`/`\end` dropped. Example: `\boxed{\frac{\pi^5(89+72\sqrt3)}{3888}}` → `[ (π⁵(89+72√(3)))/3888 ]`. The glyph table, `\ce`/`\pu` and the currency `$` are kept. (2) A FIXED (not per-turn; the KV cache is not broken) verification line was added to `Get-SystemPrompt`: evidence-based/correct answers + check the steps and symbolic/numeric **intermediate results at least twice** in multi-step math/algebra/logic + **no fabricated test/theorem/source names**; the LITE deep-thinking line was merged with it (no duplication). Tests extended; TR 432 / ENG 431 passed. | qwen-desktop.ps1, tests/test_math_render.py, tests/test_qwen_contracts.py, tests/test_lite_profile.py, CHANGELOG.md, AGENTS.md |
 | 2026-10-12 | **Audio: LITE CPU/GPU policy (short+RAM -> CPU co-resident, long or insufficient RAM -> GPU+swap), GPU runtime DLLs and the transcribe timeout.** (1) `config.py`: `LITE_CPU_MAX_SECONDS=15` and `choose_plan` — on LITE the CPU co-resident path is chosen ONLY when the recording is SHORTER than the threshold **AND** the pipeline fits in system RAM (`audio_ram_mib`=5120 MiB) -> `('cpu', False)`; for a long recording or insufficient RAM -> `('cuda', True)` (mandatory swap). PRO (20 s) is unchanged; the CPU is never a forced choice (last resort when there is no GPU). Measurement verdict (two independent measurements conflicted; the more DEFINITIVE one, measurement-2, actually ran the LM and the ASR CPU pipeline TOGETHER): LITE co-resident **DOES NOT FIT** (physical 15.25 GB < requirement ~16.1 GB; zero/negative margin, peak ~15127/15611 MB; no OOM but the LM's ~6.1 GB model pages are evicted from the reclaimable cache and re-read from disk on the NEXT chat turn). So the LITE `audio_ram_mib` is kept at **5120 MiB** (`LITE_AUDIO_RAM_MIB`, the SAME safe gate as PRO); with the LM loaded `choose_plan` does NOT pick the CPU branch -> GPU + swap; on a RAM-rich machine a short recording can still use the CPU co-resident path. The swap status text was also made truthful (the language model is not moved to RAM; `manage-qwen -Action stop` STOPS the process). (2) `requirements/asr.txt` gained `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` (CTranslate2 4.x needs `cublas64_12.dll`/`cudnn_*64_9.dll`; absent in torch cu130) -> **GPU ASR now works**; `asr.py` `_add_cuda_dll_dirs` adds the DLL dirs. (3) `qwen-inference.ps1`: `Get-AudioTimeoutSeconds` + `timeoutSeconds` on the transcribe request (`max(600,d*4+300)`<=3600). TR+ENG tests updated. | agent/transcriber/config.py, agent/qwen-inference.ps1, requirements/asr.txt, tests/test_transcriber.py, tests/test_requirements_files.py, AGENTS.md, CHANGELOG.md |

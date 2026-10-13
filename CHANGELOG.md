@@ -3,6 +3,20 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-10-13
+
+### Changed
+- **LITE vision projector moved to the CPU (`--no-mmproj-offload`); it no longer counts toward the
+  LITE VRAM budget.** Measured 7885→7249 MiB used (72→708 MiB free); chat speed unchanged.
+
+### Fixed
+- **Install/update correctness: script installs record `DisplayVersion` (and the in-app updater reads
+  it); owned program dirs are pruned on update; `requirements\` is placed at the install root; the
+  script copy matches the `.iss` excludes; repeated `layout` no longer adds a duplicate uninstall
+  entry; the uninstaller removes `EULA.txt` and `requirements\`.**
+- **Version/updater hardening and the wizard's nested source (`<root>\setup-source`) layout: the
+  source-vs-root guard is equality-only so a fresh install lays down all program files.**
+
 ## [1.0.0] - 2026-10-10
 
 First release. A fully local multimodal AI workspace for Windows: a single WinForms window offers
@@ -17,9 +31,9 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   model, lossless output). OpenAI, Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints.
 - **Media generation (local, ComfyUI):** image from text (Krea-2 Turbo), regenerate from an image,
   style reference, identity-preserving photo editing (Krea 2 Identity Edit; MAX/FLASH) and video
-  generation (Wan 2.2 TI2V 5B). ComfyUI is kept open between media jobs and runs together with the
-  language model as a single healthy instance (measured 61-62 tok/s); a leaked/duplicate instance is
-  cleaned before loading.
+  generation (Wan 2.2 TI2V 5B). By default ComfyUI runs only during media generation (it is closed
+  when the job ends and holds neither VRAM nor RAM while idle); on LITE it can be kept open between
+  media jobs with `comfyKeepAlive=true`. A leaked/duplicate instance is cleaned before loading.
 - **Documents and OCR:** read PDF/Word/Excel/PowerPoint/ZIP/RAR, create PDF/DOCX/PPTX; image and PDF
   OCR with PaddleOCR.
 - **Audio transcription (Whisper + audio events):** an attached audio file or microphone recording
@@ -215,7 +229,8 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   now honor the cancel request; the UI no longer stays in "Stopping" for a long time.
 - **Profile-aware ComfyUI lifecycle:** on MAX/FLASH (27B) profiles, ComfyUI is always closed before the
   language model loads (otherwise on a 16 GB card the MTP draft spills and chat intermittently drops to
-  ~6-7 tok/s); on LITE ComfyUI stays open with no reopen between media jobs.
+  ~6-7 tok/s); on LITE it is closed by default and can be kept open between media jobs with
+  `comfyKeepAlive=true`.
 - **The `custom` (OpenAI-compatible endpoint) provider did not work in chat:** the base address only
   lived in the UI settings; the worker does not read settings, so `custom` requests stopped with
   "enter a base address" (only verification in the settings window worked). The desktop now passes

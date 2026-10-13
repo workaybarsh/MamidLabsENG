@@ -1,6 +1,7 @@
 """VRAM-based admission (manage-qwen.ps1 Test-MemoryBudget).
 
-Required memory = model file (+ projector on LITE) + a safety margin. Before measuring,
+Required memory = model file + a safety margin; the mmproj runs on the CPU in all profiles
+and does not count toward the VRAM budget. Before measuring,
 our own big CUDA context (ComfyUI) is ALWAYS closed if its queue is empty, so the free
 figure is trustworthy and the model does not spill into shared memory; if free VRAM is
 still not enough a clear error is shown. Otherwise layers spill into Windows shared
@@ -18,7 +19,7 @@ def read_text(path: str) -> str:
 def test_memory_budget_function_exists_and_is_called_before_start():
     manager = read_text("scripts/manage-qwen.ps1")
     assert "function Test-MemoryBudget" in manager
-    # The image projector is included in the budget since it is also loaded into VRAM.
+    # The projector is NOT part of the budget: it runs on the CPU in all three profiles.
     assert "Test-MemoryBudget $model $Profile $projector" in manager
     # Single GPU owner: our CUDA context (ComfyUI) is handled before measuring. The default
     # keeps it open; duplicates/leaks are closed; if the budget fails it is closed and retried.
@@ -118,13 +119,19 @@ def test_lite_budget_is_not_tightened_by_the_max_fix():
     assert "{ 1024 } else { 0 }" in tol
 
 
-def test_max_projector_runs_on_cpu_and_stays_out_of_vram_budget():
-    """mmproj F16 needs 1133 MiB on the GPU; together with the language model it overflowed
-    the 16 GB card and fell back to shared memory (chat 19.6 tok/s, image 56 s).
-    On the CPU: chat 24.8 tok/s, image 30 s."""
+def test_projector_runs_on_cpu_and_stays_out_of_vram_budget():
+    """MAX/FLASH: mmproj F16 needs 1133 MiB on the GPU; together with the language model it
+    overflowed the 16 GB card and fell back to shared memory (chat 19.6 tok/s, image 56 s).
+    On the CPU: chat 24.8 tok/s, image 30 s. LITE: the Q8_0 mmproj of 595 MiB did not fit an
+    8 GB card on the GPU and was pushing the big embedding tensor onto the CPU; on the CPU
+    VRAM drops to 7249/8188 MiB (708 MiB free) and chat speed is unchanged. So the mmproj
+    runs on the CPU in all three profiles and does not count toward the VRAM budget."""
     manager = read_text("scripts/manage-qwen.ps1")
-    assert "'--mmproj', $projector, '--no-mmproj-offload'" in manager
-    assert "$profileName -eq 'lite' -and $projectorPath" in manager
+    # --no-mmproj-offload is used in both profile branches (LITE + MAX/FLASH).
+    assert manager.count("'--mmproj', $projector, '--no-mmproj-offload'") >= 2
+    # The Lite budget no longer ADDS the projector size to the model size (on the CPU, not in VRAM).
+    assert "$profileName -eq 'lite' -and $projectorPath" not in manager
+    assert "$modelMiB += [math]::Ceiling((Get-Item -LiteralPath $projectorPath).Length / 1MB)" not in manager
 
 
 def test_memory_budget_tolerates_small_overflow_for_mtp_grown_lite():

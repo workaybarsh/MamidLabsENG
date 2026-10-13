@@ -36,8 +36,8 @@ function Update-ProviderSelection {
     try {
         $modelChoice.Items.Clear()
         # Lite uses a separate 9B model for 8 GB VRAM / 16 GB RAM machines. 32K context
-        # measured on a real machine: ~7500 MiB VRAM with the default Q5_K_M (on an 8 GB card
-        # ~450-500 MiB stays free - tight but usable).
+        # measured on a real machine: ~7249 MiB VRAM with the default Q5_K_M, the projector on the CPU
+        # (--no-mmproj-offload); 708 MiB stays free on an 8 GB card).
         # Only a profile whose language model files are on disk is listed (ComfyUI media
         # models excluded - the install may have used -SkipMedia and they are not needed for
         # chat); otherwise LITE (or MAX/FLASH) could be selected on a PC where it was never

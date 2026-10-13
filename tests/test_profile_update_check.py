@@ -152,3 +152,37 @@ def test_update_closes_the_app_after_launching_the_installer():
     assert handler.index("Start-Process -FilePath $downloadPath") < handler.index("$mainForm.Close()")
     installer = read_text("scripts/install-mamidlabs.ps1")
     assert "MamidLabs is open; the program files are locked" in installer
+
+
+def test_installed_version_falls_back_to_the_script_uninstall_key():
+    """A script install writes its own entry (MamidLabs-<hash8>) with DisplayVersion, but
+    without a fallback the update check only looked at Inno's {AppId}_is1 key and assumed an
+    update every time on a script-installed copy."""
+    catalog = read_text("agent/profile-catalog.ps1")
+    installer = read_text("scripts/install-mamidlabs.ps1")
+    # Primary: Inno's own key.
+    assert "_is1" in catalog
+    # Fallback: the script key matched by InstallLocation/DisplayName.
+    assert "DisplayName -notlike 'MamidLabs*'" in catalog
+    assert "InstallLocation" in catalog
+    # And the installer must actually write DisplayVersion into that key.
+    assert "$values['DisplayVersion'] = $appVersion" in installer
+    assert "Get-AppVersionFromSource $Source" in installer
+
+
+def test_updater_reads_the_script_key_when_the_inno_key_is_absent():
+    """Really create a script-style HKCU uninstall entry (matching the install root) and make
+    sure Get-InstalledMamidLabsVersion picks its DisplayVersion when no Inno key exists."""
+    out = run_ps(r"""
+$script:MamidLabsAppId = '{00000000-0000-0000-0000-000000000000}'
+$root = 'C:\FakeMamidLabs-' + [guid]::NewGuid().ToString('N')
+$base = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+$name = 'MamidLabs-Test-' + [guid]::NewGuid().ToString('N')
+New-Item -Path ($base + '\' + $name) -Force | Out-Null
+Set-ItemProperty -Path ($base + '\' + $name) -Name DisplayName -Value ('MamidLabs (' + $root + ')')
+Set-ItemProperty -Path ($base + '\' + $name) -Name InstallLocation -Value $root
+Set-ItemProperty -Path ($base + '\' + $name) -Name DisplayVersion -Value '2.5.0'
+try { Write-Output ('version:' + (Get-InstalledMamidLabsVersion)) }
+finally { Remove-Item -LiteralPath ($base + '\' + $name) -Recurse -Force -ErrorAction SilentlyContinue }
+""")
+    assert "version:2.5.0" in out

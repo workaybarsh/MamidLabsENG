@@ -58,10 +58,11 @@ def test_alias_table_is_reachable_when_only_functions_are_loaded():
 def test_lite_stays_within_eight_gigabyte_budget():
     """32K context was measured on real hardware (RTX 4060 Laptop). With Q4_K_M VRAM
     use is 6198 MiB (1759 MiB stays free, a comfortable margin). The user preferred to make
-    Q5_K_M the default: 7500 MiB (~450-500 MiB stays free, a tight but accepted
-    margin - llama.cpp's own automatic fit check marks this as "does not fully fit",
-    but since --gpu-layers 99 is forced manually it loads anyway; performance does not
-    drop (~35 tok/s, only ~13% slower than Q4))."""
+    Q5_K_M the default. After the image projector (Q8_0 mmproj, 595 MiB) was moved to the
+    CPU, VRAM use is 7249/8188 MiB (708 MiB free); with the mmproj on the GPU it was
+    7885 MiB (~72 MiB free) and llama.cpp was pushing the big embedding tensor onto the
+    CPU. Chat speed is unchanged (~40-79 tok/s, depending on MTP acceptance); image
+    reading is only a little slower."""
     manager = read_text("scripts/manage-qwen.ps1")
     lite_block = manager.split("if ($Profile -eq 'lite') {", 1)[1]
 
@@ -71,7 +72,8 @@ def test_lite_stays_within_eight_gigabyte_budget():
     assert "'--batch-size', '256', '--ubatch-size', '128'" in manager
     # Without a projector Lite must run text-only, not fail.
     assert "$Profile -ne 'lite' -and !(Test-Path -LiteralPath $projector" in manager
-    assert "if ($projector) { $serverArgs += @('--mmproj', $projector" in manager
+    # The Lite projector must be kept on the CPU; it does not fit an 8 GB card on the GPU.
+    assert "if ($projector) { $serverArgs += @('--mmproj', $projector, '--no-mmproj-offload'" in manager
 
 
 def test_settings_are_loaded_before_the_profile_reads_them():

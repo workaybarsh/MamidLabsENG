@@ -202,6 +202,11 @@ function Get-GitHubHeaders([string]$token) {
     return $headers
 }
 
+# The update check reads the local version from the uninstall key. Primary source: Inno
+# Setup's own key ({AppId}_is1, a wizard install). Fallback: a script-based install writes
+# its own entry (MamidLabs-<hash8>) with InstallLocation = the install root; it is matched
+# by InstallLocation/DisplayName. Without the fallback a script-installed copy looked like
+# it had no local version and the check assumed an update every time.
 function Get-InstalledMamidLabsVersion {
     foreach ($hive in @('HKCU:', 'HKLM:')) {
         $key = "$hive\Software\Microsoft\Windows\CurrentVersion\Uninstall\$($script:MamidLabsAppId)_is1"
@@ -210,6 +215,18 @@ function Get-InstalledMamidLabsVersion {
                 $v = (Get-ItemProperty -LiteralPath $key -Name DisplayVersion -ErrorAction Stop).DisplayVersion
                 if ($v) { return $v }
             } catch { }
+        }
+    }
+    if (!$root) { return $null }
+    $normalized = [IO.Path]::GetFullPath($root).TrimEnd('\')
+    foreach ($hive in @('HKCU:', 'HKLM:')) {
+        $base = "$hive\Software\Microsoft\Windows\CurrentVersion\Uninstall"
+        if (!(Test-Path -LiteralPath $base)) { continue }
+        foreach ($key in @(Get-ChildItem -LiteralPath $base -ErrorAction SilentlyContinue)) {
+            $props = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
+            if (!$props -or [string]$props.DisplayName -notlike 'MamidLabs*') { continue }
+            if (([string]$props.InstallLocation).TrimEnd('\') -ine $normalized) { continue }
+            if ($props.DisplayVersion) { return [string]$props.DisplayVersion }
         }
     }
     return $null

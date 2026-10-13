@@ -35,11 +35,15 @@ def ps(command, timeout=60):
 def make_install(base: Path) -> Path:
     root = base / "MamidLabsInstall"
     for folder in ("agent", "scripts", "assets", "models", "logs", "llama.cpp", "ComfyUI/models/loras", "venv/imagegen/Lib",
-                   "runtime/pwsh", "tools/pip-cache", "tools/hf-home", "chats", "outputs/images", "settings"):
+                   "runtime/pwsh", "tools/pip-cache", "tools/hf-home", "chats", "outputs/images", "settings",
+                   "requirements"):
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / "agent/profiles.json").write_text("{}", encoding="utf-8")
     (root / "qwen-desktop.ps1").write_text("# app", encoding="utf-8")
     (root / "launch-qwen-desktop.vbs").write_text("' launcher", encoding="utf-8")
+    # The script install puts EULA.txt and requirements\ in the root too (see Invoke-Layout).
+    (root / "EULA.txt").write_text("license", encoding="utf-8")
+    (root / "requirements/app.txt").write_text("pytest", encoding="utf-8")
     (root / "models/model.gguf").write_bytes(b"x" * 1024)
     (root / "chats/chat.json").write_text("{}", encoding="utf-8")
     (root / "outputs/images/a.png").write_bytes(b"png")
@@ -174,6 +178,26 @@ def test_removes_only_the_uninstall_entry_of_this_root(tmp_path):
         assert left.stdout.split() == ["MamidLabs-other"]
     finally:
         ps(f"Remove-Item -LiteralPath '{base}' -Recurse -Force")
+
+
+def test_uninstall_removes_eula_and_requirements_from_the_root(tmp_path):
+    """The script install copies EULA.txt and requirements\\ into the root; the uninstaller
+    must know them, otherwise they stay behind and the root folder is not deleted."""
+    root = make_install(tmp_path)
+    assert (root / "EULA.txt").exists()
+    assert (root / "requirements" / "app.txt").exists()
+    result = run_uninstall(root, tmp_path / "Desktop", "-Yes")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not root.exists(), result.stdout
+
+
+def test_eula_and_requirements_are_program_entries_and_deleted_by_the_wizard():
+    uninstall = (ROOT / "scripts/uninstall-mamidlabs.ps1").read_text(encoding="utf-8-sig")
+    assert "'requirements'" in uninstall
+    assert "'EULA.txt'" in uninstall
+    iss = (ROOT / "packaging/windows/mamidlabs.iss").read_text(encoding="utf-8-sig")
+    assert 'Type: files; Name: "{app}\\EULA.txt"' in iss
+    assert 'Type: filesandordirs; Name: "{app}\\requirements"' in iss
 
 
 def test_installers_keep_caches_inside_the_install_root():
