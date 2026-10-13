@@ -3,6 +3,17 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-10-13
+
+### Fixed
+- **Audio attachment + Agent chip: the file tools are no longer offered to the model.** On a turn
+  with an audio attachment the audio is already transcribed by faster-whisper into text, yet with
+  the Agent chip on the small model could still try to find/read/write the audio FILE with
+  `list_bound_files`/`read_bound_file`/`write_bound_file` and waste turns (seen in a UI test). Those
+  three tools are now not offered on an audio turn (unless the user explicitly asks for a file), and
+  a successful transcript note tells the model not to open the file with tools and to base its
+  answer directly on the transcript.
+
 ## [1.1.0] - 2026-10-13
 
 ### Changed

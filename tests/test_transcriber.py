@@ -756,6 +756,40 @@ $ok = Set-AudioUnavailableNote $items 'audio.wav' 'CUDA out of memory'
     assert "audio.wav" in out
 
 
+def test_audio_turn_hides_bound_file_tools_unless_file_intent():
+    """On a turn with an audio attachment the bound-folder FILE tools are NOT offered: the audio
+    is already transcribed and turned into text, so the small model must not try to
+    find/read/write the audio FILE with list_bound_files/read_bound_file/write_bound_file (it
+    wasted turns on that in the UI test). If the user explicitly asks for a file (Test-FileIntent)
+    the tools are still offered."""
+    worker = read_text("agent/qwen-inference.ps1")
+    assert "$audioAttachedThisTurn = @($job.currentAudioPaths" in worker
+    assert "if (!($audioAttachedThisTurn -and !(Test-FileIntent $userText)))" in worker
+    guard = worker.split("$audioAttachedThisTurn = @($job.currentAudioPaths")[1]
+    guard = guard.split("if (Test-CommandIntent")[0]
+    assert "list_bound_files" in guard and "read_bound_file" in guard and "write_bound_file" in guard
+
+
+def test_transcript_note_tells_model_not_to_open_the_audio_file(tmp_path):
+    """A successful transcript also tells the model NOT to open the audio FILE with tools
+    (symmetric to Set-AudioUnavailableNote); otherwise it takes it for an attached document and
+    wastes turns. Runs with a real pwsh."""
+    worker = read_text("agent/qwen-inference.ps1")
+    fn = _extract_ps_function(worker, "Add-TranscriptToMessages")
+    script = fn + """
+$items = [Collections.ArrayList]::new()
+[void]$items.Add(@{ role = 'user'; content = 'Transcribe the audio.' })
+$ok = Add-TranscriptToMessages $items 'Speaker: hello' 'audio.wav'
+'OK=' + $ok
+'TEXT=' + [string]$items[0].content
+"""
+    out = _run_ps1(script, tmp_path)
+    assert "OK=True" in out
+    assert "read_bound_file" in out
+    assert "audio.wav" in out
+    assert "Speaker: hello" in out
+
+
 def test_audio_turn_preempts_language_model_loading():
     desktop = read_text("qwen-desktop.ps1")
     assert "function Stop-ModelSwitchForAudio" in desktop

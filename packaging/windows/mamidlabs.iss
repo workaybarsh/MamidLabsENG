@@ -11,7 +11,7 @@
 
 ; The single source of the version. CI compares the pushed tag (v<version>) with this value;
 ; CHANGELOG.md must have a section with the same number.
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.1.1"
 #define MyAppName "MamidLabs"
 #define MyAppPublisher "workaybarsh"
 #define MyAppURL "https://github.com/workaybarsh/MamidLabsENG"

@@ -990,9 +990,19 @@ function Get-ToolDefinitions([hashtable]$job) {
         }
     }
     if ($job.agent) {
-        $defs += @{ type = 'function'; function = @{ name = 'list_bound_files'; description = 'Lists the files and subfolders in the folder the user bound.'; parameters = @{ type = 'object'; properties = @{ relative_path = @{ type = 'string' } } } } }
-        $defs += @{ type = 'function'; function = @{ name = 'read_bound_file'; description = 'Reads a text file inside the bound folder.'; parameters = @{ type = 'object'; required = @('relative_path'); properties = @{ relative_path = @{ type = 'string' } } } } }
-        $defs += @{ type = 'function'; function = @{ name = 'write_bound_file'; description = 'Writes a text file inside the bound folder or changes an existing one. Use it only if the user explicitly asks.'; parameters = @{ type = 'object'; required = @('relative_path', 'content'); properties = @{ relative_path = @{ type = 'string' }; content = @{ type = 'string' } } } } }
+        # On a turn with an audio attachment the bound-folder FILE tools are NOT offered: the
+        # audio is already transcribed by faster-whisper and added to the last user message as
+        # text (see Add-TranscriptToMessages). Otherwise the small model reads the
+        # "[The user attached an audio file: ...]" note, tries to find/read/write the audio FILE
+        # with list_bound_files/read_bound_file/write_bound_file and wastes turns (UI test: a
+        # list/write loop). If the user explicitly asks for a file (Test-FileIntent) the tools are
+        # still offered.
+        $audioAttachedThisTurn = @($job.currentAudioPaths | Where-Object { $_ }).Count -gt 0
+        if (!($audioAttachedThisTurn -and !(Test-FileIntent $userText))) {
+            $defs += @{ type = 'function'; function = @{ name = 'list_bound_files'; description = 'Lists the files and subfolders in the folder the user bound.'; parameters = @{ type = 'object'; properties = @{ relative_path = @{ type = 'string' } } } } }
+            $defs += @{ type = 'function'; function = @{ name = 'read_bound_file'; description = 'Reads a text file inside the bound folder.'; parameters = @{ type = 'object'; required = @('relative_path'); properties = @{ relative_path = @{ type = 'string' } } } } }
+            $defs += @{ type = 'function'; function = @{ name = 'write_bound_file'; description = 'Writes a text file inside the bound folder or changes an existing one. Use it only if the user explicitly asks.'; parameters = @{ type = 'object'; required = @('relative_path', 'content'); properties = @{ relative_path = @{ type = 'string' }; content = @{ type = 'string' } } } } }
+        }
         # run_command is offered ONLY when the user explicitly asks for a command/terminal
         # (see Test-CommandIntent). Otherwise the small model diverted to absurd command
         # attempts on a web/search failure; if the tool is not offered it cannot call it.
@@ -1503,7 +1513,10 @@ function Add-TranscriptToMessages([Collections.ArrayList]$items, [string]$transc
     for ($i = $items.Count - 1; $i -ge 0; $i--) {
         $message = $items[$i]
         if ([string]$message.role -ne 'user') { continue }
-        $note = "[Audio transcript ($fileName)]`n$transcript"
+        $note = "[Audio transcript ($fileName)]`n$transcript`n`n" +
+            "(This is a transcript of an audio recording; base your answer directly on this text. " +
+            "Do not try to open the file with tools such as read_document/read_bound_file; an audio " +
+            "file is not a document in the bound folder.)"
         if ($message.content -is [string]) {
             $message.content = [string]$message.content + "`n`n" + $note
         } else {
