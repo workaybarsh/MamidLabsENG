@@ -27,14 +27,12 @@ if ($Action -notin @('stop', 'closecomfy') -and (Test-Path -LiteralPath $setting
 
 if ($Profile -eq 'lite') {
     # The default is Q5_K_M (~6.5 GB file + ~0.46 GB MTP head). Measured on a real machine (RTX 4060 Laptop, 8 GB)
-    # with 32K context: it uses 7500 MiB VRAM, ~450-500 MiB stays free -
-    # tight but a margin the user accepted (the other MAX/FLASH profiles run with
-    # similar margins on other machines). llama.cpp's own automatic fit check marks
-    # this as "does not fully fit", but since --gpu-layers 99 is forced manually it
-    # loads anyway; performance does not drop (measured ~35 tok/s, only ~13% slower
-    # than Q4). For a more comfortable margin you can go back to Q4_K_M (~5.7 GB) with
-    # the liteModel field in settings/api.json; Q6_K (~7.4 GB) never fits on an 8 GB card
-    # (the file itself exceeds the free VRAM).
+    # with 32K context and the projector on the CPU (--no-mmproj-offload): it uses 7249 MiB
+    # VRAM (708 MiB free); with the projector on the GPU it was 7885 MiB (~72 MiB free).
+    # Chat speed is unchanged (content-dependent ~40-79 tok/s). For a more comfortable
+    # margin you can go back to Q4_K_M (~5.7 GB) with the liteModel field in
+    # settings/api.json; Q6_K (~7.4 GB) never fits on an 8 GB card (the file itself exceeds
+    # the free VRAM).
     $liteFile = 'Huihui-Qwen3.5-9B-abliterated.i1-Q5_K_M.gguf'
     $liteCtx = '32768'
     # Thinking is ON and UNLIMITED: no thinking budget is imposed on LITE, so it thinks as
@@ -89,9 +87,8 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     # speed is unchanged (80/61/40 tok/s - the same as with the mmproj on the GPU),
     # image reading is only a little slower.
     # Real measurement (Lite, Q5_K_M, 32K context, RTX 4060 Laptop, default profile):
-    # when the 6220 MiB file was loaded total VRAM use reached ~7500 MiB,
-    # leaving ~450-500 MiB free on the card - tight but a margin the user explicitly
-    # accepted (MAX/FLASH also run with similar margins on other machines). So the
+    # with the projector on the CPU the model settles at 7249 MiB (708 MiB free);
+    # with the projector on the GPU it was 7885 MiB (~72 MiB free). So the
     # margin for Lite was kept small: a much wider margin would, under the same ambient
     # conditions (browser + desktop holding ~1.5 GB VRAM), silently reject the default
     # profile and deprive the user of a working installation.
@@ -110,14 +107,14 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     #
     # On LITE the margin is deliberately small (300 MiB) and the tolerance is wide: on an
     # 8 GB card the model already runs at the limit; llama.cpp keeps the big embedding tensor
-    # on the CPU and absorbs a small overflow, still running at ~41 tok/s. Enlarging the
-    # margin here would reject a working LITE install for nothing.
+    # on the CPU and absorbs a small overflow, keeping chat speed (content-dependent ~40-79
+    # tok/s). Enlarging the margin here would reject a working LITE install for nothing.
     $overheadMiB = if ($profileName -eq 'lite') { 300 } else { 600 }
     $neededMiB = $modelMiB + $overheadMiB
     # llama.cpp keeps the big embedding (token_embd) tensor on the CPU when VRAM is short
-    # and tolerates a small overflow. On LITE the MTP head grows the file by ~464 MiB; on
-    # an 8 GB card the model still loaded at ~165 MiB over and ran at ~41 tok/s. So a small
-    # overflow is not blocked on LITE; the tolerance there is wide.
+    # and tolerates a small overflow. On LITE the MTP head grows the file by ~464 MiB; with
+    # the projector on the CPU the model settles at 7249/8188 MiB (708 MiB free), so the
+    # tolerance only covers ambient/ASR-transition margin and a small overflow is allowed.
     # For MAX/FLASH (16 GB) the tolerance is ZERO: the 27B model already runs at the card's
     # limit and, with a CUDA context (ComfyUI) open, even a small overflow pushes a component
     # into shared memory and drops production to ~6 tok/s. That is why ComfyUI is always

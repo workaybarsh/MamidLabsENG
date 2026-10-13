@@ -92,5 +92,12 @@ jobs:
             gh release upload $tag dist\MamidLabs_Setup.exe --clobber
           } else {
             gh release create $tag dist\MamidLabs_Setup.exe --title "MamidLabs $version" --notes-file release-notes.md --verify-tag
+            if ($LASTEXITCODE -ne 0) {
+              # A concurrent run may have created the release for the same tag first
+              # (HTTP 422 "Release.tag_name already exists"); if it exists now, upload.
+              gh release view $tag *> $null
+              if ($LASTEXITCODE -eq 0) { gh release upload $tag dist\MamidLabs_Setup.exe --clobber }
+              else { throw "gh release exit code $LASTEXITCODE" }
+            }
           }
           if ($LASTEXITCODE -ne 0) { throw "gh release exit code $LASTEXITCODE" }
