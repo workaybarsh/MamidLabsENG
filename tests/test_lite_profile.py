@@ -76,6 +76,26 @@ def test_lite_stays_within_eight_gigabyte_budget():
     assert "if ($projector) { $serverArgs += @('--mmproj', $projector, '--no-mmproj-offload'" in manager
 
 
+def test_max_flash_server_args_are_locked():
+    """MAX/FLASH (else) server arguments are LOCKED: they were smoke-verified on a real 16 GB
+    machine. A silent edit could break PRO; this test locks the whole tuple (mmproj on the CPU,
+    --image-min-tokens 1024, batch 512/256, threads 6/12, xhigh/low; MTP is added only if the
+    GGUF carries MTP layers)."""
+    manager = read_text("scripts/manage-qwen.ps1")
+    for frag in [
+        "'--model', $model, '--mmproj', $projector, '--no-mmproj-offload', '--image-min-tokens', '1024'",
+        "'--ctx-size', '32768', '--predict', $predict, '--parallel', '1'",
+        "'--gpu-layers', '99', '--flash-attn', 'on', '--cache-type-k', 'q4_0'",
+        "'--cache-type-v', 'q4_0', '--cache-reuse', '256', '--batch-size', '512', '--ubatch-size', '256'",
+        "'--threads', '6', '--threads-batch', '12', '--jinja', '--reasoning', 'on'",
+        "'--reasoning-effort', $reasoningEffort, '--reasoning-format', 'deepseek'",
+        "'--metrics', '--no-context-shift'",
+    ]:
+        assert frag in manager, frag
+    assert "$reasoningEffort = if ($Profile -eq 'max') { 'xhigh' } else { 'low' }" in manager
+    assert "'--spec-type', 'draft-mtp'" in manager
+
+
 def test_settings_are_loaded_before_the_profile_reads_them():
     """If $settings is assigned after the profile block, liteModel/liteContext are silently ignored."""
     manager = read_text("scripts/manage-qwen.ps1")
