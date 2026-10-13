@@ -3,39 +3,6 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/).
 
-## [1.1.1] - 2026-10-13
-
-### Fixed
-- **Audio attachment + Agent chip: the file tools are no longer offered to the model.** On a turn
-  with an audio attachment the audio is already transcribed by faster-whisper into text, yet with
-  the Agent chip on the small model could still try to find/read/write the audio FILE with
-  `list_bound_files`/`read_bound_file`/`write_bound_file` and waste turns (seen in a UI test). Those
-  three tools are now not offered on an audio turn (unless the user explicitly asks for a file), and
-  a successful transcript note tells the model not to open the file with tools and to base its
-  answer directly on the transcript.
-
-## [1.1.0] - 2026-10-13
-
-### Changed
-- **LITE vision projector moved to the CPU (`--no-mmproj-offload`); it no longer counts toward the
-  LITE VRAM budget.** Measured 7885→7249 MiB used (72→708 MiB free); chat speed unchanged.
-- **Documentation/comment consistency pass (no behavior change).** Stale or hard-coded figures and
-  missing items were fixed: `packaging/windows/mamidlabs.iss` (the header no longer hard-codes
-  `v1.0.0`), `AGENTS.md` (the `asr` install stage, `requirements/asr.txt` in the repo map, the
-  `chart` smoke step, the real test figures, the reconciled MTP acceptance `~0.93 (content-dependent
-  0.31–0.96)`, and an explicit "at that time" framing for the 7885/8188 MiB LITE row),
-  `docs/installation.md` (the `asr` stage), `docs/technical-notes.md` (MTP acceptance and the LITE
-  margin wording), `scripts/manage-qwen.ps1` (a single LITE size figure, `~6.5 GB + ~0.46 GB MTP
-  head`), `README.md` (a "For Türkçe" link) and the `agent/transcriber` package-version comment.
-
-### Fixed
-- **Install/update correctness: script installs record `DisplayVersion` (and the in-app updater reads
-  it); owned program dirs are pruned on update; `requirements\` is placed at the install root; the
-  script copy matches the `.iss` excludes; repeated `layout` no longer adds a duplicate uninstall
-  entry; the uninstaller removes `EULA.txt` and `requirements\`.**
-- **Version/updater hardening and the wizard's nested source (`<root>\setup-source`) layout: the
-  source-vs-root guard is equality-only so a fresh install lays down all program files.**
-
 ## [1.0.0] - 2026-10-10
 
 First release. A fully local multimodal AI workspace for Windows: a single WinForms window offers
@@ -44,62 +11,9 @@ editing, video generation and chart drawing. The language model runs on `llama.c
 (`llama-server`), the image/video models on `ComfyUI`, on the user's NVIDIA graphics card. OpenAI,
 Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API providers.
 
-### Added
-- **Chat (local + API):** local chat via `llama-server` (MAX/FLASH/LITE profiles; Qwen3.8 27B and
-  Qwen3.5 9B), MTP (Multi-Token Prediction) speculative decoding for ~2x speed (no separate draft
-  model, lossless output). OpenAI, Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints.
-- **Media generation (local, ComfyUI):** image from text (Krea-2 Turbo), regenerate from an image,
-  style reference, identity-preserving photo editing (Krea 2 Identity Edit; MAX/FLASH) and video
-  generation (Wan 2.2 TI2V 5B). By default ComfyUI runs only during media generation (it is closed
-  when the job ends and holds neither VRAM nor RAM while idle); on LITE it can be kept open between
-  media jobs with `comfyKeepAlive=true`. A leaked/duplicate instance is cleaned before loading.
-- **Documents and OCR:** read PDF/Word/Excel/PowerPoint/ZIP/RAR, create PDF/DOCX/PPTX; image and PDF
-  OCR with PaddleOCR.
-- **Audio transcription (Whisper + audio events):** an attached audio file or microphone recording
-  is transcribed automatically and the findings are given to the language model (the OCR/mmproj
-  pattern). The engine is **faster-whisper large-v3**: highest accuracy + **Silero VAD** to suppress
-  hallucinated text on silence. **Non-speech audio events** (AudioSet/AST; e.g. footsteps, a door)
-  and optional **speaker diarization** (pyannote) are merged into the same transcript. The output is
-  **chronological and timestamp-free**:
-  ```
-  (footsteps)
-  Speaker: Did you come?
-  (door closing)
-  Speaker: Yes, a bit late.
-  ```
-  Fast on GPU (falls back to CPU). On the local provider the language model is unloaded from VRAM,
-  the transcript is taken, then it is restored. A **microphone** button left of Send (**live
-  recording from the Windows default input device**, dependency-free) and **Add audio** in the "+"
-  menu. The engine and models are installed into `venv\asr` + the HF cache during installation.
-- **ASR preempts the language-model load:** when a message with an audio attachment is sent while
-  the language model is not ready, the job starts immediately; the in-flight model load is
-  abandoned, the audio is transcribed with Whisper, then the language model (per the selected
-  profile) is restored. So there is no need to wait for the model to load before sending audio.
-- **Dependency-free chart generation:** the `generate_chart` chat tool + `agent/chart-run.ps1`
-  (bundled pwsh + System.Drawing; bar/line/pie/scatter/function charts; a safe expression evaluator,
-  no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`.
-- **Math rendering:** LaTeX answers are turned into readable Unicode (∫, ∞, π, √, ∑, →, ≠, Greek
-  letters; fractions → a/b; exponents/subscripts → Unicode). Also **chemistry/general-science**
-  glyphs: equilibrium arrow ⇌, ↔ ⟷ ⟹ ↪ ↑ ↓ ↕, and **mhchem `\ce{...}`/`\pu{...}`** (element numbers
-  become subscripts, arrows become arrows). A currency `$` is kept.
-- **Web and local management:** web search and page reading tools; browser-accessible local
-  management server (localhost only, password-protected session).
-- **Installation and updates:** Inno Setup wizard; pinned infrastructure (PowerShell 7.6.6, llama.cpp
-  b10998 CUDA 13.4, ComfyUI b0f4b7b); in-app update check; full uninstall.
-  In setup, **image/video generation, audio capture and OCR are optional** (checked by default;
-  unchecking installs only the chat/document tools). The same components can be selected, downloaded
-  or deleted from the **Profile Manager**.
-- **License (EULA):** the setup wizard shows an **End User License Agreement** and requires accepting
-  it. Ownership and all rights belong to the developer; copying, modifying, cracking or commercially
-  marketing the Software is prohibited. Unauthorized use may carry civil and criminal liability;
-  disclaimer and limitation of liability, termination and governing law/jurisdiction are included.
-- **Language profile (Profiles window):** the Profiles window gained a **UI language / language
-  profile** selector (Turkish/English). From there the user can **download and install the other
-  language edition's setup package**; it installs into the same folder (`UsePreviousAppDir`) and
-  keeps `settings\` and `chats\`. The downloaded package is stored under `tools\editions` and can be
-  **deleted** with "Delete language edition".
-
 ### Changed
+- **LITE vision projector moved to the CPU (`--no-mmproj-offload`); it no longer counts toward the
+  LITE VRAM budget.** Measured 7885→7249 MiB used (72→708 MiB free); chat speed unchanged.
 - **Audio-transcription tier is now based on the selected profile:** the level of the local ASR
   pipeline (LITE: `int8_float16` + sequential loading + 15 s CPU/GPU threshold; PRO (MAX/FLASH):
   `float16` + parallel + 20 s) is now determined by the **selected language-model profile**;
@@ -126,6 +40,19 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **Audio attachment + Agent chip: the file tools are no longer offered to the model.** On a turn
+  with an audio attachment the audio is already transcribed by faster-whisper into text, yet with
+  the Agent chip on the small model could still try to find/read/write the audio FILE with
+  `list_bound_files`/`read_bound_file`/`write_bound_file` and waste turns (seen in a UI test). Those
+  three tools are now not offered on an audio turn (unless the user explicitly asks for a file), and
+  a successful transcript note tells the model not to open the file with tools and to base its
+  answer directly on the transcript.
+- **Install/update correctness: script installs record `DisplayVersion` (and the in-app updater reads
+  it); owned program dirs are pruned on update; `requirements\` is placed at the install root; the
+  script copy matches the `.iss` excludes; repeated `layout` no longer adds a duplicate uninstall
+  entry; the uninstaller removes `EULA.txt` and `requirements\`.**
+- **Version/updater hardening and the wizard's nested source (`<root>\setup-source`) layout: the
+  source-vs-root guard is equality-only so a fresh install lays down all program files.**
 - **Empty visible-answer regression on hard questions (thinking consumed the whole output budget).**
   In an end-to-end math test LITE (9B), on a hard integral question, spent **all 8192 tokens**
   (~159.7 s) thinking and produced **no visible answer**; the bubble kept only "İntegral"
@@ -254,3 +181,68 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   lived in the UI settings; the worker does not read settings, so `custom` requests stopped with
   "enter a base address" (only verification in the settings window worked). The desktop now passes
   `baseUrl` plus settings to the worker; verified end to end with commandcode (text + image).
+
+### Docs
+- **Documentation/comment consistency pass (no behavior change).** Stale or hard-coded figures and
+  missing items were fixed: `packaging/windows/mamidlabs.iss` (the header no longer hard-codes
+  `v1.0.0`), `AGENTS.md` (the `asr` install stage, `requirements/asr.txt` in the repo map, the
+  `chart` smoke step, the real test figures, the reconciled MTP acceptance `~0.93 (content-dependent
+  0.31–0.96)`, and an explicit "at that time" framing for the 7885/8188 MiB LITE row),
+  `docs/installation.md` (the `asr` stage), `docs/technical-notes.md` (MTP acceptance and the LITE
+  margin wording), `scripts/manage-qwen.ps1` (a single LITE size figure, `~6.5 GB + ~0.46 GB MTP
+  head`), `README.md` (a "For Türkçe" link) and the `agent/transcriber` package-version comment.
+
+### Added
+- **Chat (local + API):** local chat via `llama-server` (MAX/FLASH/LITE profiles; Qwen3.8 27B and
+  Qwen3.5 9B), MTP (Multi-Token Prediction) speculative decoding for ~2x speed (no separate draft
+  model, lossless output). OpenAI, Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints.
+- **Media generation (local, ComfyUI):** image from text (Krea-2 Turbo), regenerate from an image,
+  style reference, identity-preserving photo editing (Krea 2 Identity Edit; MAX/FLASH) and video
+  generation (Wan 2.2 TI2V 5B). By default ComfyUI runs only during media generation (it is closed
+  when the job ends and holds neither VRAM nor RAM while idle); on LITE it can be kept open between
+  media jobs with `comfyKeepAlive=true`. A leaked/duplicate instance is cleaned before loading.
+- **Documents and OCR:** read PDF/Word/Excel/PowerPoint/ZIP/RAR, create PDF/DOCX/PPTX; image and PDF
+  OCR with PaddleOCR.
+- **Audio transcription (Whisper + audio events):** an attached audio file or microphone recording
+  is transcribed automatically and the findings are given to the language model (the OCR/mmproj
+  pattern). The engine is **faster-whisper large-v3**: highest accuracy + **Silero VAD** to suppress
+  hallucinated text on silence. **Non-speech audio events** (AudioSet/AST; e.g. footsteps, a door)
+  and optional **speaker diarization** (pyannote) are merged into the same transcript. The output is
+  **chronological and timestamp-free**:
+  ```
+  (footsteps)
+  Speaker: Did you come?
+  (door closing)
+  Speaker: Yes, a bit late.
+  ```
+  Fast on GPU (falls back to CPU). On the local provider the language model is unloaded from VRAM,
+  the transcript is taken, then it is restored. A **microphone** button left of Send (**live
+  recording from the Windows default input device**, dependency-free) and **Add audio** in the "+"
+  menu. The engine and models are installed into `venv\asr` + the HF cache during installation.
+- **ASR preempts the language-model load:** when a message with an audio attachment is sent while
+  the language model is not ready, the job starts immediately; the in-flight model load is
+  abandoned, the audio is transcribed with Whisper, then the language model (per the selected
+  profile) is restored. So there is no need to wait for the model to load before sending audio.
+- **Dependency-free chart generation:** the `generate_chart` chat tool + `agent/chart-run.ps1`
+  (bundled pwsh + System.Drawing; bar/line/pie/scatter/function charts; a safe expression evaluator,
+  no `Invoke-Expression`). The result is shown inline in the chat and saved under `outputs\charts`.
+- **Math rendering:** LaTeX answers are turned into readable Unicode (∫, ∞, π, √, ∑, →, ≠, Greek
+  letters; fractions → a/b; exponents/subscripts → Unicode). Also **chemistry/general-science**
+  glyphs: equilibrium arrow ⇌, ↔ ⟷ ⟹ ↪ ↑ ↓ ↕, and **mhchem `\ce{...}`/`\pu{...}`** (element numbers
+  become subscripts, arrows become arrows). A currency `$` is kept.
+- **Web and local management:** web search and page reading tools; browser-accessible local
+  management server (localhost only, password-protected session).
+- **Installation and updates:** Inno Setup wizard; pinned infrastructure (PowerShell 7.6.6, llama.cpp
+  b10998 CUDA 13.4, ComfyUI b0f4b7b); in-app update check; full uninstall.
+  In setup, **image/video generation, audio capture and OCR are optional** (checked by default;
+  unchecking installs only the chat/document tools). The same components can be selected, downloaded
+  or deleted from the **Profile Manager**.
+- **License (EULA):** the setup wizard shows an **End User License Agreement** and requires accepting
+  it. Ownership and all rights belong to the developer; copying, modifying, cracking or commercially
+  marketing the Software is prohibited. Unauthorized use may carry civil and criminal liability;
+  disclaimer and limitation of liability, termination and governing law/jurisdiction are included.
+- **Language profile (Profiles window):** the Profiles window gained a **UI language / language
+  profile** selector (Turkish/English). From there the user can **download and install the other
+  language edition's setup package**; it installs into the same folder (`UsePreviousAppDir`) and
+  keeps `settings\` and `chats\`. The downloaded package is stored under `tools\editions` and can be
+  **deleted** with "Delete language edition".
