@@ -625,20 +625,31 @@ function Add-WebFailureNote([string]$text) {
 function Test-CurrentInfoIntent([string]$text) {
     if ([string]::IsNullOrWhiteSpace($text)) { return $false }
     $normalized = $text.ToLowerInvariant()
-    return $normalized -match 'current|latest|newest|\bnews\b|weather|price|\bstock\b|score|today|guncel|hava durumu'
+    return $normalized -match 'current|latest|newest|\bnews\b|weather|price|\bstock\b|score|guncel|hava durumu'
 }
 
-# When the Internet chip is OFF but the request asks for current information and the
-# answer does not already say the internet is off, a short honest note is appended so
-# the user does not trust fabricated up-to-date data.
-function Add-NoInternetNote([string]$text, [string]$userText, [bool]$internetOn) {
-    if ($internetOn) { return $text }
-    if ($script:webToolFailCount -gt 0) { return $text }  # the web-failure note already applies
-    if ([string]::IsNullOrWhiteSpace($text)) { return $text }
-    if (!(Test-CurrentInfoIntent $userText)) { return $text }
-    $normalized = $text.ToLowerInvariant()
-    if ($normalized -match 'internet (is )?(off|disabled)|offline|no internet|not online|cannot reach') { return $text }
-    return $text + "`n`n[Web access is disabled, so this information could not be verified against an up-to-date source.]"
+# Makes the final answer safe (to COMPLETELY eliminate fabrication):
+#  - If the request asks for current information and web access is unavailable (search failed
+#    or the Internet chip is off) the model's TEXT IS NOT USED; the fabricated weather/price/
+#    "latest model" content never reaches the screen, only an honest message is shown.
+#  - If a web search failed and the answer does not mention it (and current info was not
+#    required) a note is appended.
+#  - If the answer is empty (e.g. a tool loop returned nothing) a clear message is given.
+function Get-FinalAnswer([string]$text, [string]$userText, [bool]$internetOn) {
+    $webFailed = $script:webToolFailCount -gt 0
+    if (Test-CurrentInfoIntent $userText) {
+        if ($webFailed) {
+            return 'Unfortunately the web search failed; I cannot reach the internet right now and cannot verify up-to-date information. Please check your connection and try again in a moment.'
+        }
+        if (!$internetOn) {
+            return 'Internet access is disabled, so I cannot provide up-to-date information right now. Turn on Internet and ask again for a current answer.'
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        if ($script:lastProducedFile) { return ('Done; the file created: ' + [string]$script:lastProducedFile) }
+        return 'No answer was produced. Please try your request again.'
+    }
+    return (Add-WebFailureNote $text)
 }
 
 # Command-intent detection. The run_command tool is offered ONLY when the user explicitly
@@ -1801,6 +1812,10 @@ try {
     $final = ''
     $lastUsage = $null
     $maxRounds = 8
+    # Generation tools completed in this turn (chart/document) are NOT offered again: the small
+    # model would call the same tool over and over (e.g. 8 charts) and produce an empty answer.
+    $script:completedTools = @{}
+    $script:lastProducedFile = ''
     # So that the server can reuse its KV cache in the next turn, we also send the
     # tool-call/tool-result turns added to $messages in this turn back to the client and have
     # them added to the persistent chat history -- otherwise the client keeps only the compacted
@@ -1888,6 +1903,9 @@ try {
             if (!(Test-FileIntent $userText)) { $blocked += @('list_bound_files', 'read_bound_file') }
             @($toolDefinitions | Where-Object { $_.function.name -notin $blocked })
         } else { $toolDefinitions }
+        # A generation tool completed in this turn is not offered again: the small model would
+        # call it repeatedly (e.g. 8 charts) and produce an empty answer.
+        $offeredTools = @($offeredTools | Where-Object { -not $script:completedTools.ContainsKey($_.function.name) })
         if (@($offeredTools).Count -gt 0) { $body.tools = @($offeredTools) }
         # In a UI test the FLASH model skipped the "denied" instruction in the tool result and
         # interpreted the denial as "Python may not be installed". If there was a denial an explicit
@@ -1996,7 +2014,7 @@ try {
                 return
             }
             $toolExchange = if ($messages.Count -gt $initialMessageCount) { @($messages.ToArray())[$initialMessageCount..($messages.Count - 1)] } else { @() }
-            Emit 'done' (Add-WebFailureNote (Add-NoInternetNote $final $userText ([bool]$JobData.internet))) $lastUsage $toolExchange
+            Emit 'done' (Get-FinalAnswer $final $userText ([bool]$JobData.internet)) $lastUsage $toolExchange
             return
         }
 
@@ -2078,8 +2096,8 @@ try {
                 $approval = if ($script:lastApprovalOutcome) { $script:lastApprovalOutcome } else { 'not_required' }
                 $auditResult = if ($approval -in @('asked_no', 'cancelled', 'timeout')) { 'denied' } else { 'ok' }
                 Write-AuditLog $name $approval $auditResult $auditDetail ([string]$script:createdArtifact)
-                if ($script:createdArtifact) { Emit 'artifact' $script:createdArtifact }
-                if ($name -eq 'generate_chart' -and $script:chartFile) { Emit 'chart' $script:chartFile }
+                if ($script:createdArtifact) { Emit 'artifact' $script:createdArtifact; $script:lastProducedFile = [string]$script:createdArtifact; $script:completedTools['create_document'] = $true }
+                if ($name -eq 'generate_chart' -and $script:chartFile) { Emit 'chart' $script:chartFile; $script:lastProducedFile = [string]$script:chartFile; $script:completedTools['generate_chart'] = $true }
                 if ($script:deniedNote) { Emit 'denied' $script:deniedNote }
                 if ($name -eq 'read_images_ocr') {
                     $multiOcr = $null
@@ -2120,7 +2138,7 @@ try {
         $final = $turn.content
     }
     $toolExchange = if ($messages.Count -gt $initialMessageCount) { @($messages.ToArray())[$initialMessageCount..($messages.Count - 1)] } else { @() }
-    Emit 'done' (Add-WebFailureNote (Add-NoInternetNote $final $userText ([bool]$JobData.internet))) $lastUsage $toolExchange
+    Emit 'done' (Get-FinalAnswer $final $userText ([bool]$JobData.internet)) $lastUsage $toolExchange
 } catch {
     if ($Shared.Cancel) { Emit 'cancelled' 'Request stopped.' }
     else {

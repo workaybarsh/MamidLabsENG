@@ -109,36 +109,51 @@ def test_document_tool_requires_a_document_context():
     small model would invent a non-existent file and call it)."""
     worker = (ROOT / "agent" / "qwen-inference.ps1").read_text(encoding="utf-8-sig")
     assert "function Add-WebFailureNote" in worker
-    assert "Emit 'done' (Add-WebFailureNote (Add-NoInternetNote $final $userText ([bool]$JobData.internet))) $lastUsage $toolExchange" in worker
+    assert "function Get-FinalAnswer" in worker
+    assert "Emit 'done' (Get-FinalAnswer $final $userText ([bool]$JobData.internet)) $lastUsage $toolExchange" in worker
     assert "$hasDocumentContext = @($script:attachedDocuments).Count -gt 0 -or (Test-FileIntent $userText)" in worker
     assert "if ($hasDocumentContext) {" in worker
+    # Repeat-loop hardening.
+    assert "$script:completedTools = @{}" in worker
+    assert "$offeredTools = @($offeredTools | Where-Object { -not $script:completedTools.ContainsKey($_.function.name) })" in worker
 
 
-def test_no_internet_note_is_appended_for_current_info(tmp_path):
-    """With the internet off a current-information answer may be fabricated; if the
-    answer does not already say the internet is off, an honest note is appended."""
+def test_final_answer_blocks_fabrication_and_empty(tmp_path):
+    """With a current-information request and no web (search failed / Internet off) the
+    model TEXT IS NOT USED (fabrication never reaches the screen); an empty answer is
+    replaced by a clear message."""
     pwsh = shutil.which("pwsh")
     if not pwsh:
         pytest.skip("pwsh not found")
     desktop = (ROOT / "agent" / "qwen-inference.ps1").read_text(encoding="utf-8-sig")
-    defs = extract_function(desktop, "Test-CurrentInfoIntent") + "\n" + extract_function(desktop, "Add-NoInternetNote")
+    defs = "\n".join(
+        extract_function(desktop, n)
+        for n in ("Test-CurrentInfoIntent", "Add-WebFailureNote", "Get-FinalAnswer")
+    )
     cur = _ps_quote("What is the current weather in Istanbul? Give the latest info.")
     other = _ps_quote("Tell me about cats.")
     body = (
         "$ErrorActionPreference = 'Stop'\n" + defs + "\n"
-        "$script:webToolFailCount = 0\n"
+        "$script:webToolFailCount = 0; $script:lastProducedFile = ''\n"
         "$r = [ordered]@{}\n"
-        f"$r['on'] = Add-NoInternetNote 'weather' {cur} $true\n"
-        f"$r['off_current'] = Add-NoInternetNote 'weather guess' {cur} $false\n"
-        f"$r['off_other'] = Add-NoInternetNote 'cats' {other} $false\n"
+        f"$r['offline'] = Get-FinalAnswer 'FABRICATED 21 degrees' {cur} $false\n"
+        "$script:webToolFailCount = 2\n"
+        f"$r['webfail'] = Get-FinalAnswer 'FABRICATED iPhone 15' {cur} $true\n"
+        "$script:webToolFailCount = 0\n"
+        f"$r['normal'] = Get-FinalAnswer 'cats are mammals' {other} $true\n"
+        f"$r['empty'] = Get-FinalAnswer '' {other} $true\n"
+        "$script:lastProducedFile = 'C:\\out\\chart.png'\n"
+        f"$r['empty_file'] = Get-FinalAnswer '' {other} $true\n"
         "$r | ConvertTo-Json -Compress\n"
     )
-    script = tmp_path / "nonet.ps1"
+    script = tmp_path / "final.ps1"
     script.write_text(body, encoding="utf-8-sig")
     proc = subprocess.run([pwsh, "-NoProfile", "-NonInteractive", "-File", str(script)],
                           capture_output=True, encoding="utf-8", errors="replace", check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
     got = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert got["on"] == "weather"
-    assert "Web access is disabled" in got["off_current"]
-    assert got["off_other"] == "cats"
+    assert "FABRICATED" not in got["offline"] and "Internet access is disabled" in got["offline"]
+    assert "FABRICATED" not in got["webfail"] and "web search failed" in got["webfail"]
+    assert got["normal"] == "cats are mammals"
+    assert "No answer was produced" in got["empty"]
+    assert "chart.png" in got["empty_file"]

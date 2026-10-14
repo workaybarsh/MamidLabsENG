@@ -40,17 +40,23 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
-- **Unprompted document/image/video/chart generation is blocked; a failed web search is reported
-  honestly.** The generation tools were offered to the model on every turn and the only guard was
-  the system prompt, so the small model (LITE) could generate unprompted. `create_document`,
-  `generate_video` and `generate_chart` now get the same **call-time intent guard** as
-  `generate_image` (`Test-DocumentRequestIntent` / `Test-VideoRequestIntent` /
-  `Test-ChartRequestIntent`): if the user did not explicitly ask, the tool is not executed. Also,
-  when a web search fails and the answer does not mention it at all, an honest note is appended
-  (`Add-WebFailureNote`); `read_document` is now offered only with an attached document or a file
-  intent (the model would invent a non-existent file and try to read it). With the internet off, a
-  current-information answer (weather, news, price, "latest"…) also gets an honest note
-  (`Add-NoInternetNote`). Regression tests: `tests/test_generation_intent_guard.py`.
+- **Fabrication is completely eliminated; unprompted generation and tool loops are closed.** The
+  final answer is made deterministically safe:
+  - When a request asks for **current information** (weather, news, price, "the latest model"…)
+    and web access is unavailable (search failed or the Internet chip is off), the model's **text
+    is not used**; the fabricated content never reaches the screen and an honest message is shown
+    instead (`Get-FinalAnswer`). If a web search failed and the answer does not mention it (and
+    current info was not required) a note is appended (`Add-WebFailureNote`).
+  - The generation tools (`create_document`, `generate_video`, `generate_chart`) get the same
+    **call-time intent guard** as `generate_image` (`Test-DocumentRequestIntent` /
+    `Test-VideoRequestIntent` / `Test-ChartRequestIntent`): if the user did not explicitly ask,
+    they do not run.
+  - `read_document` is offered only with an attached document or a file intent (the model would
+    invent a non-existent file and try to read it).
+  - The same generation tool runs only once per turn (`$script:completedTools`): the small model
+    produced a chart 8 times and returned an **empty answer**; an empty answer is now replaced by a
+    clear message.
+  Regression tests: `tests/test_generation_intent_guard.py`.
 - **"Delete all" no longer deletes the chat that is currently OPEN.** In the Past chats window
   "Delete all" used to wipe the whole list, including the chat on screen. The open chat's file is
   now excluded from the delete set and the confirmation says "The open chat is kept."; the open
