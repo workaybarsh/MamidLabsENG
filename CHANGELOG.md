@@ -43,6 +43,9 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **The UI shows the real model-load failure reason.** Instead of the generic "Model operation
+  failed", the actual cause (e.g. "Not enough free VRAM: …") is shown; the manager process's
+  stderr is carried to the UI (`Format-ModelSwitchError`).
 - **Restored the "no fabricated test/theorem/source name" rule in the system prompt.** The strict anti-fabrication rewrite had dropped it (tests caught it); it is back.
 - **A dropped stream gives a clear message; no guessing when a definite answer is impossible.** If a
   turn drops **without producing a visible answer** (only thinking accumulated) it is no longer

@@ -479,3 +479,26 @@ Assert ($script:preempted) 'Audio turn did not preempt the model load'
 Assert ($script:proceeded) 'Audio turn did not start immediately'
 Assert (!$script:pendingSend) 'Audio turn stayed queued'
 """)
+
+
+def test_model_switch_error_surfaces_the_specific_reason(tmp_path):
+    """The manager process's stderr is carried to the UI: a specific cause such as
+    insufficient VRAM is shown instead of the generic "Model operation failed"; an empty
+    stderr falls back to the generic message (see Format-ModelSwitchError)."""
+    run_ps(tmp_path, r"""
+$msg = Format-ModelSwitchError "info: something`nNot enough free VRAM: 14763 MiB free, the `"flash`" profile needs 15200 MiB"
+Assert ($msg -match 'Not enough free VRAM') 'Specific VRAM reason not surfaced'
+Assert ($msg -notmatch 'Model operation failed') 'Generic message shown despite a specific reason'
+$empty = Format-ModelSwitchError ''
+Assert ($empty -match 'Model operation failed') 'Empty stderr must fall back to the generic message'
+""")
+
+
+def test_desktop_captures_manager_stderr_for_specific_errors():
+    """The UI captures the manager process's stderr and runs it through
+    Format-ModelSwitchError, so the real cause (e.g. VRAM) is shown instead of generic."""
+    desktop = (ROOT / "qwen-desktop.ps1").read_text(encoding="utf-8-sig")
+    assert "RedirectStandardError = $true" in desktop
+    assert "function Format-ModelSwitchError" in desktop
+    assert "Format-ModelSwitchError $detail" in desktop
+

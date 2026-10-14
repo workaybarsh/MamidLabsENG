@@ -1855,6 +1855,19 @@ $statusCtrl.ForeColor = [System.Drawing.Color]::FromArgb(190, 200, 215)
 $controlTab.Controls.Add($statusCtrl)
 
 # ---------------------------------------------------------------- model management
+# Extracts a meaningful single line from the manager process's stderr (e.g. "Not enough free
+# VRAM: ..."); falls back to the generic message when empty/meaningless. Lets the UI show the
+# specific cause instead of a generic "Model operation failed".
+function Format-ModelSwitchError([string]$stderrText) {
+    $generic = 'Model operation failed. Check the model files and the logs folder, then select the model again.'
+    if (!$stderrText) { return $generic }
+    $lines = @($stderrText -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $vram = @($lines | Where-Object { $_ -match 'VRAM' } | Select-Object -First 1)
+    if ($vram.Count) { return $vram[0] }
+    if ($lines.Count) { return $lines[0] }
+    return $generic
+}
+
 function Invoke-Manage([string]$action, [string]$profile, [string]$modelId) {
     $managePath = Join-Path $scripts 'manage-qwen.ps1'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -1867,6 +1880,9 @@ function Invoke-Manage([string]$action, [string]$profile, [string]$modelId) {
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    # Capture stderr so the real cause (e.g. insufficient VRAM) can reach the UI when the
+    # manager fails. Output is tiny, so the pipe cannot fill; it is read after exit.
+    $psi.RedirectStandardError = $true
     return [System.Diagnostics.Process]::Start($psi)
 }
 
@@ -1875,7 +1891,9 @@ function Update-ModelSwitch {
     if ($script:switchProcess) {
         if (!$script:switchProcess.HasExited) { return }
         if ($script:switchProcess.ExitCode -ne 0 -and !$script:pendingModelChange) {
-            $script:modelSwitchError = 'Model operation failed. Check the model files and the logs folder, then select the model again.'
+            $detail = ''
+            try { $detail = $script:switchProcess.StandardError.ReadToEnd() } catch { }
+            $script:modelSwitchError = Format-ModelSwitchError $detail
         }
         $script:switchProcess.Dispose()
         $script:switchProcess = $null
