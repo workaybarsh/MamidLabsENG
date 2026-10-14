@@ -608,6 +608,39 @@ function Test-WebToolFailure([string]$name, $result) {
     return $false
 }
 
+# If a web tool failed in this turn and the visible answer does not mention it at all,
+# a short, honest note is appended. The small model (LITE) can FABRICATE a search
+# result even with the system note in place (it presented an old model as "the latest"
+# in a real test); this way the user ALWAYS sees that the web search failed and the
+# answer is not passed off as a search result.
+function Add-WebFailureNote([string]$text) {
+    if ($script:webToolFailCount -le 0 -or [string]::IsNullOrWhiteSpace($text)) { return $text }
+    $normalized = $text.ToLowerInvariant()
+    if ($normalized -match 'fail|unavailable|unable to|could not|no internet|offline|error|not verified|unverified') { return $text }
+    return $text + "`n`n[The web search failed; the information in the answer could not be verified against an up-to-date source.]"
+}
+
+# Is the user asking for CURRENT/time-sensitive information? (weather, news, price,
+# "latest", score etc.) Used to flag a fabricated answer while the internet is off.
+function Test-CurrentInfoIntent([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+    $normalized = $text.ToLowerInvariant()
+    return $normalized -match 'current|latest|newest|\bnews\b|weather|price|\bstock\b|score|today|guncel|hava durumu'
+}
+
+# When the Internet chip is OFF but the request asks for current information and the
+# answer does not already say the internet is off, a short honest note is appended so
+# the user does not trust fabricated up-to-date data.
+function Add-NoInternetNote([string]$text, [string]$userText, [bool]$internetOn) {
+    if ($internetOn) { return $text }
+    if ($script:webToolFailCount -gt 0) { return $text }  # the web-failure note already applies
+    if ([string]::IsNullOrWhiteSpace($text)) { return $text }
+    if (!(Test-CurrentInfoIntent $userText)) { return $text }
+    $normalized = $text.ToLowerInvariant()
+    if ($normalized -match 'internet (is )?(off|disabled)|offline|no internet|not online|cannot reach') { return $text }
+    return $text + "`n`n[Web access is disabled, so this information could not be verified against an up-to-date source.]"
+}
+
 # Command-intent detection. The run_command tool is offered ONLY when the user explicitly
 # asks for a command/terminal. Otherwise the model (especially the small LITE one) diverted to
 # absurd command attempts on a web/search failure; if the tool is not offered it cannot call it.
@@ -1015,10 +1048,17 @@ function Get-ToolDefinitions([hashtable]$job) {
         }
     }
     if ($job.office) {
+        # read_document is offered ONLY when there is a document context: an attached
+        # document or a file/document intent in the user's message. Otherwise the small
+        # model, with no file in hand, would invent a non-existent file path and call
+        # read_document (seen in a real test: a weather question while offline).
+        $hasDocumentContext = @($script:attachedDocuments).Count -gt 0 -or (Test-FileIntent $userText)
+        if ($hasDocumentContext) {
         $defs += @{ type = 'function'; function = @{ name = 'read_document'; description = 'Reads a PDF, Word (docx), Excel (xlsx), PowerPoint (pptx), ZIP or RAR file. For ZIP/RAR, if no entry is given it returns the list of files in the archive; if entry is given it reads the content of that file.'; parameters = @{ type = 'object'; required = @('path'); properties = @{
             path = @{ type = 'string'; description = "Full file path. Desktop, Documents, Downloads, $(Get-InstallRoot)\outputs, the bound folder or a document attached to the chat can be read." }
             entry = @{ type = 'string'; description = 'Only for zip/rar: the name of the file inside the archive (first call without entry to see the listing).' }
         } } } }
+        }
     }
     if ($job.documentCreate) {
         $defs += @{ type = 'function'; function = @{ name = 'create_document'; description = 'Creates a PDF, Word or PowerPoint document. You write the content as markdown: # headings, - bullets, | tables |, **bold**. For PowerPoint every "# " becomes a new slide.'; parameters = @{ type = 'object'; required = @('filename', 'format', 'content'); properties = @{
@@ -1454,6 +1494,42 @@ function Test-ImageRequestIntent([string]$text, [bool]$hasImageContext) {
     if ($normalized -match '(image|picture|photo|portrait|landscape)\w*.*\b(make|create|prepare|produce)\b|\b(make|create|prepare|produce)\b.*\b(image|picture|photo|portrait|landscape)') { return $true }
     if ($hasImageContext -and $normalized -match '\bmake\b|\bedit\b|\bchange\b|\bturn\b|\badd\b|\bremove\b|\bdelete\b|\berase\b|\bput\b|\bplace\b|\bdress\b|\breplace\b|\bswap\b') { return $true }
     return $false
+}
+
+# The document/video/chart tools are offered to the model on EVERY turn; the small
+# model would call them unprompted (it generated a "weather chart" for a weather
+# question; it tried to create a document when simply asked something). As with
+# images (Test-ImageRequestIntent), the intent is checked at CALL time: if the user
+# did not explicitly ask, the tool is NOT executed. Patterns are kept generous so
+# real requests are not missed.
+function Test-DocumentRequestIntent([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+    $normalized = ($text.ToLowerInvariant().Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}', '') -replace 'ı', 'i'
+    # An explicit format name (pdf, word, powerpoint, presentation...) is enough on its own.
+    if ($normalized -match '\bpdf\b|\bdocx?\b|\bword\b|powerpoint|\bpptx?\b|\bpresentation\b|\bslide') { return $true }
+    # A document-type noun plus a creation verb.
+    if ($normalized -match '(document|report)\w*' -and
+        $normalized -match '\bcreate\b|\bgenerate\b|\bmake\b|\bwrite\b|\bsave\b|\bprepare\b|\bproduce\b') { return $true }
+    return $false
+}
+
+# Video is generated only when a video/animation is explicitly requested (or a
+# continuation from an attached video is asked for); asking a question about an
+# attached video does not count as generation.
+function Test-VideoRequestIntent([string]$text, [bool]$hasVideoContext) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+    $normalized = ($text.ToLowerInvariant().Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}', '') -replace 'ı', 'i'
+    if ($normalized -match 'video|animation|\bclip\b|\bfilm\b' -and
+        $normalized -match '\bgenerate\b|\bcreate\b|\bmake\b|\bproduce\b|\brender\b|\bconvert\b') { return $true }
+    if ($hasVideoContext -and $normalized -match '\bcontinue\b|\bextend\b') { return $true }
+    return $false
+}
+
+# Chart/drawing request: requests containing "chart"/"graph" are in practice always generation requests.
+function Test-ChartRequestIntent([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+    $normalized = ($text.ToLowerInvariant().Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}', '') -replace 'ı', 'i'
+    return ($normalized -match '\bchart\b|\bgraph\b|\bplot\b|\bdiagram\b|scatter|histogram|\bbar\b.*\bchart\b|\bpie\b|\bfunction\b.*\bplot\b')
 }
 
 function Test-ConversationHasImage([Collections.ArrayList]$items) {
@@ -1920,12 +1996,14 @@ try {
                 return
             }
             $toolExchange = if ($messages.Count -gt $initialMessageCount) { @($messages.ToArray())[$initialMessageCount..($messages.Count - 1)] } else { @() }
-            Emit 'done' $final $lastUsage $toolExchange
+            Emit 'done' (Add-WebFailureNote (Add-NoInternetNote $final $userText ([bool]$JobData.internet))) $lastUsage $toolExchange
             return
         }
 
         # Image generation: the language model only writes the prompt; the UI manages the VRAM swap and the generation.
         $videoCall = @($toolCalls | Where-Object { $_.function.name -eq 'generate_video' })[0]
+        # If the request has no video/animation intent, no generation starts (rejected in the loop below).
+        if ($videoCall -and !(Test-VideoRequestIntent $userText ([bool]$JobData.hasSourceVideo))) { $videoCall = $null }
         if ($videoCall) {
             $spec = $null
             try { $spec = $videoCall.function.arguments | ConvertFrom-Json -ErrorAction Stop } catch { }
@@ -1989,6 +2067,12 @@ try {
                 $result = if ($name -eq 'generate_image') {
                     # Accepted image calls are handed over to the UI above; anything arriving here was rejected.
                     'No image was generated: the user did not ask for an image in this request. Answer the request in text, do not generate an image.'
+                } elseif ($name -eq 'generate_video' -and !(Test-VideoRequestIntent $userText ([bool]$JobData.hasSourceVideo))) {
+                    'No video was generated: the user did not ask for a video in this request. Answer the request in text, do not generate a video.'
+                } elseif ($name -eq 'create_document' -and !(Test-DocumentRequestIntent $userText)) {
+                    'No document was created: the user did not ask for a document in this request. Answer the request in text, do not create a document.'
+                } elseif ($name -eq 'generate_chart' -and !(Test-ChartRequestIntent $userText)) {
+                    'No chart was generated: the user did not ask for a chart in this request. Answer the request in text, do not generate a chart.'
                 } else { Invoke-Tool $name $arguments ([string]$JobData.boundFolder) }
                 if (Test-WebToolFailure $name $result) { $script:webToolFailCount++ }
                 $approval = if ($script:lastApprovalOutcome) { $script:lastApprovalOutcome } else { 'not_required' }
@@ -2036,7 +2120,7 @@ try {
         $final = $turn.content
     }
     $toolExchange = if ($messages.Count -gt $initialMessageCount) { @($messages.ToArray())[$initialMessageCount..($messages.Count - 1)] } else { @() }
-    Emit 'done' $final $lastUsage $toolExchange
+    Emit 'done' (Add-WebFailureNote (Add-NoInternetNote $final $userText ([bool]$JobData.internet))) $lastUsage $toolExchange
 } catch {
     if ($Shared.Cancel) { Emit 'cancelled' 'Request stopped.' }
     else {

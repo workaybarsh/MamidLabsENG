@@ -40,6 +40,17 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **Unprompted document/image/video/chart generation is blocked; a failed web search is reported
+  honestly.** The generation tools were offered to the model on every turn and the only guard was
+  the system prompt, so the small model (LITE) could generate unprompted. `create_document`,
+  `generate_video` and `generate_chart` now get the same **call-time intent guard** as
+  `generate_image` (`Test-DocumentRequestIntent` / `Test-VideoRequestIntent` /
+  `Test-ChartRequestIntent`): if the user did not explicitly ask, the tool is not executed. Also,
+  when a web search fails and the answer does not mention it at all, an honest note is appended
+  (`Add-WebFailureNote`); `read_document` is now offered only with an attached document or a file
+  intent (the model would invent a non-existent file and try to read it). With the internet off, a
+  current-information answer (weather, news, price, "latest"…) also gets an honest note
+  (`Add-NoInternetNote`). Regression tests: `tests/test_generation_intent_guard.py`.
 - **"Delete all" no longer deletes the chat that is currently OPEN.** In the Past chats window
   "Delete all" used to wipe the whole list, including the chat on screen. The open chat's file is
   now excluded from the delete set and the confirmation says "The open chat is kept."; the open
