@@ -652,6 +652,22 @@ function Get-FinalAnswer([string]$text, [string]$userText, [bool]$internetOn) {
     return (Add-WebFailureNote $text)
 }
 
+# Turns raw .NET/HTTP exception messages (e.g. "The response ended prematurely. (ResponseEnded)")
+# into a plain English message for the user; an unrecognized message is returned unchanged.
+function Get-FriendlyErrorMessage([string]$message) {
+    if ([string]::IsNullOrWhiteSpace($message)) { return 'An unexpected error occurred. Please try again.' }
+    if ($message -match '(?i)ended prematurely|ResponseEnded|response ended|forcibly closed|connection (was )?closed') {
+        return 'The model response was cut off. Please send the message again.'
+    }
+    if ($message -match '(?i)timed? ?out|timeout') {
+        return 'The request timed out. Please try again.'
+    }
+    if ($message -match '(?i)actively refused|connection refused|cannot connect') {
+        return 'Could not reach the local model server. Please try again once the model is ready.'
+    }
+    return $message
+}
+
 # Command-intent detection. The run_command tool is offered ONLY when the user explicitly
 # asks for a command/terminal. Otherwise the model (especially the small LITE one) diverted to
 # absurd command attempts on a web/search failure; if the tool is not offered it cannot call it.
@@ -1342,7 +1358,7 @@ function Invoke-ChatCompletion([hashtable]$body, [hashtable]$shared, [bool]$emit
         # finish_reason already arrived the answer is COMPLETE; the connection closing right
         # after is normal and must not be reported. Genuine (empty/tool-less/incomplete) drops
         # are still reported as errors.
-        $usable = $result.finishReason -or ![string]::IsNullOrWhiteSpace($result.content) -or $result.toolParts.Count -gt 0
+        $usable = $result.finishReason -or ![string]::IsNullOrWhiteSpace($result.content) -or $result.toolParts.Count -gt 0 -or ![string]::IsNullOrWhiteSpace($result.reasoning)
         # local + custom: if the connection dropped after an answer was produced (finish_reason/
         # content/tool call) that is NOT an error; a '[Error]' line is not appended under the
         # answer. Remote providers keep their behavior (only local/custom are tolerant).
@@ -2143,7 +2159,7 @@ try {
     if ($Shared.Cancel) { Emit 'cancelled' 'Request stopped.' }
     else {
         $cause = $_.Exception.GetBaseException()
-        $message = $cause.Message
+        $message = Get-FriendlyErrorMessage $cause.Message
         if ($cause -is [OperationCanceledException]) { $message = 'The local model request timed out.' }
         Emit 'error' $message
     }
