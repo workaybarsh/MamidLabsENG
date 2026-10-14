@@ -2128,6 +2128,25 @@ function Load-Chat([string]$path) {
     $metric.Text = "Chat loaded: $($script:chatTitle)"
 }
 
+# "Delete all" never deletes the chat that is currently OPEN: even though the
+# on-screen chat appears in the list it is kept out of the deleted set, so the
+# open chat stays in history after a full wipe. Pure/testable helper; it does
+# not touch dialog state.
+function Get-DeletableChatPaths([string]$directory, $paths, [string]$keepId) {
+    $keep = ''
+    if ($keepId) {
+        try { $keep = [IO.Path]::GetFullPath((Join-Path $directory "$keepId.json")) } catch { $keep = '' }
+    }
+    $result = New-Object System.Collections.ArrayList
+    foreach ($path in @($paths)) {
+        if (!$path) { continue }
+        try { $full = [IO.Path]::GetFullPath([string]$path) } catch { continue }
+        if ($keep -and $full -eq $keep) { continue }
+        [void]$result.Add($full)
+    }
+    return @($result)
+}
+
 function Update-ApprovalDialog($ctx) {
     # The tool side gave up (timed out, Stop was pressed or the job finished): nobody is waiting for an answer.
     if ([string]$ctx.request.AskId -ne $ctx.askId -or $ctx.request.Cancel) {
@@ -2296,11 +2315,22 @@ function Show-ChatHistory {
     })
     $delAllBtn.Add_Click({
         if ($entries.Count -eq 0) { return }
+        # The open chat is kept (see Get-DeletableChatPaths): $script:chatId is
+        # the id of the chat currently on screen.
+        $targets = @(Get-DeletableChatPaths $chatDir $entries $script:chatId)
+        if ($targets.Count -eq 0) {
+            [void][System.Windows.Forms.MessageBox]::Show(
+                'There are no other saved chats to delete. The open chat is kept.',
+                'Delete all chats', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $note = ''
+        if ($script:chatId) { $note = "`n`nThe open chat is kept." }
         $answer = [System.Windows.Forms.MessageBox]::Show(
-            "Permanently delete ALL $($entries.Count) chats? This cannot be undone.",
+            "Permanently delete ALL $($targets.Count) chats? This cannot be undone.$note",
             'Delete all chats', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
         if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-        foreach ($path in @($entries)) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+        foreach ($path in @($targets)) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
         Refresh-List
     })
     $closeBtn.Add_Click({ $dlg.Close() })

@@ -40,6 +40,11 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **"Delete all" no longer deletes the chat that is currently OPEN.** In the Past chats window
+  "Delete all" used to wipe the whole list, including the chat on screen. The open chat's file is
+  now excluded from the delete set and the confirmation says "The open chat is kept."; the open
+  chat stays in history. The decision is made by the pure, testable `Get-DeletableChatPaths`
+  helper (`tests/test_chat_history_delete.py`).
 - **Audio attachment + Agent chip: the file tools are no longer offered to the model.** On a turn
   with an audio attachment the audio is already transcribed by faster-whisper into text, yet with
   the Agent chip on the small model could still try to find/read/write the audio FILE with
