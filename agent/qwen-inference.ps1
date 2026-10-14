@@ -119,6 +119,26 @@ $script:deniedNote = $null
 # web tools are not offered, network-probe commands are refused, and the model answers from
 # what it knows. Never written to the persistent history.
 $script:webToolFailCount = 0
+# Did a web tool return a REAL result this turn? Used to strip fabricated
+# source/URL lines: if no web call succeeded the model's "Source: ..." attributions
+# cannot be verified and are not shown.
+$script:webToolSuccess = $false
+# Was any web tool CALLED this turn? Citation stripping applies only to turns where
+# the web was attempted (so legitimate links in a normal answer are not disturbed).
+$script:webToolAttempted = $false
+
+# If web access did NOT succeed this turn, "Source: ..." style attribution lines and
+# bare http(s) URLs are treated as unverifiable and STRIPPED: no fabricated source/URL
+# is shown to the user.
+function Remove-FabricatedCitations([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return $text }
+    $kept = foreach ($line in ($text -split "`n")) {
+        if ($line -match '(?i)(source|sources|reference|references)\s*[:：]') { continue }
+        if ($line -match 'https?://') { continue }
+        $line
+    }
+    return (@($kept) -join "`n").Trim()
+}
 
 function Emit([string]$kind, [string]$text, $usage = $null, $data = $null) {
     [pscustomobject]@{ kind = $kind; text = $text; usage = $usage; data = $data }
@@ -625,7 +645,11 @@ function Add-WebFailureNote([string]$text) {
 function Test-CurrentInfoIntent([string]$text) {
     if ([string]::IsNullOrWhiteSpace($text)) { return $false }
     $normalized = $text.ToLowerInvariant()
-    return $normalized -match 'current|latest|newest|\bnews\b|weather|price|\bstock\b|score|guncel|hava durumu'
+    # Strict guard: a broad set of time-sensitive/current-information requests. If web
+    # access is unavailable (search failed or Internet off) the model text is NOT shown.
+    return $normalized -match ('current|latest|newest|up[ -]?to[ -]?date|\bnews\b|headline|weather|forecast|price|' +
+        '\bstock\b|exchange rate|\bscore\b|\bscoreboard\b|today|tonight|tomorrow|this (week|month|year)|' +
+        'how much is|\b20[2-9][0-9]\b|\b203[0-9]\b|guncel|hava durumu|hava nasil|fiyat|\bkur\b|dolar|bugun|su an')
 }
 
 # Makes the final answer safe (to COMPLETELY eliminate fabrication):
@@ -637,17 +661,29 @@ function Test-CurrentInfoIntent([string]$text) {
 #  - If the answer is empty (e.g. a tool loop returned nothing) a clear message is given.
 function Get-FinalAnswer([string]$text, [string]$userText, [bool]$internetOn) {
     $webFailed = $script:webToolFailCount -gt 0
+    $webOk = $script:webToolSuccess
+    $webTried = $script:webToolAttempted
     if (Test-CurrentInfoIntent $userText) {
-        if ($webFailed) {
-            return 'Unfortunately the web search failed; I cannot reach the internet right now and cannot verify up-to-date information. Please check your connection and try again in a moment.'
+        # If web access is unavailable (tried-and-failed or Internet off) the current-info
+        # question's TEXT IS NOT SHOWN: fabricated weather/price/"latest" content never
+        # reaches the screen, only an honest message.
+        if (($webTried -and !$webOk) -or ($webFailed -and !$webOk)) {
+            return 'Unfortunately this information is not something I can get without an internet connection. The web search failed; please check your connection and try again in a moment.'
         }
         if (!$internetOn) {
-            return 'Internet access is disabled, so I cannot provide up-to-date information right now. Turn on Internet and ask again for a current answer.'
+            return 'Unfortunately this information is not something I can get without an internet connection. Turn on Internet and ask again for a current answer.'
         }
     }
     if ([string]::IsNullOrWhiteSpace($text)) {
         if ($script:lastProducedFile) { return ('Done; the file created: ' + [string]$script:lastProducedFile) }
         return 'No answer was produced. Please try your request again.'
+    }
+    # Strict anti-fabrication: the web was TRIED but never succeeded, so attribution/URL
+    # lines are unverifiable; strip them. If only citations remained, give an honest message.
+    if ($webTried -and !$webOk) {
+        $cleaned = Remove-FabricatedCitations $text
+        if (![string]::IsNullOrWhiteSpace($cleaned)) { $text = $cleaned }
+        else { return 'I could not verify this information against an up-to-date source, so I cannot show a source/link.' }
     }
     return (Add-WebFailureNote $text)
 }
@@ -1159,6 +1195,17 @@ function Get-ToolDefinitions([hashtable]$job) {
             xmax = @{ type = 'number'; description = 'Only for function: upper x bound (default 10).' }
             samples = @{ type = 'integer'; description = 'Only for function: number of samples (default 600).' }
         } } } }
+    }
+    # If the user asked for CURRENT information research (web research) and did not
+    # explicitly ask for generation, the image/video/document/chart tools are NOT
+    # OFFERED: the model cannot enter those jobs. An explicit request still offers them.
+    if (Test-CurrentInfoIntent $userText) {
+        $explicitGeneration = (Test-ImageRequestIntent $userText ([bool]$job.hasCurrentImage -or [bool]$job.hasSourceImage)) -or
+            (Test-DocumentRequestIntent $userText) -or (Test-VideoRequestIntent $userText ([bool]$job.hasSourceVideo)) -or
+            (Test-ChartRequestIntent $userText)
+        if (!$explicitGeneration) {
+            $defs = @($defs | Where-Object { $_.function.name -notin @('generate_image', 'generate_video', 'create_document', 'generate_chart') })
+        }
     }
     return $defs
 }
@@ -2108,7 +2155,10 @@ try {
                 } elseif ($name -eq 'generate_chart' -and !(Test-ChartRequestIntent $userText)) {
                     'No chart was generated: the user did not ask for a chart in this request. Answer the request in text, do not generate a chart.'
                 } else { Invoke-Tool $name $arguments ([string]$JobData.boundFolder) }
-                if (Test-WebToolFailure $name $result) { $script:webToolFailCount++ }
+                if ($name -in @('search_web', 'fetch_page', 'find_reference_image')) {
+                    $script:webToolAttempted = $true
+                    if (Test-WebToolFailure $name $result) { $script:webToolFailCount++ } else { $script:webToolSuccess = $true }
+                }
                 $approval = if ($script:lastApprovalOutcome) { $script:lastApprovalOutcome } else { 'not_required' }
                 $auditResult = if ($approval -in @('asked_no', 'cancelled', 'timeout')) { 'denied' } else { 'ok' }
                 Write-AuditLog $name $approval $auditResult $auditDetail ([string]$script:createdArtifact)

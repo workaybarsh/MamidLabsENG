@@ -118,6 +118,16 @@ def test_document_tool_requires_a_document_context():
     assert "$offeredTools = @($offeredTools | Where-Object { -not $script:completedTools.ContainsKey($_.function.name) })" in worker
 
 
+def test_web_research_turn_does_not_offer_generation_tools():
+    """On a web-research (current-info) turn the image/video/document/chart tools are not
+    offered unless explicitly requested; the model cannot enter those jobs."""
+    worker = (ROOT / "agent" / "qwen-inference.ps1").read_text(encoding="utf-8-sig")
+    assert "if (Test-CurrentInfoIntent $userText) {" in worker
+    assert "$defs = @($defs | Where-Object { $_.function.name -notin @('generate_image', 'generate_video', 'create_document', 'generate_chart') })" in worker
+    assert "Test-DocumentRequestIntent $userText" in worker
+    assert "Test-ChartRequestIntent $userText" in worker
+
+
 def test_final_answer_blocks_fabrication_and_empty(tmp_path):
     """With a current-information request and no web (search failed / Internet off) the
     model TEXT IS NOT USED (fabrication never reaches the screen); an empty answer is
@@ -152,11 +162,51 @@ def test_final_answer_blocks_fabrication_and_empty(tmp_path):
                           capture_output=True, encoding="utf-8", errors="replace", check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
     got = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert "FABRICATED" not in got["offline"] and "Internet access is disabled" in got["offline"]
+    assert "FABRICATED" not in got["offline"] and "without an internet connection" in got["offline"]
     assert "FABRICATED" not in got["webfail"] and "web search failed" in got["webfail"]
     assert got["normal"] == "cats are mammals"
     assert "No answer was produced" in got["empty"]
     assert "chart.png" in got["empty_file"]
+
+
+def test_strict_fabrication_guard_strips_citations_and_blocks_current_info(tmp_path):
+    """Strict anti-fabrication: if the web was TRIED but never succeeded, (a) a
+    current-info question's model text is not shown, (b) for other answers fabricated
+    'Source:'/URL lines are stripped."""
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("pwsh not found")
+    desktop = (ROOT / "agent" / "qwen-inference.ps1").read_text(encoding="utf-8-sig")
+    defs = "\n".join(
+        extract_function(desktop, n)
+        for n in ("Test-CurrentInfoIntent", "Add-WebFailureNote", "Remove-FabricatedCitations", "Get-FinalAnswer")
+    )
+    cur = _ps_quote("What is the latest iPhone model?")
+    other = _ps_quote("How do I reverse a list in Python?")
+    body = (
+        "$ErrorActionPreference = 'Stop'\n" + defs + "\n"
+        "$script:lastProducedFile = ''\n"
+        "$r = [ordered]@{}\n"
+        "$script:webToolFailCount = 1; $script:webToolAttempted = $true; $script:webToolSuccess = $false\n"
+        f"$r['cur_fail'] = Get-FinalAnswer 'FABRICATED iPhone 15 Pro' {cur} $true\n"
+        f"$r['strip'] = Get-FinalAnswer \"Short: reversed().`nSource: https://example.com/x`nMore: https://foo.bar\" {other} $true\n"
+        "$script:webToolFailCount = 0; $script:webToolAttempted = $false; $script:webToolSuccess = $false\n"
+        f"$r['no_web'] = Get-FinalAnswer 'See https://docs.python.org/3/' {other} $true\n"
+        "$script:webToolAttempted = $true; $script:webToolSuccess = $true\n"
+        f"$r['web_ok'] = Get-FinalAnswer 'Result: iPhone 16. Source: https://apple.com' {cur} $true\n"
+        "$r | ConvertTo-Json -Compress\n"
+    )
+    script = tmp_path / "strict.ps1"
+    script.write_text(body, encoding="utf-8-sig")
+    proc = subprocess.run([pwsh, "-NoProfile", "-NonInteractive", "-File", str(script)],
+                          capture_output=True, encoding="utf-8", errors="replace", check=False)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    got = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert "FABRICATED" not in got["cur_fail"] and "without an internet connection" in got["cur_fail"]
+    assert "example.com" not in got["strip"] and "foo.bar" not in got["strip"]
+    assert "reversed()" in got["strip"]
+    assert "docs.python.org" in got["no_web"]
+    assert "apple.com" in got["web_ok"] and "iPhone 16" in got["web_ok"]
 
 
 def test_friendly_error_message_maps_raw_dotnet(tmp_path):

@@ -46,6 +46,15 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   recovery). On any other drop/error `Get-FriendlyErrorMessage` turns a raw .NET/HTTP message (e.g.
   "The response ended prematurely. (ResponseEnded)") into a plain English message. The system prompt
   also now tells the model NOT to guess or fabricate when it cannot give a clear, definite answer.
+- **Strict anti-fabrication layer.** (1) A broad set of current/time-sensitive requests (weather,
+  news, price/exchange rate, "the latest", score, today/tomorrow, the year 20xx…): if web access is
+  unavailable (search failed or Internet off) the model text is **not shown**, only the message
+  "this information is not something I can get without an internet connection". (2) If the web was
+  **tried but never succeeded**, fabricated "Source:" lines and bare http(s) URLs are **stripped**
+  from other answers (`Remove-FabricatedCitations`). (3) The system prompt now says to answer stable,
+  definite knowledge (definitions, math, code, general knowledge) confidently, but never to guess or
+  fabricate current/unverifiable information. (4) On a web-research (current-info) turn, unless
+  explicitly requested, the image/video/document/chart tools are **not offered at all**.
 - **Fabrication is completely eliminated; unprompted generation and tool loops are closed.** The
   final answer is made deterministically safe:
   - When a request asks for **current information** (weather, news, price, "the latest model"…)
