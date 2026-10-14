@@ -205,6 +205,11 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   `baseUrl` plus settings to the worker; verified end to end with commandcode (text + image).
 
 ### Docs
+- **README and AGENTS product summary updated.** `README.md` (ENG) gained the chart-drawing capability
+  — the intro line and the Features table — and the new safety behaviors (documents/images/videos/charts
+  are not created unless asked; if a web search fails, or the internet is off for a current-information
+  request, the situation is reported honestly instead of inventing an answer). `AGENTS.md` §1 product
+  summary was aligned with chart drawing.
 - **Documentation/comment consistency pass (no behavior change).** Stale or hard-coded figures and
   missing items were fixed: `packaging/windows/mamidlabs.iss` (the header no longer hard-codes
   `v1.0.0`), `AGENTS.md` (the `asr` install stage, `requirements/asr.txt` in the repo map, the

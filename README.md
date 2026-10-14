@@ -10,7 +10,7 @@
 
 <p align="center">
   <b>A fully local, multimodal AI workspace</b><br>
-  Chat · Web search · Documents · OCR · Audio transcription · Image understanding · Image and video generation · Photo editing
+  Chat · Web search · Documents · OCR · Audio transcription · Image understanding · Image and video generation · Photo editing · Charts
 </p>
 
 <p align="center">
@@ -55,6 +55,7 @@ web search and optional API providers.
 | **Image generation** | Krea-2 Turbo; regeneration, style reference and a realism LoRA on request |
 | **Photo editing** | Krea 2 Identity Edit: clothes, lighting and background change while the person's face is preserved; with two images it places the person into a scene (16 GB profiles) |
 | **Video generation** | Wan 2.2 TI2V 5B; from text, from an image, and continuing from a video |
+| **Chart drawing** | Bar, line, pie, scatter and function curves (y=f(x)); from a single chat request |
 | **Agent mode** | Reading/writing files in a bound folder and running commands; with user approval |
 | **API providers** | Optional OpenAI, Claude, Gemini, DeepSeek and a custom OpenAI-compatible endpoint; key verification and model listing |
 | **Your own models** | Choose the language, image and video model by file path; the files are used in place without copying |
@@ -142,6 +143,9 @@ with `comfyKeepAlive=true`.
 - Every tool call is written to the `logs\audit.jsonl` audit log; chat records and API keys are
   encrypted with Windows DPAPI.
 - Web tools only reach public HTTP(S) addresses; local and private network addresses are rejected.
+- The model does not create documents/images/videos/charts unless explicitly asked; `read_document` is
+  offered only with an attached document or a file request. If a web search fails, or the internet is
+  off for a current-information request, it reports the situation honestly instead of inventing an answer.
 
 ## Testing and verification
 
