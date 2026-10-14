@@ -14,6 +14,9 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
 ### Changed
 - **LITE vision projector moved to the CPU (`--no-mmproj-offload`); it no longer counts toward the
   LITE VRAM budget.** Measured 7885→7249 MiB used (72→708 MiB free); chat speed unchanged.
+- **The installer now copies `assets\installer\*` (wizard art) into the root too,** so the installed
+  program files are byte-identical to the repo. Previously the `.iss` and the script excluded it;
+  now only `agent\__pycache__\*`/`*.pyc` are excluded. User data is untouched.
 - **Audio-transcription tier is now based on the selected profile:** the level of the local ASR
   pipeline (LITE: `int8_float16` + sequential loading + 15 s CPU/GPU threshold; PRO (MAX/FLASH):
   `float16` + parallel + 20 s) is now determined by the **selected language-model profile**;

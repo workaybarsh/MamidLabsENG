@@ -55,7 +55,9 @@ def test_layout_refreshes_existing_wizard_source_package():
     assert "if ((Test-Path -LiteralPath $setupSource -PathType Container) -and ($sourceFull -ine $setupSourceFull))" in script
     assert "foreach ($folder in @('agent', 'scripts', 'requirements'))" in script
     assert "Join-Path $Source 'docs\\installation.md'" in script
-    assert "Where-Object { $_.Name -ne 'installer' }" in script
+    # assets\installer is copied too (installed program files must match the repo).
+    assert "Get-ChildItem -LiteralPath $assets -Force | ForEach-Object" in script
+    assert "Where-Object { $_.Name -ne 'installer' }" not in script
     assert "Setup source package refreshed" in script
 
 
@@ -109,15 +111,15 @@ def test_source_package_refresh_prunes_and_applies_the_same_excludes():
 
 
 def test_layout_applies_the_iss_excludes_to_the_script_copy():
-    """The .iss excludes agent\\__pycache__\\*, *.pyc and assets\\installer\\*; the script copy
-    must drop the same paths so the install root matches the wizard package."""
+    """The .iss excludes agent\\__pycache__\\*, *.pyc (assets\\installer\\* is included now, so the
+    installed program files match the repo); the script copy drops the same paths."""
     script = read_text("scripts/install-mamidlabs.ps1")
     iss = read_text("packaging/windows/mamidlabs.iss")
     assert 'Excludes: "__pycache__\\*,*.pyc"' in iss
-    assert 'Excludes: "installer\\*"' in iss
+    assert 'Excludes: "installer\\*"' not in iss
     assert "Remove-ExcludedFromOwned $to $folder" in script
     assert "-Filter '__pycache__'" in script and "-Filter '*.pyc'" in script
-    assert "$installer = Join-Path $path 'installer'" in script
+    assert "$installer = Join-Path $path 'installer'" not in script
 
 
 def test_layout_writes_display_version_into_the_script_uninstall_entry():

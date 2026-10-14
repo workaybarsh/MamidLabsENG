@@ -292,7 +292,8 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
   `requirements\` is created and copied into the root too (the `Read-Requirements` step reads from
   `-Source`, but the root keeps a copy like the wizard does). `layout` prunes the owned program
   folders (`agent\`, `scripts\`, `assets\`, `requirements\`) before copying and applies the same
-  excludes as the `.iss` (`agent\__pycache__\*`, `*.pyc`, `assets\installer\*`), so removed/renamed
+  excludes as the `.iss` (`agent\__pycache__\*`, `*.pyc`); `assets\installer\*` is **included** so the
+  installed program files stay byte-identical to the repo. Removed/renamed
   files do not linger; user data (`settings\`, `chats\`, `models\`, `logs\`, `outputs\`, `tools\`,
   venvs, `ComfyUI`) is never touched. Its script uninstall entry carries `DisplayVersion` (from
   `-AppVersion` or `MyAppVersion` in the `.iss` under `-Source`) so the in-app update check
@@ -529,7 +530,7 @@ has no LoRA.
       the uninstaller. By default everything must stay under the root.
 - [ ] The install root copy, the `setup-source` refresh, the uninstaller `$programEntries` and the
       `.iss` `[Files]`/`[UninstallDelete]` must stay in sync: when you add or remove a file/folder
-      copied into the root (or an exclude such as `assets\installer\*`), update all of them in the
+      copied into the root (or an exclude such as `agent\__pycache__\*`), update all of them in the
       same change. `tests/test_install_layout_source.py` and `tests/test_uninstall.py` guard this.
 - [ ] Are `README.md`, `docs/installation.md`, `docs/technical-notes.md`, `CHANGELOG.md` and **this
       file** up to date?
@@ -543,6 +544,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-14 | **The installed program files are byte-identical to the repo (the `assets\installer` exclude was removed).** `layout` and the `setup-source` refresh no longer drop `assets\installer\*` (wizard art); the `.iss` `[Files]` `Excludes: "installer\*"` was removed and `Remove-ExcludedFromOwned` now only strips `agent\__pycache__\*`/`*.pyc`. So the install root's program files (`agent\`, `scripts\`, `assets\`, `requirements\` and the top-level files) match the repo byte-for-byte. | scripts/install-mamidlabs.ps1, packaging/windows/mamidlabs.iss, tests/test_install_layout_source.py, AGENTS.md, CHANGELOG.md |
 | 2026-10-14 | **Strict anti-fabrication + no generation tools on a web-research turn.** (1) A broad current/time-sensitive set; without web access the text is not shown and it says "this information is not something I can get without an internet connection". (2) Web tried-but-failed strips fabricated "Source:"/URL lines (`Remove-FabricatedCitations`). (3) `Test-CurrentInfoIntent` widened; the system prompt answers definite knowledge confidently but never fabricates current/unverifiable info. (4) On a web-research turn the image/video/document/chart tools are not offered unless explicitly requested. Also `Get-FriendlyErrorMessage` on a dropped stream + thinking-only drop routes to recovery. | agent/qwen-inference.ps1, qwen-desktop.ps1, tests/test_generation_intent_guard.py, CHANGELOG.md, AGENTS.md |
 | 2026-10-14 | **README/AGENTS product summary updated (no behavior change).** `README.md` gained the chart-drawing capability (intro line + Features table) and the new safety behaviors (no unprompted document/image/video/chart generation; if a web search fails, or the internet is off for a current-information request, an honest report instead of a fabricated answer; `read_document` only with a document context). `AGENTS.md` §1 product summary was aligned with chart drawing. | README.md, AGENTS.md, CHANGELOG.md |
 | 2026-10-14 | **Unprompted generation blocked + failed web search reported honestly + `read_document` needs a document context.** The generation tools (`create_document`, `generate_video`, `generate_chart`) were offered on every turn with only the system prompt as a guard; LITE generated unprompted. They now have the same **call-time intent guard** as `generate_image` (`Test-DocumentRequestIntent`/`Test-VideoRequestIntent`/`Test-ChartRequestIntent`; video is also checked in the block before handing over to the UI). **Fabrication is completely eliminated:** when a current-information turn has no web access (search failed or Internet off) the model text is **not used**; `Get-FinalAnswer` shows an honest message (`Add-WebFailureNote` appends a note when a search failed and current info was not required). An empty answer is replaced by a clear message; the same generation tool runs once per turn (`$script:completedTools`). `read_document` is offered only with an attached document or `Test-FileIntent` (the model invented a non-existent file and read it). Test: `tests/test_generation_intent_guard.py` (real pwsh + static). | agent/qwen-inference.ps1, tests/test_generation_intent_guard.py, CHANGELOG.md, AGENTS.md |

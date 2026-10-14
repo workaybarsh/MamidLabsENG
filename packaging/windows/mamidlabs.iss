@@ -93,7 +93,7 @@ Source: "..\..\LICENSE"; DestDir: "{app}\setup-source"; Flags: ignoreversion
 Source: "..\..\EULA.txt"; DestDir: "{app}\setup-source"; Flags: ignoreversion
 Source: "..\..\agent\*"; DestDir: "{app}\setup-source\agent"; Excludes: "__pycache__\*,*.pyc"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\scripts\*"; DestDir: "{app}\setup-source\scripts"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\..\assets\*"; DestDir: "{app}\setup-source\assets"; Excludes: "installer\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\assets\*"; DestDir: "{app}\setup-source\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\requirements\*"; DestDir: "{app}\setup-source\requirements"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\docs\installation.md"; DestDir: "{app}\setup-source\docs"; Flags: ignoreversion
 ; The profile report runs BEFORE the installation, from a temporary folder.

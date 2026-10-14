@@ -344,11 +344,12 @@ function Invoke-Layout {
         }
         $assets = Join-Path $Source 'assets'
         if (Test-Path -LiteralPath $assets) {
-            # assets\installer is only used to build the wizard; the .iss excludes it too.
+            # assets\installer (wizard art) is copied too: the installed program files must stay
+            # byte-identical to the repo.
             $assetsTarget = Join-Path $setupSource 'assets'
             if (Test-Path -LiteralPath $assetsTarget) { Remove-Item -LiteralPath $assetsTarget -Recurse -Force }
             New-Item -ItemType Directory -Path $assetsTarget -Force | Out-Null
-            Get-ChildItem -LiteralPath $assets -Force | Where-Object { $_.Name -ne 'installer' } | ForEach-Object {
+            Get-ChildItem -LiteralPath $assets -Force | ForEach-Object {
                 Copy-Item -LiteralPath $_.FullName -Destination $assetsTarget -Recurse -Force
             }
         }
@@ -459,9 +460,9 @@ function Get-AppVersionFromSource([string]$source) {
     return $null
 }
 
-# The Inno Setup [Files] section excludes build artifacts (agent\__pycache__\*, *.pyc) and
-# assets\installer\* (only used to build the wizard). The script copy applies the same
-# excludes so the install root and the setup-source package do not drift from the .iss.
+# The Inno Setup [Files] section excludes build artifacts (agent\__pycache__\*, *.pyc).
+# assets\installer\* is NOT excluded: the installed program files must stay byte-identical to
+# the repo. `assets` is still passed, so the call shape is unchanged; it is a no-op now.
 function Remove-ExcludedFromOwned([string]$path, [string]$name) {
     if (!(Test-Path -LiteralPath $path)) { return }
     if ($name -eq 'agent') {
@@ -469,9 +470,6 @@ function Remove-ExcludedFromOwned([string]$path, [string]$name) {
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         Get-ChildItem -LiteralPath $path -Recurse -Force -File -Filter '*.pyc' -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
-    } elseif ($name -eq 'assets') {
-        $installer = Join-Path $path 'installer'
-        if (Test-Path -LiteralPath $installer) { Remove-Item -LiteralPath $installer -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 
