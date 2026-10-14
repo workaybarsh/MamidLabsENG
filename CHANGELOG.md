@@ -43,6 +43,7 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **Restored the "no fabricated test/theorem/source name" rule in the system prompt.** The strict anti-fabrication rewrite had dropped it (tests caught it); it is back.
 - **A dropped stream gives a clear message; no guessing when a definite answer is impossible.** If a
   turn drops **without producing a visible answer** (only thinking accumulated) it is no longer
   treated as an error; thinking is turned off and the answer is requested directly (empty-answer
