@@ -121,7 +121,7 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     # into shared memory and drops production to ~6 tok/s. That is why ComfyUI is always
     # closed before measuring (see below); an overflow is not accepted on tolerance.
     # Measured (RTX 5060 Ti): with 15244 MiB free the 27B fully FIT and ran at ~45 tok/s;
-    # with 15095 MiB it SPILLED and dropped to ~30 tok/s. So the threshold (15200) is the
+    # with 15095 MiB it SPILLED and dropped to ~30 tok/s. So the threshold (15350) is the
     # exact-fit boundary; even a small overflow means spilling and is not accepted. Closing
     # GPU-using desktop apps (browser) frees more and lets the model fit fully.
     $toleranceMiB = if ($profileName -eq 'lite') { 1024 } else { 0 }

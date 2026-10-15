@@ -140,7 +140,7 @@ single "Qwen3.8 27B" entry (`Get-ProfileCatalogForDisplay`); switching happens i
 Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFilesPresent`) must use
 the full catalog (`Get-ProfileCatalog`).
 
-**VRAM check** (`Test-MemoryBudget`): required = model file + **780 MiB**
+**VRAM check** (`Test-MemoryBudget`): required = model file + **750 MiB**
 (MAX/FLASH; 300 MiB on LITE); the mmproj runs on the CPU in all profiles so it does not count toward the VRAM
 budget. **ComfyUI lifecycle (default: runs only during generation):** ComfyUI runs **only
 during image/video generation**; it is closed when the job ends and before the language model loads,
