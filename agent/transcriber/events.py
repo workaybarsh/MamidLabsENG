@@ -134,7 +134,13 @@ def tag(wav_path: str, profile, device: str = 'cuda', threshold: float = 0.3,
     except Exception:
         return []
 
-    extractor, model = _load_events_model(profile)
+    # If the AST model cannot be loaded (e.g. the HF cache is missing: HF_HOME not set and the
+    # default cache has no model) the WHOLE transcription must NOT fail; the events are skipped.
+    # Otherwise voice input failed completely (see tests/test_transcriber.py).
+    try:
+        extractor, model = _load_events_model(profile)
+    except Exception:
+        return []
     use_cuda = (device or '').lower() == 'cuda' and torch.cuda.is_available()
     if use_cuda:
         model = model.to('cuda')

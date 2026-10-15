@@ -561,6 +561,14 @@ pipeline lives in the `agent/transcriber/` package and runs in `venv\asr`:
   27B's margin) and restarted in the background after the turn; it exits itself after 600 s idle /
   when the app closes. If the worker is unreachable the transcript falls back to the one-shot
   `Invoke-PythonTool` path (behavior preserved).
+- **HF cache (`HF_HOME`):** the audio models (whisper large-v3 + AST) live in the install root's HF
+  cache (`tools\hf-home`) and are used **offline** at runtime; the app sets
+  `$env:HF_HOME = <root>\tools\hf-home` in `qwen-desktop.ps1` and `agent/qwen-inference.ps1` passes
+  `Get-HfHome` to both the one-shot `Invoke-PythonTool` (child process env) and the persistent
+  `Start-AsrServerProcess`. Without it the worker falls back to the DEFAULT HF cache, AST is not
+  there, and because `events.tag()` guards the load with `try/except` the transcript still completes
+  but the **events are skipped** (empty list). So AST working depends on `HF_HOME` (the same path the
+  installer uses).
 
 ## Verifying the fixes
 

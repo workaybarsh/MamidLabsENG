@@ -38,6 +38,12 @@ function Get-MediaPythonExe { Join-Path (Get-InstallRoot) 'venv\imagegen\Scripts
 function Get-AsrPythonExe { Join-Path (Get-InstallRoot) 'venv\asr\Scripts\python.exe' }
 function Get-ManageQwenPath { Join-Path (Get-InstallRoot) 'scripts\manage-qwen.ps1' }
 function Get-AuditLogPath { Join-Path (Get-InstallRoot) 'logs\audit.jsonl' }
+# The HF cache (whisper large-v3-tr + the AST audio-event model) lives UNDER THE INSTALL ROOT;
+# the worker/tools must use it OFFLINE. If the app does not set HF_HOME at runtime the worker
+# falls back to the DEFAULT HF cache; the AST model is not there, so the events model cannot be
+# loaded and voice input fails. The installer uses the same path
+# (install-mamidlabs.ps1 -> $env:HF_HOME = <root>\tools\hf-home).
+function Get-HfHome { Join-Path (Get-InstallRoot) 'tools\hf-home' }
 
 # Action audit log: after each tool call one JSON line is appended to logs/audit.jsonl
 # (job/tool id, source channel, approval, result, changed paths). Document/command CONTENT
@@ -202,6 +208,9 @@ function Invoke-PythonTool([hashtable]$payload, [string]$scriptPath = $null, [st
     $psi.RedirectStandardError = $true
     $psi.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
     $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+    # Python tools (including the audio worker whisper-tools.py) use the install HF cache OFFLINE:
+    # without HF_HOME the default cache is used and the AST model is not found.
+    $psi.EnvironmentVariables['HF_HOME'] = Get-HfHome
     $p = [Diagnostics.Process]::Start($psi)
     try {
         $p.StandardInput.Write(($payload | ConvertTo-Json -Compress -Depth 10))
@@ -561,6 +570,8 @@ function Start-AsrServerProcess {
     $logDir = Split-Path -Parent $statePath
     if (!(Test-Path -LiteralPath $logDir -PathType Container)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
     Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+    # The persistent worker must also use the install HF cache (Start-Process inherits the env).
+    $env:HF_HOME = Get-HfHome
     $argList = @($worker, '--serve', '--state-file', $statePath, '--parent-pid', "$PID", '--idle-timeout', "$(Get-AsrServerIdleSeconds)")
     $quoted = ($argList | ForEach-Object { '"' + [string]$_ + '"' }) -join ' '
     try { return (Start-Process -FilePath $python -ArgumentList $quoted -WindowStyle Hidden -PassThru) } catch { return $null }

@@ -11,6 +11,21 @@ editing, video generation and chart drawing. The language model runs on `llama.c
 (`llama-server`), the image/video models on `ComfyUI`, on the user's NVIDIA graphics card. OpenAI,
 Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API providers.
 
+### Fixed
+- **Voice input failed on a normally launched app because `HF_HOME` was never set at runtime.** The
+  audio models (whisper large-v3 + the AST audio-event model) live in the install root's HF cache
+  (`tools\hf-home`, the installer sets `HF_HOME` there during install only). At runtime the app set
+  no `HF_HOME`, so the worker fell back to the **default** HF cache
+  (`%USERPROFILE%\.cache\huggingface`), where the AST model is absent; `events.tag()` then raised
+  while loading it and the **whole transcription failed** with "Can't load feature extractor ..."
+  (only the silent "no events" case was handled). Two fixes: (1) the app now sets `HF_HOME` to the
+  install cache at startup (`qwen-desktop.ps1`) and the worker/tools are handed it explicitly
+  (`Get-HfHome` in `agent/qwen-inference.ps1`, on the one-shot `Invoke-PythonTool` and the persistent
+  `Start-AsrServerProcess`), so both models resolve offline; (2) `events.tag()` guards the model load,
+  so if the model is ever missing the events are **skipped** (an empty list) instead of killing the
+  transcript. Tests: `tests/test_transcriber.py` (the guarded load + a real-pwsh check that
+  `Invoke-PythonTool` gives the child `HF_HOME` + static wiring).
+
 ### Changed
 - **Voice-input latency reduced: a warm (persistent) audio transcription worker.** The fixed cost
   repeated on every audio turn (Python start-up + `torch`/`transformers`/`faster-whisper` imports;

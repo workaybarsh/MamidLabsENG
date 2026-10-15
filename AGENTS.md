@@ -385,7 +385,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 
 ```powershell
 python -m pip install pytest -r requirements\app.txt
-python -m pytest -q          # ~229 s (470 collected, 466 passed, 4 skipped); no extra setup needed (tests/conftest.py)
+python -m pytest -q          # ~150 s (474 collected, 470 passed, 4 skipped); no extra setup needed (tests/conftest.py)
 %LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\smoke-test.ps1 -Profile flash -SkipVideo
 ```
 
@@ -532,6 +532,13 @@ context at all, so it holds no VRAM while idle and does not eat the 27B's thin m
     `400 All non-assistant messages must contain 'content'`. So everywhere that consumes worker
     output, guard with `if ($done.data)` / `if ($jobEvent.data)` first (the `Render-JobEvent` in the
     UI and the `history_resume` smoke step do this). Never concatenate an empty array with `+`.
+23. **The audio models live in the install root's HF cache; `HF_HOME` must be set at runtime.**
+    `tools\hf-home` (whisper large-v3 + the AST audio-event model) is used with `HF_HOME` only by
+    `install-mamidlabs.ps1` during install. The app sets `$env:HF_HOME = <root>\tools\hf-home` in
+    `qwen-desktop.ps1`, and `agent/qwen-inference.ps1` passes `Get-HfHome` to both the one-shot
+    `Invoke-PythonTool` (child process env) and the persistent `Start-AsrServerProcess`. Without it
+    the worker falls back to the DEFAULT cache, AST is not found and voice input fails (see §16).
+    When adding a new HF-using worker, do not forget to pass `HF_HOME`.
 
 ## 15. Checklist when making changes
 
@@ -559,6 +566,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-15 | **Voice input was broken on a normally launched app: `HF_HOME` was never set at runtime.** The audio models (whisper large-v3 + AST) live in the install root's HF cache (`tools\hf-home`) and the installer sets `HF_HOME` there **during install only**. At runtime the app did not set it, so the worker fell back to the DEFAULT cache (`%USERPROFILE%\.cache\huggingface`); the AST model is not there, so `events.tag()` raised while loading it and the **whole transcription failed** with "Can't load feature extractor" (events default ON; only the "no events" case was handled). Fix: (1) `qwen-desktop.ps1` sets `$env:HF_HOME = <root>\tools\hf-home` at startup; `agent/qwen-inference.ps1` gained `Get-HfHome` and both the one-shot `Invoke-PythonTool` (child `HF_HOME`) and the persistent `Start-AsrServerProcess` use that cache (so it is offline, no network needed); (2) `events.tag()` guards the AST load with `try/except`, so if the model is ever missing the events are skipped (empty list) and the transcript still succeeds. Tests: `tests/test_transcriber.py` (static guarded load + `tag` empty-list behavior + a real-pwsh check that `Invoke-PythonTool` hands the child `HF_HOME` + static wiring). | qwen-desktop.ps1, agent/qwen-inference.ps1, agent/transcriber/events.py, tests/test_transcriber.py, CHANGELOG.md, AGENTS.md |
 | 2026-10-15 | **Voice-input latency: a warm (persistent) audio transcription worker.** The fixed cost repeated on every audio turn (Python start-up + torch/transformers/faster-whisper imports; measured ~10 s, ~25 s cold/disk) is now paid ONCE per session: `whisper-tools.py --serve` runs as a single persistent process listening on 127.0.0.1 (port/pid in `logs\asr-server.json`) and holds the models in-process; `{"action":"unload"}` drops the audio models (the process stays alive). Before the language model is reloaded into VRAM the worker is unloaded and STOPPED (its remaining CUDA context ~140 MiB could eat the 27B's thin margin) and restarted IN THE BACKGROUND after the turn; it exits itself after 600 s idle / when the app closes. If the worker is unreachable it falls back to the one-shot `Invoke-PythonTool` path. The one-shot stdin/stdout contract is preserved. Tests: `tests/test_transcriber.py` (serve contract + `_dispatch` + `_parent_gone` + a real `--serve` ping/idle-exit + static PS wiring). | agent/whisper-tools.py, agent/qwen-inference.ps1, tests/test_transcriber.py, CHANGELOG.md, AGENTS.md |
 | 2026-10-15 | **Documentation/attribution cleanup (no behavior change).** Removed the license-comparison sentence from `README.md`, the external AI tool names and the `CLAUDE.md` row from the `AGENTS.md` intro; deleted `CLAUDE.md`; neutralized the `tests/ui-automation` temp/screenshot path to `%TEMP%\mamidlabs\ui`; changed the consumer-assistant name in the `docs/technical-notes.md` subscription-login sentence to the product provider name. The API providers (a product feature) are kept. | README.md, AGENTS.md, docs/technical-notes.md, CLAUDE.md (deleted), tests/ui-automation/ui.ps1, tests/ui-automation/win32.ps1, tests/ui-automation/README.md |
 | 2026-10-15 | **Prompt-preprocessing latency diagnosed + "use all free VRAM / no spill" fix.** Measurement (RTX 5060 Ti, MAX): the KV cache **works** (turn 2 reused 19,988 tokens, first token 0.6 s) and prompt processing is ~415 tok/s on a clean load; a **full reprocess** of a long context is ~48 s (20k tokens). The ~20 tok/s turn was ~20x slower because the model did not fully fit VRAM and **spilled into shared memory**. The **measured model footprint is 15350 MiB** (file 14,600 but on the GPU with q4_0 KV + compute buffers + MTP draft context; a clean load at 15454 MiB free gives ~41-55 tok/s). The MAX/FLASH margin is now **750 MiB** (threshold 15350): the model loads only when it **fully fits**, **uses all free VRAM** and **does not spill**; on a normal desktop (browser closed) it **loads without error**; below that a clear "not enough VRAM" is shown. `--gpu-layers 99` is kept; llama.cpp's `--fit` auto-placement was tested and proved more **conservative** (did not use all VRAM, ~23 tok/s) -> not used. (The earlier "slow mode warning" approach was removed: spill is prevented directly.) | scripts/manage-qwen.ps1, tests/test_memory_admission.py, AGENTS.md, CHANGELOG.md |

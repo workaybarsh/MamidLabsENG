@@ -342,6 +342,34 @@ def test_events_filters_speech_labels_and_translates():
     assert "SPEECH_LABELS" in src and "_merge_repeats" in src
 
 
+def test_events_load_failure_does_not_break_transcription():
+    """If the AST model cannot be loaded (e.g. the HF cache is missing) the WHOLE transcription
+    must NOT fail; the events are skipped. Regression: `_load_events_model` was called OUTSIDE a
+    try; when the app did not set HF_HOME at runtime (the default cache has no AST) voice input
+    failed completely."""
+    import re
+
+    src = read_text("agent/transcriber/events.py")
+    assert re.search(
+        r"try:\s*\n\s*extractor, model = _load_events_model\(profile\)\s*\n"
+        r"\s*except Exception:\s*\n\s*return \[\]",
+        src,
+    ), "events.tag must guard the AST model load with try/except"
+
+
+def test_events_tag_returns_empty_when_model_missing(monkeypatch):
+    """Behavior: when the events model cannot be loaded `tag` does not leak an exception and
+    returns an empty list."""
+    from transcriber import events
+
+    def boom(profile):
+        raise OSError("no model")
+
+    monkeypatch.setattr(events, "_load_events_model", boom)
+    profile = SimpleNamespace(events=True, events_model="MIT/ast-x", name="pro")
+    assert events.tag("missing.wav", profile) == []
+
+
 # ------------------------------------------------------------- worker / UI
 def test_worker_exists_and_reads_json_on_stdin():
     src = read_text("agent/whisper-tools.py")
@@ -693,6 +721,42 @@ def test_transcription_uses_asr_environment_not_imagegen():
     assert "path = $path" in plan
 
 
+def test_asr_worker_uses_install_hf_cache():
+    """The audio worker must use the INSTALL HF cache (root\\tools\\hf-home). Regression: the app
+    never set HF_HOME at runtime; the worker fell back to the DEFAULT HF cache, the AST audio-event
+    model was not there, so the events model could not be loaded and ALL voice input failed. The
+    installer uses the same path (install-mamidlabs.ps1)."""
+    worker = read_text("agent/qwen-inference.ps1")
+    assert "function Get-HfHome" in worker
+    assert "tools\\hf-home" in worker
+    # The one-shot python tool and the persistent worker both get HF_HOME.
+    py = worker.split("function Invoke-PythonTool")[1].split("function ")[0]
+    assert "HF_HOME" in py and "Get-HfHome" in py
+    srv = worker.split("function Start-AsrServerProcess")[1].split("function ")[0]
+    assert "HF_HOME" in srv and "Get-HfHome" in srv
+    # It is also set at app startup (so every child reached through the UI inherits it).
+    desktop = read_text("qwen-desktop.ps1")
+    assert "$env:HF_HOME = Join-Path $root 'tools\\hf-home'" in desktop
+
+
+def test_python_tool_sets_hf_home_for_child(tmp_path):
+    """Behavior: Invoke-PythonTool gives the child process HF_HOME=<root>\\tools\\hf-home, so the
+    audio worker (and the other python tools) use the install cache offline (real pwsh + real
+    Python)."""
+    worker = read_text("agent/qwen-inference.ps1")
+    probe = tmp_path / "probe.py"
+    probe.write_text("import os\nprint(os.environ.get('HF_HOME',''))\n", encoding="utf-8")
+    script = _invoke_python_tool_harness(worker) + f"""
+$shared = @{{ Cancel = $false }}
+$out = Invoke-PythonTool @{{}} '{probe}' '{sys.executable}' 15
+'HF=' + $out.Trim()
+"""
+    out = _run_ps1(script, tmp_path)
+    lines = [line for line in out.splitlines() if line.startswith("HF=")]
+    assert lines, out
+    assert lines[0][3:].replace("/", "\\").lower().endswith(r"tools\hf-home")
+
+
 def test_worker_maps_selected_profile_to_asr_tier():
     """The UI maps the SELECTED language-model profile to the audio-pipeline tier ('lite'->
     'lite', otherwise 'pro') and passes it as the `profile` field on both the plan and the
@@ -955,7 +1019,7 @@ def test_python_tool_wall_clock_timeout_kills_subprocess(tmp_path):
     """D2 behavior: a subprocess sleeping forever is killed at the timeout and the job returns an
     error WITHOUT hanging (real pwsh + a real Python process)."""
     worker = read_text("agent/qwen-inference.ps1")
-    fn = _extract_ps_function(worker, "Invoke-PythonTool")
+    fn = _invoke_python_tool_harness(worker)
     sleeper = tmp_path / "sleeper.py"
     sleeper.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
     script = fn + f"""
@@ -1261,6 +1325,16 @@ def _run_ps1(script: str, tmp_path: Path) -> str:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout
+
+
+def _invoke_python_tool_harness(worker: str) -> str:
+    """The functions needed to run Invoke-PythonTool in isolation + a Get-InstallRoot stub.
+
+    Invoke-PythonTool now hands the child process HF_HOME (the install cache); so the isolated
+    run must also define Get-HfHome (and the Get-InstallRoot it depends on)."""
+    return ("function Get-InstallRoot { 'C:\\fake\\root' }\n"
+            + _extract_ps_function(worker, "Get-HfHome") + "\n"
+            + _extract_ps_function(worker, "Invoke-PythonTool"))
 
 
 # ------------------------------- Empty/truncated visible-answer recovery (no thinking)

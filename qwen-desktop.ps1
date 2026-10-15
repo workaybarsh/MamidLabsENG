@@ -84,6 +84,11 @@ if ($existingWindow -ne [IntPtr]::Zero) {
 # This file lives in the install root; $root is derived from its own location, so
 # the app runs from whichever folder it was installed to.
 $root = $PSScriptRoot
+# The HF cache (audio models + downloads) lives UNDER THE INSTALL ROOT; child processes (python
+# tools, the warm audio worker) must use it offline. The installer uses the same path
+# (install-mamidlabs.ps1). Without it the worker falls back to the DEFAULT HF cache and the AST
+# audio-event model is not found -> voice input fails.
+$env:HF_HOME = Join-Path $root 'tools\hf-home'
 . (Join-Path $root 'agent\api-providers.ps1')
 . (Join-Path $root 'agent\api-settings.ps1')
 . (Join-Path $root 'agent\model-registry.ps1')
