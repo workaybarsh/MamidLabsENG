@@ -92,7 +92,7 @@ function Shot-Hwnd($h, [string]$name) {
     $r = New-Object W32+RECT; [void][W32]::GetWindowRect($h, [ref]$r)
     $bmp = New-Object Drawing.Bitmap ($r.R - $r.L), ($r.B - $r.T); $g = [Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size); $g.Dispose()
-    $p = Join-Path $env:TEMP "claude\ui\shots\$name.png"; $bmp.Save($p); $bmp.Dispose(); $p
+    $p = Join-Path $env:TEMP "mamidlabs\ui\shots\$name.png"; $bmp.Save($p); $bmp.Dispose(); $p
 }
 function Kids-Text($h) { foreach ($k in [W32]::Kids($h)) { if ([W32]::IsWindowVisible($k)) { '{0} [{1}] {2}' -f $k, [W32]::Cls($k), [W32]::Text($k) } } }
 function Click-Btn($h) { $o = [IntPtr]::Zero; [void][W32]::PostMessage($h, 0xF5, [IntPtr]::Zero, [IntPtr]::Zero); Start-Sleep -Milliseconds 800 }

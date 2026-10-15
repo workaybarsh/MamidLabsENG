@@ -232,7 +232,7 @@ in the next request. This record is kept only in the memory of that request; it 
 chat file or to other providers. Since `max_tokens` also covers thinking, the lower bound on Claude
 is 16000.
 
-**Signing in with a subscription account** (OAuth) for Claude, Gemini or ChatGPT is deliberately not
+**Signing in with a subscription account** (OAuth) for OpenAI, Claude or Gemini is deliberately not
 offered. These providers open consumer subscription sign-in only to their own apps; a third-party app
 using the subscription session violates the terms of use and can get the account closed. The
 supported path is an API key; the account connection window reduces this step to a single click.

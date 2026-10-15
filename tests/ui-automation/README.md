@@ -15,7 +15,7 @@ Usage (Windows PowerShell 5.1):
 . .\tests\ui-automation\win32.ps1
 ```
 
-Screenshots are written under `%TEMP%\claude\ui\shots\`.
+Screenshots are written under `%TEMP%\mamidlabs\ui\shots\`.
 
 ## Lessons learned
 

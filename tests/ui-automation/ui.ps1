@@ -3,7 +3,7 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.For
 $ErrorActionPreference = 'Stop'
 $AE = [Windows.Automation.AutomationElement]
 $TS = [Windows.Automation.TreeScope]
-$shotDir = Join-Path $env:TEMP 'claude\ui\shots'
+$shotDir = Join-Path $env:TEMP 'mamidlabs\ui\shots'
 New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
 
 Add-Type @'
@@ -245,4 +245,4 @@ function Set-FileDialogTarget {
     }
     return $false
 }
-function Get-Wizard { Get-Window ([int](Get-Content (Join-Path $env:TEMP 'claude\ui\wizard-pid.txt'))) '*' 10 }
+function Get-Wizard { Get-Window ([int](Get-Content (Join-Path $env:TEMP 'mamidlabs\ui\wizard-pid.txt'))) '*' 10 }
