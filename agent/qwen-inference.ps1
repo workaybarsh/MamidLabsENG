@@ -499,6 +499,159 @@ function Get-AudioTimeoutSeconds([double]$durationSeconds) {
     return $t
 }
 
+# --- Warm (persistent) audio transcription worker -----------------------------
+# The fixed cost repeated on EVERY audio turn (Python start-up + torch/transformers/
+# faster-whisper imports) is paid ONCE per session by keeping a single persistent worker
+# process (agent/whisper-tools.py --serve). Measured (RTX 5060 Ti, venv\asr): `import
+# transformers` alone ~25 s cold (~10 s warm); because audio events (AST) default ON this
+# cost was paid on every cold turn. The worker listens on 127.0.0.1; port/pid are published
+# in `logs\asr-server.json`. It exits itself when the app closes (parent-pid) or after being
+# idle (idle-timeout), so there is no orphan process/VRAM/RAM leak. If the worker is
+# UNREACHABLE or a transport error occurs we FALL BACK to the one-shot Invoke-PythonTool
+# path, so the audio pipeline works under all conditions.
+function Get-AsrServerStatePath { Join-Path (Get-InstallRoot) 'logs\asr-server.json' }
+
+# The worker exits itself after being idle this many seconds (gives RAM/VRAM back); it
+# restarts on the next audio turn. It stays warm across back-to-back audio turns.
+function Get-AsrServerIdleSeconds { return 600 }
+
+function Send-AsrServerLine($state, [hashtable]$payload, [int]$timeoutSeconds = 15) {
+    # Sends one line of JSON and returns one line of JSON (short operations: ping/unload).
+    # Long transcriptions use Invoke-AsrServerRequest.
+    $client = [Net.Sockets.TcpClient]::new()
+    try {
+        $iar = $client.BeginConnect('127.0.0.1', [int]$state.port, $null, $null)
+        if (!$iar.AsyncWaitHandle.WaitOne(2000)) { throw 'Could not connect to the ASR server.' }
+        $client.EndConnect($iar)
+        $stream = $client.GetStream()
+        if ($timeoutSeconds -gt 0) { $stream.ReadTimeout = $timeoutSeconds * 1000; $stream.WriteTimeout = $timeoutSeconds * 1000 }
+        $bytes = [Text.Encoding]::UTF8.GetBytes((($payload | ConvertTo-Json -Compress -Depth 10) + "`n"))
+        $stream.Write($bytes, 0, $bytes.Length); $stream.Flush()
+        $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false))
+        $line = $reader.ReadLine()
+        if ($null -eq $line) { throw 'The ASR server did not reply.' }
+        return $line
+    } finally { $client.Dispose() }
+}
+
+function Test-AsrServerAlive($state) {
+    try {
+        $parsed = (Send-AsrServerLine $state @{ action = 'ping' } 5) | ConvertFrom-Json -ErrorAction Stop
+        return [bool]$parsed.ok
+    } catch { return $false }
+}
+
+function Get-AsrServerEndpoint {
+    # Reads the state file and pings the worker; returns $null if dead/stale.
+    $path = Get-AsrServerStatePath
+    if (!(Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    $state = $null
+    try { $state = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return $null }
+    if (!$state -or !$state.port) { return $null }
+    if (Test-AsrServerAlive $state) { return $state }
+    return $null
+}
+
+function Start-AsrServerProcess {
+    # Starts the persistent worker process and returns IMMEDIATELY (does not wait for readiness).
+    # Every argument is quoted explicitly so Start-Process passes paths with spaces reliably.
+    $python = Get-AsrPythonExe; $worker = Get-WhisperPyPath
+    if (!(Test-Path -LiteralPath $python -PathType Leaf) -or !(Test-Path -LiteralPath $worker -PathType Leaf)) { return $null }
+    $statePath = Get-AsrServerStatePath
+    $logDir = Split-Path -Parent $statePath
+    if (!(Test-Path -LiteralPath $logDir -PathType Container)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+    $argList = @($worker, '--serve', '--state-file', $statePath, '--parent-pid', "$PID", '--idle-timeout', "$(Get-AsrServerIdleSeconds)")
+    $quoted = ($argList | ForEach-Object { '"' + [string]$_ + '"' }) -join ' '
+    try { return (Start-Process -FilePath $python -ArgumentList $quoted -WindowStyle Hidden -PassThru) } catch { return $null }
+}
+
+function Start-AsrServer {
+    # Starts the persistent worker and waits until it is ready (state file + ping). Imports
+    # take ~10 s (~25 s cold/disk); if the process dies it returns $null (falls back to one-shot).
+    $proc = Start-AsrServerProcess
+    if (!$proc) { return $null }
+    $deadline = [DateTime]::UtcNow.AddSeconds(120)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ($Shared -and $Shared.Cancel) { return $null }
+        Start-Sleep -Milliseconds 300
+        $state = Get-AsrServerEndpoint
+        if ($state) { return $state }
+        if ($proc.HasExited) { return $null }
+    }
+    return $null
+}
+
+function Start-AsrServerAsync {
+    # Starts the worker IN THE BACKGROUND (does not wait): imports finish before the NEXT audio
+    # turn, so the transcription critical path only pays the model LOAD cost. The audio model
+    # uses no VRAM (no transcription yet), so it does not affect loading the language model.
+    [void](Start-AsrServerProcess)
+}
+
+function Ensure-AsrServer {
+    $state = Get-AsrServerEndpoint
+    if ($state) { return $state }
+    return Start-AsrServer
+}
+
+function Stop-AsrServer {
+    # Cleans up the worker process and the state file (cancel/timeout/app exit).
+    $path = Get-AsrServerStatePath
+    if (!(Test-Path -LiteralPath $path -PathType Leaf)) { return }
+    try {
+        $state = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($state -and $state.pid) { Stop-Process -Id ([int]$state.pid) -Force -ErrorAction SilentlyContinue }
+    } catch { }
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+}
+
+function Unload-AsrServerModels {
+    # Drops the audio models before the language model is reloaded into VRAM; the worker PROCESS
+    # stays alive (imports stay warm), only the models are dropped.
+    $state = Get-AsrServerEndpoint
+    if (!$state) { return }
+    try { [void](Send-AsrServerLine $state @{ action = 'unload' } 60) } catch { }
+}
+
+function Invoke-AsrServerRequest([hashtable]$payload, [int]$timeoutSeconds = 0) {
+    # Sends a request to the warm worker. Returns $null when it is absent/unreachable (the caller
+    # falls back to the one-shot Invoke-PythonTool path). "Stop" works INSTANTLY: on cancel the
+    # worker process is killed.
+    if ($timeoutSeconds -le 0) { $timeoutSeconds = 180 }
+    $state = Ensure-AsrServer
+    if (!$state) { return $null }
+    $client = [Net.Sockets.TcpClient]::new()
+    try {
+        $iar = $client.BeginConnect('127.0.0.1', [int]$state.port, $null, $null)
+        if (!$iar.AsyncWaitHandle.WaitOne(2000)) { return $null }
+        $client.EndConnect($iar)
+        $stream = $client.GetStream()
+        $bytes = [Text.Encoding]::UTF8.GetBytes((($payload | ConvertTo-Json -Compress -Depth 10) + "`n"))
+        $stream.Write($bytes, 0, $bytes.Length); $stream.Flush()
+        $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false))
+        $task = $reader.ReadLineAsync()
+        $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+        while (!$task.IsCompleted) {
+            if ($Shared -and $Shared.Cancel) {
+                $client.Dispose(); Stop-AsrServer
+                throw [OperationCanceledException]::new()
+            }
+            if ([DateTime]::UtcNow -ge $deadline) {
+                # No reply: kill the worker (so it does not stay stuck) and fall back to one-shot.
+                $client.Dispose(); Stop-AsrServer
+                return $null
+            }
+            Start-Sleep -Milliseconds 150
+        }
+        return $task.GetAwaiter().GetResult()
+    } catch [OperationCanceledException] {
+        throw
+    } catch {
+        return $null
+    } finally { $client.Dispose() }
+}
+
 function Get-AudioTranscriptionPlan([string]$path) {
     # If it cannot be measured, the SAFE side: swap on the local provider; on API the GPU is free.
     $fallback = [pscustomobject]@{ device = 'cuda'; need_swap = ($provider -eq 'local'); duration_seconds = $null }
@@ -509,7 +662,9 @@ function Get-AudioTranscriptionPlan([string]$path) {
         $planPayload = @{ action = 'plan'; local_model_loaded = ($provider -eq 'local'); path = $path }
         $asrProfile = Get-AsrProfileName
         if ($asrProfile) { $planPayload.profile = $asrProfile }
-        $raw = Invoke-PythonTool $planPayload $whisperPy $asrPy
+        # The warm worker is tried first (imports are kept between turns); if UNREACHABLE, one-shot.
+        $raw = Invoke-AsrServerRequest $planPayload 120
+        if (!$raw) { $raw = Invoke-PythonTool $planPayload $whisperPy $asrPy }
         $plan = $null
         try { $plan = $raw | ConvertFrom-Json -ErrorAction Stop } catch { }
         if ($plan -and $plan.device) {
@@ -551,7 +706,8 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
         if ($asrProfile) { $payloadBase.profile = $asrProfile }
         try {
             Emit 'status' ("Transcribing audio with large-v3 (" + $device + ")…") | Out-Null
-            $candidate = Invoke-PythonTool $payloadBase $whisperPy $asrPy
+            $candidate = Invoke-AsrServerRequest $payloadBase $audioTimeout
+            if (!$candidate) { $candidate = Invoke-PythonTool $payloadBase $whisperPy $asrPy }
             $parsed = $null
             try { $parsed = $candidate | ConvertFrom-Json -ErrorAction Stop } catch { }
             if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null }
@@ -565,7 +721,8 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
                 # Hashtable '+' throws on a DUPLICATE key ('device'/'need_swap' already present);
                 # the CPU fallback therefore never ran. Clone, then overwrite the field.
                 $cpuPayload = $payloadBase.Clone(); $cpuPayload['device'] = 'cpu'
-                $candidate = Invoke-PythonTool $cpuPayload $whisperPy $asrPy
+                $candidate = Invoke-AsrServerRequest $cpuPayload $audioTimeout
+                if (!$candidate) { $candidate = Invoke-PythonTool $cpuPayload $whisperPy $asrPy }
                 $parsed = $null
                 try { $parsed = $candidate | ConvertFrom-Json -ErrorAction Stop } catch { }
                 if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null }
@@ -584,7 +741,8 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
                 Wait-LocalModelStopped
                 $swapModel = $true
                 $retryPayload = $payloadBase.Clone(); $retryPayload['device'] = 'cuda'; $retryPayload['need_swap'] = $true
-                $candidate = Invoke-PythonTool $retryPayload $whisperPy $asrPy
+                $candidate = Invoke-AsrServerRequest $retryPayload $audioTimeout
+                if (!$candidate) { $candidate = Invoke-PythonTool $retryPayload $whisperPy $asrPy }
                 $parsed = $null
                 try { $parsed = $candidate | ConvertFrom-Json -ErrorAction Stop } catch { }
                 if ($parsed -and !$parsed.error) { $resp = $candidate; $err = $null }
@@ -594,6 +752,12 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
         }
     }
     if ($swapModel) {
+        # Before the language model is reloaded into VRAM the audio models are dropped and the
+        # warm worker is STOPPED: the worker process's remaining CUDA context (~140 MiB) could
+        # eat the 27B's thin VRAM margin (see AGENTS §5/§13). The worker is restarted IN THE
+        # BACKGROUND after the turn, so the next turn is warm.
+        Unload-AsrServerModels
+        Stop-AsrServer
         try {
             Emit 'status' 'Transcription done; reloading the language model in the background…' | Out-Null
             Start-LocalModelRestore ([string]$JobData.profile)
@@ -606,6 +770,9 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
             Emit 'status' "Transcription done; could not restart the language model: $($_.Exception.Message)" | Out-Null
         }
     }
+    # Restart the warm worker IN THE BACKGROUND: imports finish before the NEXT audio turn
+    # (the critical path only pays the model LOAD cost). Not started on cancel.
+    if ($swapModel -and !$Shared.Cancel) { Start-AsrServerAsync }
     if ($Shared.Cancel) { throw [OperationCanceledException]::new() }
     if ($err) { throw $err }
     return $resp

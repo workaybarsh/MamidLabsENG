@@ -6,7 +6,9 @@ environment is unavailable; the contracts are always checked.
 """
 import importlib.util
 import json
+import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -353,6 +355,94 @@ def test_worker_rejects_missing_file():
     module = load_worker()
     with pytest.raises(ValueError):
         module.transcribe({"path": str(ROOT / "does-not-exist.wav")})
+
+
+def test_worker_exposes_serve_and_unload_contract():
+    """Warm (persistent) worker contract: `--serve` + `unload` + ping. Loads NO model."""
+    src = read_text("agent/whisper-tools.py")
+    assert "--serve" in src
+    assert "def serve(" in src
+    assert "'unload'" in src
+    assert "def _dispatch(" in src
+    assert "def _parent_gone(" in src
+
+
+@pytest.mark.skipif(not WORKER.is_file(), reason="worker missing")
+def test_worker_dispatch_ping_unknown_and_unload(monkeypatch):
+    """`_dispatch`: ping -> ok; unknown action -> error; unload -> drops the loaded models
+    (the process STAYS ALIVE, only the models are dropped). Loads NO model."""
+    module = load_worker()
+    assert module._dispatch({"action": "ping"})["ok"] is True
+    assert "error" in module._dispatch({"action": "no-such-action"})
+
+    from transcriber import asr, diarize, events
+    calls = []
+    monkeypatch.setattr(asr, "unload_model", lambda: calls.append("asr"))
+    monkeypatch.setattr(events, "unload_events_model", lambda: calls.append("events"))
+    monkeypatch.setattr(diarize, "unload_pipeline", lambda: calls.append("diarize"))
+    out = module._dispatch({"action": "unload"})
+    assert out["ok"] is True
+    assert calls == ["asr", "events", "diarize"]
+
+
+@pytest.mark.skipif(not WORKER.is_file(), reason="worker missing")
+def test_parent_gone_detects_live_and_dead_pid():
+    """When the parent (app) closes the worker must exit itself: live pid -> False, dead pid ->
+    True, 0 -> monitoring off (False)."""
+    module = load_worker()
+    assert module._parent_gone(os.getpid()) is False
+    assert module._parent_gone(999999999) is True
+    assert module._parent_gone(0) is False
+
+
+@pytest.mark.skipif(not WORKER.is_file(), reason="worker missing")
+def test_serve_mode_ping_and_idle_exit(tmp_path):
+    """`--serve` in a real process: state file + ping + unknown action + self-exit when idle +
+    state-file cleanup. Loads NO model (imports/protocol only)."""
+    state = tmp_path / "asr-server.json"
+    proc = subprocess.Popen(
+        [sys.executable, str(WORKER), "--serve", "--state-file", str(state),
+         "--parent-pid", "0", "--idle-timeout", "2"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(ROOT / "agent"))
+    try:
+        deadline = time.time() + 40
+        info = None
+        while time.time() < deadline:
+            if state.is_file():
+                try:
+                    info = json.loads(state.read_text(encoding="utf-8"))
+                    break
+                except Exception:
+                    pass
+            if proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        assert info and info.get("port"), "worker did not publish the state file"
+
+        def request(payload):
+            with socket.create_connection(("127.0.0.1", info["port"]), timeout=10) as conn:
+                conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+                buf = b""
+                while not buf.endswith(b"\n"):
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    buf += chunk
+                return json.loads(buf.decode("utf-8"))
+
+        assert request({"action": "ping"})["ok"] is True
+        assert "error" in request({"action": "no-such-action"})
+
+        # After the idle timeout (2 s) the process exits itself and removes the state file.
+        deadline = time.time() + 20
+        while time.time() < deadline and proc.poll() is None:
+            time.sleep(0.3)
+        assert proc.poll() is not None, "worker did not exit itself when idle"
+        assert not state.exists(), "state file was not cleaned up"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.communicate(timeout=10)
 
 
 def _patch_transcriber_pipeline(monkeypatch, duration, capture):
@@ -708,6 +798,39 @@ def test_transcription_honors_cancel_and_stop_does_not_wait_for_restore():
     assert "if ($Shared.Cancel) { return }" in wait
     caller = worker.split("$currentAudioPaths = @($JobData.currentAudioPaths")[1].split("Automatically")[0]
     assert "Emit 'cancelled'" in caller
+
+
+def test_inference_uses_warm_asr_server_with_fallback():
+    """Transcription uses the WARM (persistent) worker: the fixed cost repeated on every audio
+    turn (Python start-up + torch/transformers/faster-whisper imports; measured ~10 s) is paid
+    ONCE per session. If the worker is UNREACHABLE/on a transport error we FALL BACK to the
+    one-shot `Invoke-PythonTool` path, so the audio pipeline always works (behavior preserved).
+    Also, before the language model is reloaded into VRAM the audio models are dropped and the
+    worker is STOPPED (the remaining CUDA context ~140 MiB could eat the 27B's thin margin);
+    it is restarted IN THE BACKGROUND after the turn so the next turn is warm."""
+    worker = read_text("agent/qwen-inference.ps1")
+    for fn in ("Get-AsrServerStatePath", "Send-AsrServerLine", "Get-AsrServerEndpoint",
+               "Start-AsrServerProcess", "Start-AsrServer", "Start-AsrServerAsync",
+               "Ensure-AsrServer", "Stop-AsrServer", "Unload-AsrServerModels",
+               "Invoke-AsrServerRequest"):
+        assert f"function {fn}" in worker
+    # Plan: warm worker first, otherwise the one-shot path.
+    plan = worker.split("function Get-AudioTranscriptionPlan")[1].split("function ")[0]
+    assert "Invoke-AsrServerRequest $planPayload 120" in plan
+    assert "if (!$raw) { $raw = Invoke-PythonTool $planPayload $whisperPy $asrPy }" in plan
+    # Transcription: the primary (GPU) + CPU fallback + "unload the model and retry" paths ALL
+    # try the warm worker first and fall back to the one-shot path.
+    block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
+    assert "Invoke-AsrServerRequest $payloadBase $audioTimeout" in block
+    assert "if (!$candidate) { $candidate = Invoke-PythonTool $payloadBase $whisperPy $asrPy }" in block
+    assert "Invoke-AsrServerRequest $cpuPayload $audioTimeout" in block
+    assert "Invoke-AsrServerRequest $retryPayload $audioTimeout" in block
+    # BEFORE the reload: drop + stop; AFTER: restart in the background.
+    assert block.index("Unload-AsrServerModels") < block.index("Start-LocalModelRestore")
+    assert block.index("Stop-AsrServer") < block.index("Start-LocalModelRestore")
+    assert "Start-AsrServerAsync" in block
+    # The state file lives under the install root (nothing is written outside it; no uninstaller impact).
+    assert "logs\\asr-server.json" in worker
 
 
 def test_worker_steers_model_away_from_reading_failed_audio():

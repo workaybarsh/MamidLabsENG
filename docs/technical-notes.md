@@ -552,6 +552,15 @@ pipeline lives in the `agent/transcriber/` package and runs in `venv\asr`:
   recording is shorter than the threshold, CPU (no swap); otherwise GPU + mandatory swap. Threshold
   **pro ~20 s**, **lite ~15 s** (`agent/transcriber/config.py` → `DEFAULT_CPU_MAX_SECONDS` /
   `Profile.cpu_max_seconds`).
+- **Warm (persistent) worker:** the fixed cost repeated on every audio turn (Python start-up +
+  `torch`/`transformers`/`faster-whisper` imports; measured ~10 s, ~25 s cold/disk) is paid once per
+  session: `agent/whisper-tools.py --serve` runs as a single persistent process listening on
+  127.0.0.1 (port/pid in `logs\asr-server.json`) and holds the models in-process;
+  `{"action":"unload"}` drops the audio models (the process stays alive). Before the language model is
+  reloaded into VRAM the worker is **stopped** (its remaining CUDA context ~140 MiB could eat the
+  27B's margin) and restarted in the background after the turn; it exits itself after 600 s idle /
+  when the app closes. If the worker is unreachable the transcript falls back to the one-shot
+  `Invoke-PythonTool` path (behavior preserved).
 
 ## Verifying the fixes
 

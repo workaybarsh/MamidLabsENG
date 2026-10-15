@@ -12,6 +12,16 @@ editing, video generation and chart drawing. The language model runs on `llama.c
 Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API providers.
 
 ### Changed
+- **Voice-input latency reduced: a warm (persistent) audio transcription worker.** The fixed cost
+  repeated on every audio turn (Python start-up + `torch`/`transformers`/`faster-whisper` imports;
+  measured ~10 s, ~25 s cold/disk) is now paid **once** per session: `agent/whisper-tools.py --serve`
+  runs as a single persistent worker listening on 127.0.0.1 (port/pid published in
+  `logs\asr-server.json`) and holds the models in-process. Before the language model is reloaded into
+  VRAM the audio models are dropped and the worker is **stopped** (its remaining CUDA context
+  ~140 MiB could eat the 27B's thin margin); it is restarted in the background after the turn. The
+  worker exits itself after 600 s idle or when the app closes (no orphan process/VRAM/RAM leak). If
+  the worker is unreachable the transcript still falls back to the one-shot `Invoke-PythonTool` path;
+  behavior is preserved.
 - **LITE vision projector moved to the CPU (`--no-mmproj-offload`); it no longer counts toward the
   LITE VRAM budget.** Measured 7885→7249 MiB used (72→708 MiB free); chat speed unchanged.
 - **The installer now copies `assets\installer\*` (wizard art) into the root too,** so the installed

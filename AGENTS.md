@@ -113,6 +113,7 @@ setup-source\                    the source package extracted by the setup wizar
 |---|---|---|---|
 | `llama-server.exe` | 8080 | `scripts/manage-qwen.ps1` | Mutex `Local\QwenLocalModelControl`; the profile is recognized via `--alias` |
 | ComfyUI (`venv\imagegen\Scripts\python.exe ComfyUI\main.py`) | 8188 | `agent/media-model-swap.ps1` | Default: closed when the job ends (holds no VRAM/RAM while idle); `comfyKeepAlive=true` (LITE) keeps it open |
+| Audio transcription worker (`venv\asr` python, `whisper-tools.py --serve`) | random, 127.0.0.1 only (`logs\asr-server.json`) | `agent/qwen-inference.ps1` | **Warm/session:** the fixed import cost (Python + torch/transformers/faster-whisper, ~10 s) is paid once per session; before the language model is reloaded into VRAM the audio models are dropped and the worker is **stopped** (its remaining CUDA context ~140 MiB could eat the 27B's margin), and it restarts **in the background** after the turn; it exits itself after 600 s idle or when the app closes (no orphan process/VRAM/RAM leak) |
 | App | — | `pwsh.exe … qwen-desktop.ps1` | Workers are `Start-ThreadJob` runspaces in the same process |
 
 **Profiles** (`manage-qwen.ps1`; the aliases must match `model-registry.ps1` exactly):
@@ -384,7 +385,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 
 ```powershell
 python -m pip install pytest -r requirements\app.txt
-python -m pytest -q          # ~463 tests, ~169 s (467 collected, 463 passed, 4 skipped); no extra setup needed (tests/conftest.py)
+python -m pytest -q          # ~229 s (470 collected, 466 passed, 4 skipped); no extra setup needed (tests/conftest.py)
 %LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\smoke-test.ps1 -Profile flash -SkipVideo
 ```
 
@@ -433,6 +434,14 @@ to keep both in VRAM at once: 5 + 7.5 GB > 8 GB, `--lowvram` moves ~2 GB to the 
 641–884 s (5–8 times the 16 GB time). A small LoRA (r64) does not fix it either (641 s). So on LITE
 the mode is never offered, `imagegen-run.ps1` rejects it as a second line of defense and the catalog
 has no LoRA.
+
+**Audio transcription and CUDA context (measured):** transcription (faster-whisper large-v3 + AST)
+uses ~3.9 GB on the GPU; it does **not** fit alongside the 27B (~15350 MiB) on the same 16 GB card,
+so the language model is closed before transcription (mandatory swap). After a load + unload the
+CUDA context left in the process was measured at **~140 MiB** (8860 → 8720 MiB free with a game
+running). That is why the **warm audio worker** is STOPPED before the language model is reloaded and
+restarted in the background after the turn: if the worker has not transcribed yet it has no CUDA
+context at all, so it holds no VRAM while idle and does not eat the 27B's thin margin (see §5).
 
 ## 14. Critical pitfalls
 
@@ -550,6 +559,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-15 | **Voice-input latency: a warm (persistent) audio transcription worker.** The fixed cost repeated on every audio turn (Python start-up + torch/transformers/faster-whisper imports; measured ~10 s, ~25 s cold/disk) is now paid ONCE per session: `whisper-tools.py --serve` runs as a single persistent process listening on 127.0.0.1 (port/pid in `logs\asr-server.json`) and holds the models in-process; `{"action":"unload"}` drops the audio models (the process stays alive). Before the language model is reloaded into VRAM the worker is unloaded and STOPPED (its remaining CUDA context ~140 MiB could eat the 27B's thin margin) and restarted IN THE BACKGROUND after the turn; it exits itself after 600 s idle / when the app closes. If the worker is unreachable it falls back to the one-shot `Invoke-PythonTool` path. The one-shot stdin/stdout contract is preserved. Tests: `tests/test_transcriber.py` (serve contract + `_dispatch` + `_parent_gone` + a real `--serve` ping/idle-exit + static PS wiring). | agent/whisper-tools.py, agent/qwen-inference.ps1, tests/test_transcriber.py, CHANGELOG.md, AGENTS.md |
 | 2026-10-15 | **Documentation/attribution cleanup (no behavior change).** Removed the license-comparison sentence from `README.md`, the external AI tool names and the `CLAUDE.md` row from the `AGENTS.md` intro; deleted `CLAUDE.md`; neutralized the `tests/ui-automation` temp/screenshot path to `%TEMP%\mamidlabs\ui`; changed the consumer-assistant name in the `docs/technical-notes.md` subscription-login sentence to the product provider name. The API providers (a product feature) are kept. | README.md, AGENTS.md, docs/technical-notes.md, CLAUDE.md (deleted), tests/ui-automation/ui.ps1, tests/ui-automation/win32.ps1, tests/ui-automation/README.md |
 | 2026-10-15 | **Prompt-preprocessing latency diagnosed + "use all free VRAM / no spill" fix.** Measurement (RTX 5060 Ti, MAX): the KV cache **works** (turn 2 reused 19,988 tokens, first token 0.6 s) and prompt processing is ~415 tok/s on a clean load; a **full reprocess** of a long context is ~48 s (20k tokens). The ~20 tok/s turn was ~20x slower because the model did not fully fit VRAM and **spilled into shared memory**. The **measured model footprint is 15350 MiB** (file 14,600 but on the GPU with q4_0 KV + compute buffers + MTP draft context; a clean load at 15454 MiB free gives ~41-55 tok/s). The MAX/FLASH margin is now **750 MiB** (threshold 15350): the model loads only when it **fully fits**, **uses all free VRAM** and **does not spill**; on a normal desktop (browser closed) it **loads without error**; below that a clear "not enough VRAM" is shown. `--gpu-layers 99` is kept; llama.cpp's `--fit` auto-placement was tested and proved more **conservative** (did not use all VRAM, ~23 tok/s) -> not used. (The earlier "slow mode warning" approach was removed: spill is prevented directly.) | scripts/manage-qwen.ps1, tests/test_memory_admission.py, AGENTS.md, CHANGELOG.md |
 | 2026-10-14 | **The UI shows the real model-load failure reason.** `Invoke-Manage` now captures the manager process's stderr via `RedirectStandardError`; `Update-ModelSwitch` runs the new `Format-ModelSwitchError` on a failed exit to show the meaningful line (e.g. "Not enough free VRAM: …") instead of only the generic "Model operation failed". Measurement note: the MAX/FLASH memory tolerance stays **0** — the 27B fully fits with 15244 MiB free (~45 tok/s) but spills at 15095 MiB (~30 tok/s), so an overflow slows it down and blocking it is correct. Test: `tests/test_desktop_behavior.py`. | qwen-desktop.ps1, tests/test_desktop_behavior.py, AGENTS.md, CHANGELOG.md |
