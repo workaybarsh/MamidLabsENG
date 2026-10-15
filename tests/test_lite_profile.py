@@ -15,6 +15,30 @@ def read_text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
+def run_pwsh_functions(script: str) -> str:
+    """Runs PowerShell functions in a real pwsh (the functions extracted via AST are
+    loaded with the `Get-Functions` prelude)."""
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 is unavailable")
+    prelude = r"""
+$ErrorActionPreference = 'Stop'
+function Get-Functions([string]$path) {
+    $tokens=$null; $errs=$null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errs)
+    if ($errs.Count) { throw ($errs | Out-String) }
+    return (($ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] } | ForEach-Object { $_.Extent.Text }) -join "`n")
+}
+"""
+    proc = subprocess.run(
+        [pwsh, "-NoProfile", "-Command", prelude + script],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"pwsh failed: {proc.stderr}")
+    return proc.stdout
+
+
 def parse_alias_table(text: str, variable: str) -> dict:
     """Turns a table of the form @{ max = 'a'; flash = 'b'; lite = 'c' } into a dict."""
     match = re.search(re.escape(variable) + r"\s*=\s*@\{([^}]*)\}", text)
@@ -318,6 +342,51 @@ def test_lite_video_caps_resolution_and_duration():
     # The Comfy-Org repository has no fp8 of ti2v_5B; Lite also uses the fp16 file.
     assert "wan2.2_ti2v_5B_fp8_scaled" not in videogen
     assert "tile_size = $tile.size" in videogen
+
+
+def test_tool_set_is_identical_across_profiles_except_identity_edit():
+    """Per the user's request: ALL tools are offered in every profile (MAX/FLASH/LITE);
+    the only profile difference is identity-preserving photo editing (identity_edit on
+    MAX/FLASH only; on 8 GB the 5+7.5 GB does not fit VRAM and takes ~10-15 min).
+    `Get-ToolDefinitions` is called with a real pwsh; the two profiles' tool sets must be
+    identical and only the generate_image mode enum may differ."""
+    script = r"""
+. ([scriptblock]::Create((Get-Functions 'INFERENCE')))
+$script:attachedDocuments = @()
+# The text triggers both file and command intent so that read_document/run_command are
+# offered too and the two profiles' tool sets can be compared in full.
+$userText = 'read the file in the bound folder, run a command and generate an image of a cat'
+$provider = 'local'
+$job = @{
+  agent=$true; internet=$true; office=$true; documentCreate=$true
+  videogen=$true; imagegen=$true; chartgen=$true
+  hasCurrentImage=$true; hasPreviousImage=$false; hasSourceImage=$true; hasSourceVideo=$true
+  multiImageOcr=$false; consultProviders=@{}; currentAudioPaths=@()
+}
+$liteJob = $job.Clone(); $liteJob.imageProfileLite = $true
+$proJob  = $job.Clone(); $proJob.imageProfileLite  = $false
+function Names($d) { ($d | ForEach-Object { $_.function.name } | Sort-Object) -join ',' }
+$liteDefs = @(Get-ToolDefinitions $liteJob)
+$proDefs  = @(Get-ToolDefinitions $proJob)
+"LITE_NAMES=$(Names $liteDefs)"
+"PRO_NAMES=$(Names $proDefs)"
+"LITE_MODES=$((($liteDefs | Where-Object { $_.function.name -eq 'generate_image' }).function.parameters.properties.mode.enum) -join ',')"
+"PRO_MODES=$((($proDefs  | Where-Object { $_.function.name -eq 'generate_image' }).function.parameters.properties.mode.enum) -join ',')"
+"""
+    script = script.replace("INFERENCE", str(ROOT / "agent" / "qwen-inference.ps1"))
+    out = run_pwsh_functions(script)
+    got = dict(line.split("=", 1) for line in out.strip().splitlines() if "=" in line)
+    # Every tool is offered the same way in every profile (the tool set is profile-independent).
+    assert got["LITE_NAMES"] == got["PRO_NAMES"], got
+    expected_tools = {
+        "search_web", "fetch_page", "find_reference_image",
+        "list_bound_files", "read_bound_file", "write_bound_file", "run_command",
+        "read_document", "create_document", "generate_image", "generate_video", "generate_chart",
+    }
+    assert expected_tools.issubset(set(got["PRO_NAMES"].split(","))), got["PRO_NAMES"]
+    # The only profile difference: the identity-preserving editing mode.
+    assert got["PRO_MODES"] == "new,regenerate,style_reference,identity_edit", got
+    assert got["LITE_MODES"] == "new,regenerate,style_reference", got
 
 
 # ------------------------------------------------------------- profile catalog

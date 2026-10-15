@@ -27,6 +27,21 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   `Invoke-PythonTool` gives the child `HF_HOME` + static wiring).
 
 ### Changed
+- **Automatic VRAM cleanup before the model loads.** Leftover/leaked app-owned GPU workers (an
+  idle persistent audio worker `whisper-tools.py --serve` and the OCR worker `ocr-tools.py`) are
+  closed automatically **before** the language model loads: after a crash or forced close their
+  remaining CUDA contexts (~140–600 MiB) could eat the 27B's thin margin and cause a
+  "not enough VRAM" error. `scripts/manage-qwen.ps1` clears them with
+  `Get-AppGpuWorkers`/`Stop-OrphanWorkers`, waits for the driver to release VRAM and retries the
+  memory gate a bounded number of times (6→8 attempts). Only MamidLabs processes under the install
+  root are targeted; other applications are never touched. Test: `tests/test_memory_admission.py`
+  (static ordering + process selection via a real pwsh).
+- **Every tool is offered the same way in every profile (except identity editing).** An audit
+  confirmed `Get-ToolDefinitions` is profile-independent: MAX/FLASH/LITE all see the same tool set;
+  the only profile difference is identity-preserving photo editing (`identity_edit`; never offered on
+  LITE, where 8 GB of VRAM cannot fit it, and `imagegen-run.ps1` rejects it as a second line of
+  defense). This behavior is now locked by a new test in `tests/test_lite_profile.py` (a real pwsh
+  compares the two profiles' tool sets and the `generate_image` mode list).
 - **Voice-input latency reduced: a warm (persistent) audio transcription worker.** The fixed cost
   repeated on every audio turn (Python start-up + `torch`/`transformers`/`faster-whisper` imports;
   measured ~10 s, ~25 s cold/disk) is now paid **once** per session: `agent/whisper-tools.py --serve`

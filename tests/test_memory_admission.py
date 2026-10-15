@@ -9,11 +9,40 @@ memory and chat slows down dramatically.
 """
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def read_text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
+
+
+def run_pwsh_functions(script: str) -> str:
+    """Runs PowerShell functions in a real pwsh (functions extracted from manage-qwen.ps1
+    are loaded via the `Get-Functions` prelude)."""
+    import shutil
+    import subprocess
+
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 is unavailable")
+    prelude = r"""
+$ErrorActionPreference = 'Stop'
+function Get-Functions([string]$path) {
+    $tokens=$null; $errs=$null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errs)
+    if ($errs.Count) { throw ($errs | Out-String) }
+    return (($ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] } | ForEach-Object { $_.Extent.Text }) -join "`n")
+}
+"""
+    proc = subprocess.run(
+        [pwsh, "-NoProfile", "-Command", prelude + script],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"pwsh failed: {proc.stderr}")
+    return proc.stdout
 
 
 def test_memory_budget_function_exists_and_is_called_before_start():
@@ -144,3 +173,42 @@ def test_memory_budget_tolerates_small_overflow_for_mtp_grown_lite():
     assert "$toleranceMiB = if ($profileName -eq 'lite') { 1024 } else { 0 }" in manager
     assert "if ($freeMiB -lt ($neededMiB - $toleranceMiB))" in manager
     assert "Write-Warning" in manager
+
+
+def test_orphan_app_gpu_workers_are_cleaned_before_model_load():
+    """BEFORE the model loads, leftover app-owned GPU workers (an idle persistent audio
+    worker `whisper-tools.py --serve` and the OCR worker `ocr-tools.py`) are closed
+    automatically. After a crash or forced close the remaining CUDA contexts (~140-600 MiB)
+    can eat the language model's thin margin and cause "not enough VRAM". The cleanup only
+    targets processes under the install root; other applications are never touched."""
+    manager = read_text("scripts/manage-qwen.ps1")
+    assert "function Get-AppGpuWorkers" in manager
+    assert "function Stop-OrphanWorkers" in manager
+    # GPU worker scripts are targeted (audio + OCR); ComfyUI has its own lifecycle (main.py).
+    assert "(whisper-tools|ocr-tools)" in manager
+    # Runs BEFORE the budget check (VRAM cleanup before the model process starts).
+    idx_clean = manager.index("[void](Stop-OrphanWorkers)")
+    idx_check = manager.index("Test-MemoryBudget $model $Profile $projector")
+    assert idx_clean < idx_check
+
+
+def test_orphan_worker_selection_only_matches_app_gpu_workers():
+    """Behavior (real pwsh): Get-AppGpuWorkers selects ONLY audio/OCR workers whose python
+    lives under the install root; it excludes python from another root, ComfyUI, and tools
+    that do not use the GPU (qwen-agent-tools.py)."""
+    script = r"""
+$root = 'C:\fake\root'
+function Get-CimInstance { param([string]$Class, [string]$Filter, $ErrorAction) $script:fake }
+. ([scriptblock]::Create((Get-Functions 'MANAGER_PATH')))
+$script:fake = @(
+  [pscustomobject]@{ ProcessId=111; ExecutablePath='C:\fake\root\venv\asr\Scripts\python.exe'; CommandLine='"C:\fake\root\venv\asr\Scripts\python.exe" "C:\fake\root\agent\whisper-tools.py" --serve' },
+  [pscustomobject]@{ ProcessId=222; ExecutablePath='C:\fake\root\venv\ocr\Scripts\python.exe'; CommandLine='"C:\fake\root\venv\ocr\Scripts\python.exe" "C:\fake\root\agent\ocr-tools.py"' },
+  [pscustomobject]@{ ProcessId=333; ExecutablePath='C:\Other\python.exe'; CommandLine='whisper-tools.py' },
+  [pscustomobject]@{ ProcessId=444; ExecutablePath='C:\fake\root\venv\app\Scripts\python.exe'; CommandLine='"C:\fake\root\agent\qwen-agent-tools.py"' },
+  [pscustomobject]@{ ProcessId=555; ExecutablePath='C:\fake\root\venv\imagegen\Scripts\python.exe'; CommandLine='C:\fake\root\ComfyUI\main.py' }
+)
+(Get-AppGpuWorkers | ForEach-Object { [int]$_.ProcessId } | Sort-Object) -join ','
+"""
+    script = script.replace("MANAGER_PATH", str(ROOT / "scripts" / "manage-qwen.ps1"))
+    out = run_pwsh_functions(script)
+    assert out.strip() == "111,222", out

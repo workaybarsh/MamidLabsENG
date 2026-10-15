@@ -85,7 +85,8 @@ Measured on an RTX 5060 Ti 16 GB with llama.cpp's memory dump (32K context):
 On the GPU the image projector asked for another 1,133 MiB with weights and compute buffer; it
 exceeded the total free space and spilled ~420 MiB into shared memory. With the projector moved to
 the CPU, chat went from 19.6 to 25.0 tok/s and reading a single image from 56–58 s to 29 s. The
-memory check in `scripts/manage-qwen.ps1` asks for the model file + 600 MiB. **ComfyUI lifecycle**
+memory check in `scripts/manage-qwen.ps1` asks for the model file + 750 MiB (threshold 15350 = the
+measured footprint). **ComfyUI lifecycle**
 (`settings/api.json` → `comfyKeepAlive`, default `false`): ComfyUI runs **only during image/video
 generation**; it is closed when the job ends and before the language model loads, so it holds
 **neither VRAM nor RAM while idle** (an idle ComfyUI kept ~300 MiB of CUDA context plus RAM). It
@@ -94,6 +95,14 @@ LITE it can be kept open between media jobs with `comfyKeepAlive=true` (then it 
 measured: identical GPU buffer layout whether ComfyUI is open or closed; graph splits 2 — only chat
 slows by ~11%, 49.7 → 44.2 tok/s). If memory is short (empty queue) ComfyUI is closed and measured
 again.
+
+**Automatic VRAM cleanup:** before the language model loads, leftover app-owned **GPU workers** are
+closed too — an idle persistent audio worker (`whisper-tools.py --serve`) and the OCR worker
+(`ocr-tools.py`); after a crash or forced close their remaining CUDA contexts (~140–600 MiB) can eat
+the 27B's thin margin. `scripts/manage-qwen.ps1` → `Get-AppGpuWorkers`/`Stop-OrphanWorkers` runs
+**before** the memory gate, waits for the driver to release VRAM and retries the gate a bounded
+number of times (~7 s). The cleanup only targets processes under the install root; other
+applications are never touched.
 
 ### Lite profile (8 GB VRAM / 16 GB RAM)
 

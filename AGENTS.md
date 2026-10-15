@@ -174,6 +174,9 @@ use all VRAM, ~23 tok/s), so it is not used. The tolerance is profile-based:
 **LITE 1024 MiB** (9B MTP model's small overflow on an 8 GB card; llama.cpp keeps the big embedding
 tensor on the CPU), **MAX/FLASH 0** (27B runs at the card's limit; even a small overflow is a
 disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
+Before the model loads, leftover app-owned **GPU workers** (an idle persistent audio worker or the
+OCR worker) are also closed automatically (`Stop-OrphanWorkers`), so the VRAM cleanup is automatic
+and only touches MamidLabs processes under the install root.
 
 ## 6. Flow of a chat request
 
@@ -385,7 +388,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 
 ```powershell
 python -m pip install pytest -r requirements\app.txt
-python -m pytest -q          # ~150 s (474 collected, 470 passed, 4 skipped); no extra setup needed (tests/conftest.py)
+python -m pytest -q          # ~150 s (477 collected, 473 passed, 4 skipped); no extra setup needed (tests/conftest.py)
 %LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\smoke-test.ps1 -Profile flash -SkipVideo
 ```
 
@@ -471,6 +474,9 @@ context at all, so it holds no VRAM while idle and does not eat the 27B's thin m
    **ComfyUI** by default runs only during media generation (it holds no VRAM/RAM while idle) and is closed before the language model loads; on LITE it can be kept open between media jobs with `comfyKeepAlive=true`. A leaked/duplicate instance is cleaned in every profile (ComfyUI is a process pair, so instance roots - not process count - decide). A leaked instance spills the 27B to 0.89 tok/s. The mmproj runs on the CPU in **all three profiles**
    (`--no-mmproj-offload`). On the GPU it spilled
    ~420 MiB into shared memory on MAX/FLASH (speed 25 → 19 tok/s) and overflowed the 8 GB LITE budget.
+   Before the model loads, leftover app-owned **GPU workers** (an idle audio/OCR worker) are also
+   closed automatically (`Stop-OrphanWorkers`); since their remaining CUDA contexts can eat the
+   margin, the cleanup only targets processes under the install root.
 8. **Single image rule:** only one image at a time goes to chat (multiple images only in the
    "multi-image reading mode", via OCR).
 9. **Testing with UI Automation:** UIA `Invoke` on a menu item that opens a modal window does not
@@ -566,6 +572,8 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-16 | **Every tool is offered the same way in every profile (except identity editing).** From the "all tools must work in all profiles" review: `Get-ToolDefinitions` is profile-independent — MAX/FLASH/LITE all see the same tool set (the intent/chip gates do not vary by profile). The only profile difference is `identity_edit` (present on MAX/FLASH, absent on LITE; 5 + 7.5 GB > 8 GB VRAM, see §13), guarded in three layers: the tool is not offered (`$identityEditAvailable = -not $job.imageProfileLite`), `imagegen-run.ps1` rejects it and the LITE catalog has no LoRA. The behavior is now locked by `test_tool_set_is_identical_across_profiles_except_identity_edit` in `tests/test_lite_profile.py` (a real pwsh compares the two profiles' tool-name sets and the `generate_image` mode list). | tests/test_lite_profile.py, CHANGELOG.md, AGENTS.md |
+| 2026-10-16 | **Automatic VRAM cleanup before the model loads (MamidLabs processes only).** Leftover/leaked app-owned GPU workers — an idle persistent audio worker (`whisper-tools.py --serve`) and the OCR worker (`ocr-tools.py`) — are closed automatically **before** the language model loads: after a crash or forced close their remaining CUDA contexts (~140–600 MiB) could eat the 27B's thin margin and cause a "not enough VRAM" error. `scripts/manage-qwen.ps1`: `Get-AppGpuWorkers` (selects only python processes under the install root running those two GPU-worker scripts; ComfyUI `main.py` has its own lifecycle) + `Stop-OrphanWorkers` (closes them and waits for the driver to release VRAM) run BEFORE the memory gate; the gate's retry count went 6→8 (~7 s). Other applications' processes are never touched. Tests: `tests/test_memory_admission.py` (static call ordering + process selection via a real pwsh). | scripts/manage-qwen.ps1, tests/test_memory_admission.py, CHANGELOG.md, AGENTS.md |
 | 2026-10-15 | **Voice input was broken on a normally launched app: `HF_HOME` was never set at runtime.** The audio models (whisper large-v3 + AST) live in the install root's HF cache (`tools\hf-home`) and the installer sets `HF_HOME` there **during install only**. At runtime the app did not set it, so the worker fell back to the DEFAULT cache (`%USERPROFILE%\.cache\huggingface`); the AST model is not there, so `events.tag()` raised while loading it and the **whole transcription failed** with "Can't load feature extractor" (events default ON; only the "no events" case was handled). Fix: (1) `qwen-desktop.ps1` sets `$env:HF_HOME = <root>\tools\hf-home` at startup; `agent/qwen-inference.ps1` gained `Get-HfHome` and both the one-shot `Invoke-PythonTool` (child `HF_HOME`) and the persistent `Start-AsrServerProcess` use that cache (so it is offline, no network needed); (2) `events.tag()` guards the AST load with `try/except`, so if the model is ever missing the events are skipped (empty list) and the transcript still succeeds. Tests: `tests/test_transcriber.py` (static guarded load + `tag` empty-list behavior + a real-pwsh check that `Invoke-PythonTool` hands the child `HF_HOME` + static wiring). | qwen-desktop.ps1, agent/qwen-inference.ps1, agent/transcriber/events.py, tests/test_transcriber.py, CHANGELOG.md, AGENTS.md |
 | 2026-10-15 | **Voice-input latency: a warm (persistent) audio transcription worker.** The fixed cost repeated on every audio turn (Python start-up + torch/transformers/faster-whisper imports; measured ~10 s, ~25 s cold/disk) is now paid ONCE per session: `whisper-tools.py --serve` runs as a single persistent process listening on 127.0.0.1 (port/pid in `logs\asr-server.json`) and holds the models in-process; `{"action":"unload"}` drops the audio models (the process stays alive). Before the language model is reloaded into VRAM the worker is unloaded and STOPPED (its remaining CUDA context ~140 MiB could eat the 27B's thin margin) and restarted IN THE BACKGROUND after the turn; it exits itself after 600 s idle / when the app closes. If the worker is unreachable it falls back to the one-shot `Invoke-PythonTool` path. The one-shot stdin/stdout contract is preserved. Tests: `tests/test_transcriber.py` (serve contract + `_dispatch` + `_parent_gone` + a real `--serve` ping/idle-exit + static PS wiring). | agent/whisper-tools.py, agent/qwen-inference.ps1, tests/test_transcriber.py, CHANGELOG.md, AGENTS.md |
 | 2026-10-15 | **Documentation/attribution cleanup (no behavior change).** Removed the license-comparison sentence from `README.md`, the external AI tool names and the `CLAUDE.md` row from the `AGENTS.md` intro; deleted `CLAUDE.md`; neutralized the `tests/ui-automation` temp/screenshot path to `%TEMP%\mamidlabs\ui`; changed the consumer-assistant name in the `docs/technical-notes.md` subscription-login sentence to the product provider name. The API providers (a product feature) are kept. | README.md, AGENTS.md, docs/technical-notes.md, CLAUDE.md (deleted), tests/ui-automation/ui.ps1, tests/ui-automation/win32.ps1, tests/ui-automation/README.md |

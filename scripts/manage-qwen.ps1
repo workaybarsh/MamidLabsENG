@@ -232,6 +232,48 @@ function Stop-ComfyLeaks {
     return $killed
 }
 
+# LEFTOVER/leaked app-owned GPU workers: the persistent audio worker (`whisper-tools.py
+# --serve`) and the OCR worker (`ocr-tools.py`). After a crash or a forced close these can
+# linger and their CUDA contexts (~140-600 MiB) eat the language model's thin margin, so the
+# model is rejected for "not enough VRAM". We only target python processes UNDER THE INSTALL
+# ROOT running those known GPU-worker scripts; ComfyUI (main.py) has its own lifecycle and is
+# not matched here. Other applications' processes are NEVER touched.
+function Get-AppGpuWorkers {
+    $rootFull = $root.TrimEnd('\')
+    @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ExecutablePath -and
+            $_.ExecutablePath.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase) -and
+            $_.CommandLine -match '(whisper-tools|ocr-tools)\.py'
+        })
+}
+
+# Closes leftover GPU workers and waits briefly for the driver to release VRAM. Returns $true
+# if at least one was closed (so the budget can be re-measured). Only touches the processes
+# Get-AppGpuWorkers selects (those under the install root).
+function Stop-OrphanWorkers {
+    $procs = @(Get-AppGpuWorkers)
+    if ($procs.Count -eq 0) { return $false }
+    $killed = $false
+    foreach ($p in $procs) {
+        try {
+            $process = [Diagnostics.Process]::GetProcessById([int]$p.ProcessId)
+            $process.Kill($true)
+            $process.WaitForExit(10000) | Out-Null
+            $killed = $true
+        } catch { }
+    }
+    # Force-kill any that did not die right away.
+    foreach ($p in $procs) {
+        if (Get-Process -Id ([int]$p.ProcessId) -ErrorAction SilentlyContinue) {
+            Stop-Process -Id ([int]$p.ProcessId) -Force -ErrorAction SilentlyContinue
+            $killed = $true
+        }
+    }
+    if ($killed) { Start-Sleep -Milliseconds 1000 }  # the driver frees VRAM with a small delay.
+    return $killed
+}
+
 function Get-ManagedServers {
     @(Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'" -ErrorAction SilentlyContinue | Where-Object {
         $_.ExecutablePath -and
@@ -287,6 +329,10 @@ try {
     if ($settings -and $null -ne $settings.comfyKeepAlive) { $comfyKeepAlive = [bool]$settings.comfyKeepAlive }
     [void](Stop-ComfyLeaks)
     if (!$comfyKeepAlive -or $Profile -ne 'lite') { [void](Stop-IdleComfy) }
+    # Leftover app-owned GPU workers (an idle audio/OCR worker left by a crash or forced close)
+    # are closed too: their CUDA contexts can eat the language model's thin margin. This gives
+    # an automatic VRAM cleanup BEFORE the model loads (MamidLabs processes only).
+    [void](Stop-OrphanWorkers)
     # The previous process was already stopped above; free VRAM is measured here so the
     # memory freed by the old process is counted too.
     #
@@ -298,14 +344,14 @@ try {
     if (!$SkipMemoryCheck) {
         $budgetOk = $false
         $lastBudgetError = $null
-        $attempts = 6
+        $attempts = 8
         for ($attempt = 1; $attempt -le $attempts; $attempt++) {
             try { Test-MemoryBudget $model $Profile $projector; $budgetOk = $true; break }
             catch {
                 $lastBudgetError = $_
                 # On the first attempt ComfyUI may be open: close it if idle and retry at once.
                 if ($attempt -eq 1 -and (Stop-IdleComfy)) { continue }
-                # Let the ASR/OCR subprocess's VRAM be released (about 5 s total).
+                # Let the ASR/OCR subprocess's VRAM be released (about 7 s total).
                 if ($attempt -lt $attempts) { Start-Sleep -Milliseconds 1000 }
             }
         }
