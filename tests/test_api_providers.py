@@ -184,7 +184,7 @@ catch { Assert ($_.Exception.Message -like '*key*') $_.Exception.Message }
 
 
 def test_desktop_and_registry_use_the_shared_provider_list():
-    desktop = (ROOT / "qwen-desktop.ps1").read_text(encoding="utf-8-sig")
+    desktop = (ROOT / "mamidlabs-desktop.ps1").read_text(encoding="utf-8-sig")
     registry = (ROOT / "agent/model-registry.ps1").read_text(encoding="utf-8-sig")
     settings = (ROOT / "agent/api-settings.ps1").read_text(encoding="utf-8-sig")
     assert "@('openai', 'claude', 'gemini')" not in desktop
@@ -195,7 +195,7 @@ def test_desktop_and_registry_use_the_shared_provider_list():
 
 
 CLAUDE_TOOL_TURN = r"""
-# Get-PlainText is defined in qwen-inference.ps1; plain text is enough here.
+# Get-PlainText is defined in mamidlabs-inference.ps1; plain text is enough here.
 function Get-PlainText($content) { [string]$content }
 $state = @{}
 $events = @(

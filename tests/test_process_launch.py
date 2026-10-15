@@ -1,6 +1,6 @@
 """Long-lived child processes must not inherit the caller's stdout pipe.
 
-On a real machine: "smoke-test.ps1 *> file", "manage-qwen.ps1 | Out-String" and
+On a real machine: "smoke-test.ps1 *> file", "manage-mamidlabs.ps1 | Out-String" and
 Start-Process -Wait never finished while llama-server/ComfyUI was running, because
 Start-Process -Redirect* gave the child the caller's inheritable handles.
 
@@ -79,7 +79,7 @@ def test_plain_start_process_redirect_holds_the_pipe(tmp_path):
 
 
 def test_long_lived_servers_use_detached_launch():
-    manage = (ROOT / "scripts" / "manage-qwen.ps1").read_text(encoding="utf-8-sig")
+    manage = (ROOT / "scripts" / "manage-mamidlabs.ps1").read_text(encoding="utf-8-sig")
     swap = (ROOT / "agent" / "media-model-swap.ps1").read_text(encoding="utf-8-sig")
     assert "$child = Start-DetachedProcess $server" in manage
     assert "$comfy = Start-DetachedProcess $python" in swap

@@ -270,7 +270,7 @@ function Handle-ModelSwitch($request, $response) {
     $profile = 'max'
     $modelId = ''
     if ($id -like 'builtin-*') { $profile = $id.Substring('builtin-'.Length) } else { $modelId = $id }
-    $manage = Join-Path $Root 'scripts\manage-qwen.ps1'
+    $manage = Join-Path $Root 'scripts\manage-mamidlabs.ps1'
     try {
         $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $manage, '-Action', 'switch', '-Profile', $profile)
         if ($modelId) { $args += @('-ModelId', $modelId) }

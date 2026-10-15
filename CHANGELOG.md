@@ -19,19 +19,37 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   (`%USERPROFILE%\.cache\huggingface`), where the AST model is absent; `events.tag()` then raised
   while loading it and the **whole transcription failed** with "Can't load feature extractor ..."
   (only the silent "no events" case was handled). Two fixes: (1) the app now sets `HF_HOME` to the
-  install cache at startup (`qwen-desktop.ps1`) and the worker/tools are handed it explicitly
-  (`Get-HfHome` in `agent/qwen-inference.ps1`, on the one-shot `Invoke-PythonTool` and the persistent
+  install cache at startup (`mamidlabs-desktop.ps1`) and the worker/tools are handed it explicitly
+  (`Get-HfHome` in `agent/mamidlabs-inference.ps1`, on the one-shot `Invoke-PythonTool` and the persistent
   `Start-AsrServerProcess`), so both models resolve offline; (2) `events.tag()` guards the model load,
   so if the model is ever missing the events are **skipped** (an empty list) instead of killing the
   transcript. Tests: `tests/test_transcriber.py` (the guarded load + a real-pwsh check that
   `Invoke-PythonTool` gives the child `HF_HOME` + static wiring).
 
 ### Changed
+- **Engine/plumbing names moved to the product name (MamidLabs); "qwen" now remains only in genuine model
+  identity.** The product is not named "Qwen", so internal engine/plumbing names are named after the
+  product. Renamed files: `qwen-desktop.ps1`→`mamidlabs-desktop.ps1`,
+  `launch-qwen-desktop.vbs`→`launch-mamidlabs-desktop.vbs`,
+  `agent/qwen-inference.ps1`→`agent/mamidlabs-inference.ps1`,
+  `agent/qwen-agent-tools.py`→`agent/mamidlabs-agent-tools.py`,
+  `scripts/manage-qwen.ps1`→`scripts/manage-mamidlabs.ps1`,
+  `tests/test_qwen_contracts.py`→`tests/test_mamidlabs_contracts.py`; runtime contracts:
+  `QwenWindow`→`MamidLabsWindow`, `Stop-LocalQwen`→`Stop-LocalMamidLabs`,
+  `Restart-LocalQwen`→`Restart-LocalMamidLabs`, `Get-ManageQwenPath`→`Get-ManageMamidLabsPath`,
+  mutex `Local\QwenLocalModelControl`→`Local\MamidLabsModelControl`, log pattern
+  `qwen-<profile>.std{out,err}.log`→`mamidlabs-<profile>.std{out,err}.log`, User-Agent
+  `QwenLocal/1.0`→`MamidLabs/1.0`, wizard option `OptQwen38`→`OptPro`. **Kept (genuine model
+  identity):** profile aliases (`qwen3.8-27b-max`/`flash`, `qwen3.5-9b-lite`), GGUF/mmproj
+  filenames, HF repo ids, ComfyUI files (`qwen3vl_4b_fp8_scaled.safetensors`,
+  `qwen_image_vae.safetensors`, `TextEncodeQwenImageEditPlus`), `qwen35.*` arch keys and text that
+  names the model. Tool names are unchanged (none contained "qwen"). Installer/uninstaller, CI path
+  filters and docs were updated with the new names.
 - **Automatic VRAM cleanup before the model loads.** Leftover/leaked app-owned GPU workers (an
   idle persistent audio worker `whisper-tools.py --serve` and the OCR worker `ocr-tools.py`) are
   closed automatically **before** the language model loads: after a crash or forced close their
   remaining CUDA contexts (~140–600 MiB) could eat the 27B's thin margin and cause a
-  "not enough VRAM" error. `scripts/manage-qwen.ps1` clears them with
+  "not enough VRAM" error. `scripts/manage-mamidlabs.ps1` clears them with
   `Get-AppGpuWorkers`/`Stop-OrphanWorkers`, waits for the driver to release VRAM and retries the
   memory gate a bounded number of times (6→8 attempts). Only MamidLabs processes under the install
   root are targeted; other applications are never touched. Test: `tests/test_memory_admission.py`
@@ -147,7 +165,7 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
 - **Empty visible-answer regression on hard questions (thinking consumed the whole output budget).**
   In an end-to-end math test LITE (9B), on a hard integral question, spent **all 8192 tokens**
   (~159.7 s) thinking and produced **no visible answer**; the bubble kept only "İntegral"
-  (`logs\qwen-lite.stderr.log`: `eval 159714 ms / 8192 tokens`). Root cause: thinking is “unlimited”,
+  (`logs\mamidlabs-lite.stderr.log`: `eval 159714 ms / 8192 tokens`). Root cause: thinking is “unlimited”,
   the output cap `--predict 8192` and the UI `maxTokens 8192` **share the same budget**; the
   “double-check the steps” instruction made thinking even longer, and the existing empty-answer
   fallback was also stuck at the same 8192. (1) **Thinking-off recovery:** the new
@@ -195,7 +213,7 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   duration (`max(600, d*4+300)`, capped at 3600; 1800 when unknown) so a long CPU co-resident/swap
   transcription is not cut off at the fixed 180 s; "Stop" still takes effect instantly.
   `tests/test_transcriber.py` and `tests/test_requirements_files.py` guard these contracts. The
-  swap status text was also fixed: the language model is not moved to RAM, `manage-qwen -Action
+  swap status text was also fixed: the language model is not moved to RAM, `manage-mamidlabs -Action
   stop` **stops the process** (no code behavior change).
 - **Audio transcription: the CPU fallback never ran because of a PowerShell dictionary bug (found
   in the end-to-end audio test).** When the primary device (GPU) failed, `Invoke-TranscribeWithModelSwap`
@@ -239,7 +257,7 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   transcribed. The engine itself was sound (calling `whisper-tools.py` directly works); the flaw was
   the worker swallowing the failure and leaving the model with the wrong context.
 - **`EULA.txt` was not copied by script-based updates:** the `install-mamidlabs.ps1` upper-file
-  list (`qwen-desktop.ps1`, `launch-qwen-desktop.vbs`, `README.md`, `LICENSE`) is copied to the root
+  list (`mamidlabs-desktop.ps1`, `launch-mamidlabs-desktop.vbs`, `README.md`, `LICENSE`) is copied to the root
   and to the `setup-source` package; because `EULA.txt` was not in the list, the license file was
   missing from installs updated by script (without the wizard). It was added to the list.
 - **The transcript wrapper leaked on a silent/empty recording:** the Qwen3-ASR output parser
@@ -285,7 +303,7 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   `chart` smoke step, the real test figures, the reconciled MTP acceptance `~0.93 (content-dependent
   0.31–0.96)`, and an explicit "at that time" framing for the 7885/8188 MiB LITE row),
   `docs/installation.md` (the `asr` stage), `docs/technical-notes.md` (MTP acceptance and the LITE
-  margin wording), `scripts/manage-qwen.ps1` (a single LITE size figure, `~6.5 GB + ~0.46 GB MTP
+  margin wording), `scripts/manage-mamidlabs.ps1` (a single LITE size figure, `~6.5 GB + ~0.46 GB MTP
   head`), `README.md` (a "For Türkçe" link) and the `agent/transcriber` package-version comment.
 
 ### Added

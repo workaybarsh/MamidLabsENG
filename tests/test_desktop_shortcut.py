@@ -1,4 +1,4 @@
-"""The desktop shortcut did not work: launch-qwen-desktop.vbs had been saved with a
+"""The desktop shortcut did not work: launch-mamidlabs-desktop.vbs had been saved with a
 UTF-8 BOM (a byte sequence starting with 0xEF 0xBB 0xBF). The classic VBScript
 engine (cscript/wscript - the .vbs file that starts the WinForms app uses it)
 does NOT understand a UTF-8 BOM; it rejects the file with an "Invalid character"
@@ -18,13 +18,13 @@ without a BOM.
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VBS = ROOT / "launch-qwen-desktop.vbs"
+VBS = ROOT / "launch-mamidlabs-desktop.vbs"
 
 
 def test_launcher_has_no_utf8_bom():
     data = VBS.read_bytes()
     assert not data.startswith(b"\xef\xbb\xbf"), (
-        "launch-qwen-desktop.vbs was saved with a UTF-8 BOM; the classic VBScript "
+        "launch-mamidlabs-desktop.vbs was saved with a UTF-8 BOM; the classic VBScript "
         "engine rejects it with an 'Invalid character' compile error and "
         "the desktop shortcut silently opens nothing."
     )
@@ -39,7 +39,7 @@ def test_launcher_is_pure_ascii():
         data.decode("ascii")
     except UnicodeDecodeError as exc:
         raise AssertionError(
-            "launch-qwen-desktop.vbs now contains a non-ASCII character; "
+            "launch-mamidlabs-desktop.vbs now contains a non-ASCII character; "
             "verify the right encoding for the classic VBScript engine (ANSI/UTF-16LE+BOM) "
             "separately, do not silently rely on UTF-8."
         ) from exc

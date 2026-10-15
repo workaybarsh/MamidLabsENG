@@ -80,7 +80,7 @@ def test_realism_lora_is_enabled_only_when_user_asks_for_realism(tmp_path):
     """The realism LoRA slows generation down ~2x on an 8 GB card; it is turned on
     only when the user's own message asks for a realistic image. The decision is
     not left to the language model (the realism parameter was removed from the tool)."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     assert "realism = (Test-RealismIntent $userText)" in inference
     assert "realism = @{ type = 'boolean'" not in inference
     assert "$realism = [bool]$JobData.realism" in read_text("agent/imagegen-run.ps1")
@@ -129,7 +129,7 @@ IMAGE_REQUEST_CASES = [
 
 def test_generate_image_is_rejected_when_user_did_not_ask_for_an_image(tmp_path):
     """In a real UI test the model generated an image on its own for a weather question."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     assert "!(Test-ImageRequestIntent $userText ([bool]$JobData.hasSourceImage -or (Test-ConversationHasImage $messages)))" in inference
 
     pwsh = shutil.which("pwsh")
@@ -166,7 +166,7 @@ def test_turn_hint_is_not_mistaken_for_user_text_in_image_messages(tmp_path):
     pwsh = shutil.which("pwsh")
     if not pwsh:
         pytest.skip("pwsh not found")
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     functions = "\n".join(extract_function(inference, n) for n in ("Get-PlainText", "Get-CurrentUserText", "Test-OcrIntent", "Test-ImageRequestIntent"))
     script = tmp_path / "hint.ps1"
     script.write_text(functions + """

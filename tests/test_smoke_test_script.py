@@ -25,9 +25,9 @@ def test_ui_step_launches_real_app_and_checks_mtp_and_no_connection_error():
     text and that MTP works."""
     script = read_text("scripts/smoke-test.ps1")
 
-    assert "Join-Path $Root 'qwen-desktop.ps1'" in script
+    assert "Join-Path $Root 'mamidlabs-desktop.ps1'" in script
     assert "'-STA'" in script
-    assert "agent\\qwen-inference.ps1" in script
+    assert "agent\\mamidlabs-inference.ps1" in script
     assert "--spec-type\\s+draft-mtp" in script
     assert "draft_n_accepted" in script
     # Unwanted drop/close text is searched LITERALLY (.Contains); -like "*[Error]*" is a
@@ -147,7 +147,7 @@ def test_chat_check_matches_production_request_shape():
     unlimited (no budget); the model spent this small limit thinking and cut off before
     producing real content - the "The model returned an empty answer" error. The real
     generation request (Set-LowEffortRequest in
-    qwen-inference.ps1) always sends reasoning_effort; the smoke test must use the same
+    mamidlabs-inference.ps1) always sends reasoning_effort; the smoke test must use the same
     shape."""
     script = read_text("scripts/smoke-test.ps1")
     # The request lives in Invoke-ChatProbe; the chat step and the post-media switch step use the same shape.
@@ -162,7 +162,7 @@ def test_chat_check_matches_production_request_shape():
 def test_document_check_uses_a_valid_office_tools_action():
     """Caught on a real machine: office-tools.py's ACTIONS table has no action named
     'read_document' (only read_docx/read_pdf/...; 'read_document' is only the tool NAME
-    inside qwen-inference.ps1, where it is mapped to the right action by extension).
+    inside mamidlabs-inference.ps1, where it is mapped to the right action by extension).
     Since the smoke test calls office-tools.py directly it must use the real action
     name - if it is wrong it gives an "unknown action" error and the test itself always
     fails."""

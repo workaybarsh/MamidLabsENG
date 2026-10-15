@@ -13,6 +13,6 @@ If Not fso.FileExists(pwsh) Then
   pwsh = "pwsh.exe"
 End If
 
-app = root & "\qwen-desktop.ps1"
+app = root & "\mamidlabs-desktop.ps1"
 command = """" & pwsh & """ -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File """ & app & """"
 shell.Run command, 0, False

@@ -34,7 +34,7 @@ public static class MamidLabsAppId {
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-public static class QwenWindow {
+public static class MamidLabsWindow {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int maxCount);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
@@ -62,7 +62,7 @@ public static class QwenWindow {
 $appTitle = 'MamidLabs'
 # CAUTION: when $null is bound to a string parameter PowerShell turns it into "" and
 # FindWindow finds nothing; [NullString]::Value is required to really pass a null class name.
-$existingWindow = [QwenWindow]::FindWindow([NullString]::Value, $appTitle)
+$existingWindow = [MamidLabsWindow]::FindWindow([NullString]::Value, $appTitle)
 # Only treat a real application window (WinForms class) as the single instance.
 # Explorer's "TabProxyWindow"s can also carry this title, so matching by title alone
 # made a leftover window after a force-kill look "already open" and prevented the
@@ -70,13 +70,13 @@ $existingWindow = [QwenWindow]::FindWindow([NullString]::Value, $appTitle)
 # them: a real form class starts with WindowsForms10.*.
 if ($existingWindow -ne [IntPtr]::Zero) {
     $className = New-Object System.Text.StringBuilder 256
-    [void][QwenWindow]::GetClassName($existingWindow, $className, 256)
+    [void][MamidLabsWindow]::GetClassName($existingWindow, $className, 256)
     if ($className.ToString() -notlike 'WindowsForms10.*') { $existingWindow = [IntPtr]::Zero }
 }
 if ($existingWindow -ne [IntPtr]::Zero) {
-    if ([QwenWindow]::IsIconic($existingWindow)) { [QwenWindow]::ShowWindow($existingWindow, 9) | Out-Null }
-    else { [QwenWindow]::ShowWindow($existingWindow, 5) | Out-Null }
-    [QwenWindow]::SetForegroundWindow($existingWindow) | Out-Null
+    if ([MamidLabsWindow]::IsIconic($existingWindow)) { [MamidLabsWindow]::ShowWindow($existingWindow, 9) | Out-Null }
+    else { [MamidLabsWindow]::ShowWindow($existingWindow, 5) | Out-Null }
+    [MamidLabsWindow]::SetForegroundWindow($existingWindow) | Out-Null
     return
 }
 
@@ -935,11 +935,11 @@ function Test-ChatNearBottom {
 function Append-ThinkingText($box, [string]$text) {
     # Even AppendText moves the selection/caret down. Preserve both the reading position and the selection.
     $handle = $box.Handle
-    $follow = [QwenWindow]::NearBottom($handle) -and $box.SelectionLength -eq 0
-    $position = [QwenWindow]::GetScroll($handle)
+    $follow = [MamidLabsWindow]::NearBottom($handle) -and $box.SelectionLength -eq 0
+    $position = [MamidLabsWindow]::GetScroll($handle)
     $selectionStart = $box.SelectionStart
     $selectionLength = $box.SelectionLength
-    [QwenWindow]::SetRedraw($handle, $false)
+    [MamidLabsWindow]::SetRedraw($handle, $false)
     try {
         $box.AppendText($text)
         if ($follow) {
@@ -948,10 +948,10 @@ function Append-ThinkingText($box, [string]$text) {
             $box.ScrollToCaret()
         } else {
             $box.Select($selectionStart, $selectionLength)
-            [QwenWindow]::SetScroll($handle, $position)
+            [MamidLabsWindow]::SetScroll($handle, $position)
         }
     } finally {
-        [QwenWindow]::SetRedraw($handle, $true)
+        [MamidLabsWindow]::SetRedraw($handle, $true)
         $box.Invalidate()
     }
 }
@@ -1874,7 +1874,7 @@ function Format-ModelSwitchError([string]$stderrText) {
 }
 
 function Invoke-Manage([string]$action, [string]$profile, [string]$modelId) {
-    $managePath = Join-Path $scripts 'manage-qwen.ps1'
+    $managePath = Join-Path $scripts 'manage-mamidlabs.ps1'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     foreach ($argument in @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $managePath, '-Action', $action)) {
@@ -1956,7 +1956,7 @@ function Cancel-Generation {
     }
 }
 
-function Stop-LocalQwen {
+function Stop-LocalMamidLabs {
     Cancel-Generation
     $script:modelReady = $false
     $script:activeModel = $null
@@ -1966,7 +1966,7 @@ function Stop-LocalQwen {
     $statusCtrl.Text = 'Stopping the model… The interface will stay open.'
 }
 
-function Restart-LocalQwen([string]$profile) {
+function Restart-LocalMamidLabs([string]$profile) {
     $wanted = Get-SelectedLocalAlias
     if ($script:modelReady -and $script:activeModel -eq $wanted -and !$script:switchProcess -and !$script:pendingModelChange) {
         $statusCtrl.Text = "$($profile.ToUpperInvariant()) is already loaded; the model was not reloaded."
@@ -2369,7 +2369,7 @@ function Get-SystemPrompt {
     # Fixed (NOT per-turn) verification instruction: the prefix does not change, so the KV
     # cache is not broken. The model must answer with evidence, review critical steps again
     # BUT also always write its answer (do not think endlessly and produce nothing; on a hard
-    # question thinking can consume the output budget - see the recovery path in qwen-inference.ps1).
+    # question thinking can consume the output budget - see the recovery path in mamidlabs-inference.ps1).
     $lines += 'Give evidence-based, correct answers. State something you know, that is stable and definite (definitions, math, code, general knowledge, logic, history) NET and with confidence, directly; do not say "I do not know" unnecessarily. BUT do not present something you are unsure about as certain. If CURRENT/time-sensitive information (weather, news, price/exchange rate, "the latest" product, a score, today''s data) is ASKED and you do NOT have it or have NO internet access: DO NOT guess, do not fabricate, and do not give an approximate answer with "probably/likely". ONLY state clearly "this information is not something I can get without an internet connection" and DO NOT do anything else (do not produce data, tables, sources or scenarios). NEVER invent a source, link (URL), quote, date, number, statistic or event; if you cannot cite a source, do not cite one. Do NOT use the name of a test, theorem, identity or source unless you are sure it exists. In math, algebra, logic and multi-step problems review your critical steps and symbolic/numeric INTERMEDIATE RESULTS; verify by a different route when useful. But ALSO ALWAYS WRITE YOUR ANSWER: do not think endlessly and end up with no answer; once confident, give the clear and complete answer right away.'
     # LITE (small 9B model): thinking is ON (no server budget). We encourage deep, step-by-step
     # reasoning BUT NOT endlessly extending it: thinking tokens share the output budget, so the
@@ -2532,7 +2532,7 @@ function Start-BackgroundCompaction {
     }
     $script:sharedCompact = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full' })
     try {
-        $script:compactJob = Start-ThreadJob -FilePath (Join-Path $root 'agent\qwen-inference.ps1') -ArgumentList $jobData, $script:sharedCompact
+        $script:compactJob = Start-ThreadJob -FilePath (Join-Path $root 'agent\mamidlabs-inference.ps1') -ArgumentList $jobData, $script:sharedCompact
         $metric.Text = 'Compacting the context in the background…'
     } catch { $script:compactJob = $null }
 }
@@ -2664,7 +2664,7 @@ function Begin-Generation {
     $script:streamGenerating = $false
     $script:lastSpeed = 0
     try {
-        $script:chatJob = Start-ThreadJob -FilePath (Join-Path $root 'agent\qwen-inference.ps1') -ArgumentList $jobData, $script:sharedRequest
+        $script:chatJob = Start-ThreadJob -FilePath (Join-Path $root 'agent\mamidlabs-inference.ps1') -ArgumentList $jobData, $script:sharedRequest
         # This flag refers only to the turn being sent; follow-up messages must not treat
         # the old image as if it were newly attached.
         $script:currentTurnHasImage = $false
@@ -3499,14 +3499,14 @@ $form.Add_FormClosed({
     if ($appIcon) { $appIcon.Dispose() }
 })
 $form.Add_Shown({
-    [QwenWindow]::ShowWindow($form.Handle, 5) | Out-Null
-    [QwenWindow]::SetForegroundWindow($form.Handle) | Out-Null
+    [MamidLabsWindow]::ShowWindow($form.Handle, 5) | Out-Null
+    [MamidLabsWindow]::SetForegroundWindow($form.Handle) | Out-Null
     Update-WelcomeLayout
     Relayout-Chat
     # If the last choice is Off the app does not restart the model; it stops an old server that is still running.
     if ($script:providerId -eq 'local') {
         if ([string]$script:apiSettings.selectedModel -eq 'off') {
-            Stop-LocalQwen
+            Stop-LocalMamidLabs
             $metric.Text = 'Model is off.'
         } else {
             $savedProfile = switch ([string]$script:apiSettings.selectedModel) {
@@ -3515,7 +3515,7 @@ $form.Add_Shown({
                 'builtin-lite' { 'lite'; break }
                 default { if ($script:apiSettings.localProfile) { [string]$script:apiSettings.localProfile } else { 'max' } }
             }
-            Restart-LocalQwen $savedProfile
+            Restart-LocalMamidLabs $savedProfile
             $metric.Text = 'Loading model…'
         }
     }

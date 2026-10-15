@@ -42,7 +42,7 @@ function Get-Handler([string]$control, [string]$event) {
     return $node.Arguments[0].ScriptBlock.GetScriptBlock()
 }
 function Assert($condition, [string]$message) { if (!$condition) { throw $message } }
-$desktop = Get-Ast (Join-Path $repo 'qwen-desktop.ps1')
+$desktop = Get-Ast (Join-Path $repo 'mamidlabs-desktop.ps1')
 . ([scriptblock]::Create((Get-Functions $desktop)))
 . ([scriptblock]::Create((Get-Functions (Get-Ast (Join-Path $repo 'agent/api-providers.ps1')))))
 . ([scriptblock]::Create((Get-Functions (Get-Ast (Join-Path $repo 'agent/model-registry.ps1')))))
@@ -199,7 +199,7 @@ $script:reportedAlias='local-b'
 & (Get-Handler '$timer' 'Add_Tick')
 Assert ($script:modelReady -and $script:began -and $script:activeModel -eq 'local-b') 'Target model not accepted'
 $script:pendingSend=$false; $script:modelReady=$false
-Restart-LocalQwen 'flash'
+Restart-LocalMamidLabs 'flash'
 $script:switchProcess.HasExited=$true; $script:switchProcess.ExitCode=1
 & (Get-Handler '$timer' 'Add_Tick')
 Assert (!$script:modelReady -and $script:modelSwitchError -and $modelChoice.SelectedIndex -eq 2) 'Failed switch hid error or changed choice'
@@ -218,22 +218,22 @@ function Invoke-Manage($action,$profile,$modelId) {
     $p | Add-Member ScriptMethod Dispose {}
     return $p
 }
-Restart-LocalQwen 'flash'
+Restart-LocalMamidLabs 'flash'
 $first=$script:switchProcess
 $script:apiSettings.selectedLocalModel='local-b'; $script:apiSettings.selectedModel='local-b'
-Restart-LocalQwen 'flash'
-Stop-LocalQwen
+Restart-LocalMamidLabs 'flash'
+Stop-LocalMamidLabs
 $first.HasExited=$true; Update-ModelSwitch
 Assert ($calls.Count -eq 2 -and $calls[1] -eq 'stop' -and !$script:pendingModelChange) 'Stop did not replace queued switch'
 """)
 
 
 def test_lite_max_flash_and_api_provider_switches_reload_or_stop_correctly(tmp_path):
-    """Switching between LITE/FLASH/MAX (local) must call Restart-LocalQwen with the
+    """Switching between LITE/FLASH/MAX (local) must call Restart-LocalMamidLabs with the
     right profile (Invoke-Manage 'switch'); switching to an API provider (custom
-    included) must trigger Stop-LocalQwen (Invoke-Manage 'stop', to free VRAM);
+    included) must trigger Stop-LocalMamidLabs (Invoke-Manage 'stop', to free VRAM);
     switching back from an API to local must call 'switch' again. See
-    model-registry.ps1 Select-RegisteredModel, qwen-desktop.ps1 Update-ModelSwitch."""
+    model-registry.ps1 Select-RegisteredModel, mamidlabs-desktop.ps1 Update-ModelSwitch."""
     run_ps(tmp_path, r"""
 $script:apiSettings = @{providers=@{custom=@{model='llama-3-local'}}; selectedModel='builtin-lite'; localProfile='lite'}
 $script:providerId = 'local'; $script:modelReady = $false; $script:activeModel = $null
@@ -273,7 +273,7 @@ Finish-Switch
 $modelChoice.SelectedIndex=3; $modelChoice.SelectedItem='custom · llama-3-local'; Select-RegisteredModel
 Assert ($script:providerId -eq 'custom' -and $script:apiSettings.selected -eq 'custom') 'did not switch to the custom provider'
 Assert ($script:apiSettings.selectedModel -eq 'custom|llama-3-local') 'the custom model id was not saved'
-Assert (!$script:modelReady -and !$script:activeModel) 'Stop-LocalQwen did not run (modelReady/activeModel were not cleared)'
+Assert (!$script:modelReady -and !$script:activeModel) 'Stop-LocalMamidLabs did not run (modelReady/activeModel were not cleared)'
 Assert ($manageCalls.Count -eq 3 -and $manageCalls[2].action -eq 'stop') 'the local model was not stopped on the API switch'
 Finish-Switch
 
@@ -291,7 +291,7 @@ def test_all_attached_documents_are_authorized_but_not_their_siblings(tmp_path):
     for file in (first, second, sibling):
         file.write_bytes(b"fixture")
     run_ps(tmp_path, r"""
-. ([scriptblock]::Create((Get-Functions (Get-Ast (Join-Path $repo 'agent/qwen-inference.ps1')))))
+. ([scriptblock]::Create((Get-Functions (Get-Ast (Join-Path $repo 'agent/mamidlabs-inference.ps1')))))
 function Invoke-PythonTool($payload) { return $payload.path }
 $script:attachedDocuments = @(
 """ + ps_quote(first) + "," + ps_quote(second) + r"""
@@ -497,7 +497,7 @@ Assert ($empty -match 'Model operation failed') 'Empty stderr must fall back to 
 def test_desktop_captures_manager_stderr_for_specific_errors():
     """The UI captures the manager process's stderr and runs it through
     Format-ModelSwitchError, so the real cause (e.g. VRAM) is shown instead of generic."""
-    desktop = (ROOT / "qwen-desktop.ps1").read_text(encoding="utf-8-sig")
+    desktop = (ROOT / "mamidlabs-desktop.ps1").read_text(encoding="utf-8-sig")
     assert "RedirectStandardError = $true" in desktop
     assert "function Format-ModelSwitchError" in desktop
     assert "Format-ModelSwitchError $detail" in desktop

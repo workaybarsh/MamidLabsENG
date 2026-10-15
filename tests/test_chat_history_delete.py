@@ -23,7 +23,7 @@ def test_delete_all_keeps_the_open_chat(tmp_path):
     pwsh = shutil.which("pwsh")
     if not pwsh:
         pytest.skip("pwsh not found")
-    desktop = (ROOT / "qwen-desktop.ps1").read_text(encoding="utf-8-sig")
+    desktop = (ROOT / "mamidlabs-desktop.ps1").read_text(encoding="utf-8-sig")
     function = extract_function(desktop, "Get-DeletableChatPaths")
     chat_dir = tmp_path / "chats"
     chat_dir.mkdir()
@@ -58,7 +58,7 @@ def test_delete_all_keeps_the_open_chat(tmp_path):
 def test_delete_all_handler_protects_open_chat():
     """The delete loop now runs over the filtered $targets instead of the whole
     list ($entries); the open chat is announced to the user."""
-    desktop = (ROOT / "qwen-desktop.ps1").read_text(encoding="utf-8-sig")
+    desktop = (ROOT / "mamidlabs-desktop.ps1").read_text(encoding="utf-8-sig")
     assert "Get-DeletableChatPaths $chatDir $entries $script:chatId" in desktop
     assert "foreach ($path in @($targets)) { Remove-Item" in desktop
     assert "The open chat is kept." in desktop

@@ -61,7 +61,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 if (!(Get-Command Start-ThreadJob -ErrorAction SilentlyContinue)) { Import-Module ThreadJob -ErrorAction Stop }
 
-$manage = Join-Path $Root 'scripts\manage-qwen.ps1'
+$manage = Join-Path $Root 'scripts\manage-mamidlabs.ps1'
 $results = [ordered]@{}
 $lite = ($Profile -eq 'lite')
 $script:chatBaseline = $null
@@ -100,7 +100,7 @@ function Get-FreeVramMiB {
     try { return [int](((& $smi --query-gpu=memory.free --format=csv,noheader,nounits) | Select-Object -First 1) -replace '\D', '') } catch { return $null }
 }
 
-# Does the GGUF header contain an MTP/nextn block? (see scripts\manage-qwen.ps1 Test-GgufHasMtp
+# Does the GGUF header contain an MTP/nextn block? (see scripts\manage-mamidlabs.ps1 Test-GgufHasMtp
 # and agent\mtp_inject.py). Used by the MTP verification step.
 function Test-MtpInGguf([string]$Path) {
     try {
@@ -125,9 +125,9 @@ function Test-ComfyRunning {
 function Invoke-ChatProbe {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     # reasoning_effort='low' + chat_template_kwargs bring it into the same shape as the real
-    # generation request (Set-LowEffortRequest in qwen-inference.ps1).
+    # generation request (Set-LowEffortRequest in mamidlabs-inference.ps1).
     # Lite no longer uses a thinking budget (thinking is on and unlimited); thinking tokens share
-    # the OUTPUT budget. So a margin equal to the LITE server's output cap (8192, manage-qwen.ps1
+    # the OUTPUT budget. So a margin equal to the LITE server's output cap (8192, manage-mamidlabs.ps1
     # $predict) is left for the answer. Otherwise the model could spend the whole limit thinking
     # and cut off before producing real content - exactly what was caught on a real machine with a
     # small max_tokens: an "empty answer".
@@ -283,7 +283,7 @@ if ($SkipDocument) {
         if ($LASTEXITCODE -ne 0) { throw 'Could not create the test document (python-docx).' }
         # office-tools.py's ACTIONS table has no action named 'read_document'
         # (only read_docx/read_pdf/...; 'read_document' is only the tool NAME inside
-        # qwen-inference.ps1 - it is mapped to the right action by extension). Caught on a
+        # mamidlabs-inference.ps1 - it is mapped to the right action by extension). Caught on a
         # real machine: the wrong action name gave an "unknown action" error.
         $job = @{ action = 'read_docx'; path = $docPath } | ConvertTo-Json -Compress
         $out = $job | & $python (Join-Path $Root 'agent\office-tools.py') 2>&1 | Out-String
@@ -313,7 +313,7 @@ if ($SkipOffline) {
         $env:HTTP_PROXY = 'http://127.0.0.1:9'; $env:HTTPS_PROXY = 'http://127.0.0.1:9'
         try {
             $payload = @{ action = 'search_web'; query = 'offline smoke test'; count = 2 } | ConvertTo-Json -Compress
-            $out = $payload | & $python (Join-Path $Root 'agent\qwen-agent-tools.py') 2>&1 | Out-String
+            $out = $payload | & $python (Join-Path $Root 'agent\mamidlabs-agent-tools.py') 2>&1 | Out-String
             $code = $LASTEXITCODE
         } finally {
             $env:HTTP_PROXY = $savedHttp; $env:HTTPS_PROXY = $savedHttps
@@ -361,7 +361,7 @@ if ($SkipNetworkSwitch) {
             }
             $shared = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full'
                 AskTool = $null; AskDetail = $null; AskAnswer = $null; AskId = $null; AskDeadline = $null })
-            $job = Start-ThreadJob -FilePath (Join-Path $Root 'agent\qwen-inference.ps1') -ArgumentList $jobData, $shared
+            $job = Start-ThreadJob -FilePath (Join-Path $Root 'agent\mamidlabs-inference.ps1') -ArgumentList $jobData, $shared
             $items = @(Receive-Job -Job $job -Wait)
             Remove-Job -Job $job -Force
             $err = @($items | Where-Object { $_.kind -eq 'error' })
@@ -409,7 +409,7 @@ if ($SkipHistoryResume) {
         }
         $shared = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full'
             AskTool = $null; AskDetail = $null; AskAnswer = $null; AskId = $null; AskDeadline = $null })
-        $job = Start-ThreadJob -FilePath (Join-Path $Root 'agent\qwen-inference.ps1') -ArgumentList $jobData, $shared
+        $job = Start-ThreadJob -FilePath (Join-Path $Root 'agent\mamidlabs-inference.ps1') -ArgumentList $jobData, $shared
         $items = @(Receive-Job -Job $job -Wait); Remove-Job -Job $job -Force
         $err1 = @($items | Where-Object { $_.kind -eq 'error' })
         if ($err1.Count) { throw "The first turn errored: $($err1[0].text)" }
@@ -440,7 +440,7 @@ if ($SkipHistoryResume) {
         $jobData2 = $jobData.Clone(); $jobData2.messages = @($reloaded) + @(@{ role = 'user'; content = 'Now summarize that in one sentence.' })
         $shared2 = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full'
             AskTool = $null; AskDetail = $null; AskAnswer = $null; AskId = $null; AskDeadline = $null })
-        $job2 = Start-ThreadJob -FilePath (Join-Path $Root 'agent\qwen-inference.ps1') -ArgumentList $jobData2, $shared2
+        $job2 = Start-ThreadJob -FilePath (Join-Path $Root 'agent\mamidlabs-inference.ps1') -ArgumentList $jobData2, $shared2
         $items2 = @(Receive-Job -Job $job2 -Wait); Remove-Job -Job $job2 -Force
         $err2 = @($items2 | Where-Object { $_.kind -eq 'error' })
         if ($err2.Count) { throw "The continuation turn errored: $($err2[0].text)" }
@@ -595,7 +595,7 @@ if (!$script:chatBaseline -or !$script:lastImage) {
         $comfyState = if (Test-ComfyRunning) { 'ComfyUI open (models unloaded)' } else { 'ComfyUI closed' }
         $detail = "$($probe.tps) tok/s (first measurement $($script:chatBaseline.tps), ratio $([math]::Round($ratio, 2))), free VRAM $(if ($null -ne $free) { "$free MiB" } else { 'not measured' }), $comfyState"
         if ($ratio -lt $MinSpeedRatio) {
-            throw "Chat speed dropped: $detail. There may be a VRAM overflow; see the logs\qwen-$Profile.stderr.log file."
+            throw "Chat speed dropped: $detail. There may be a VRAM overflow; see the logs\mamidlabs-$Profile.stderr.log file."
         }
         Report 'post_media_switch' $true $detail
     } catch {
@@ -677,12 +677,12 @@ public static class Smk { [DllImport("user32.dll")] public static extern IntPtr 
             else { $p = $null; if ($el.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$p)) { $p.Invoke() } }
         }
 
-        Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like '*qwen-desktop.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like '*mamidlabs-desktop.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         & $manage -Action stop | Out-Null
         & $manage -Action closecomfy | Out-Null
 
         $appPwsh = Join-Path $Root 'runtime\pwsh\pwsh.exe'
-        $appProcess = Start-Process -FilePath $appPwsh -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', (Join-Path $Root 'qwen-desktop.ps1'))
+        $appProcess = Start-Process -FilePath $appPwsh -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', (Join-Path $Root 'mamidlabs-desktop.ps1'))
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $win = $null; $end = (Get-Date).AddSeconds(120)
         while ((Get-Date) -lt $end -and !$win) { if ($appProcess.HasExited) { throw "App window closed before opening (code $($appProcess.ExitCode))." }; $win = Find-UiWin $appProcess.Id 5 }
@@ -718,9 +718,9 @@ public static class Smk { [DllImport("user32.dll")] public static extern IntPtr 
 }
 
 # -------------------------------------------------------------------- UI
-# Launches the real desktop app (qwen-desktop.ps1); verifies the window and the language model
+# Launches the real desktop app (mamidlabs-desktop.ps1); verifies the window and the language model
 # are ready. Then runs one turn with the real inference worker the UI uses
-# (agent\qwen-inference.ps1) to prove there is no "connection dropped / could not start"
+# (agent\mamidlabs-inference.ps1) to prove there is no "connection dropped / could not start"
 # turn and that MTP (--spec-type draft-mtp) really works. The app stops the server on exit,
 # so this step runs last (after video).
 Write-Section 'UI (real app) + MTP'
@@ -737,11 +737,11 @@ if ($SkipUi) {
 
         # Close a UI left open by previous tests (no file locks).
         Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" -ErrorAction SilentlyContinue | Where-Object {
-            $_.CommandLine -and $_.CommandLine -like '*qwen-desktop.ps1*' } | ForEach-Object {
+            $_.CommandLine -and $_.CommandLine -like '*mamidlabs-desktop.ps1*' } | ForEach-Object {
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         & $manage -Action stop | Out-Null
 
-        $appScript = Join-Path $Root 'qwen-desktop.ps1'
+        $appScript = Join-Path $Root 'mamidlabs-desktop.ps1'
         $appPwsh = Join-Path $Root 'runtime\pwsh\pwsh.exe'
         if (!(Test-Path -LiteralPath $appScript -PathType Leaf)) { throw "App not found: $appScript" }
         if (!(Test-Path -LiteralPath $appPwsh -PathType Leaf)) { throw "Bundled pwsh not found: $appPwsh" }
@@ -767,7 +767,7 @@ if ($SkipUi) {
         }
 
         # One turn with the real worker the UI uses: no error and no watchdog text.
-        # maxTokens must be the SAME as the real UI (qwen-desktop.ps1: 8192; server --predict 8192;
+        # maxTokens must be the SAME as the real UI (mamidlabs-desktop.ps1: 8192; server --predict 8192;
         # see the chat probe). In LITE thinking is UNLIMITED (no --reasoning-budget and
         # `reasoning_effort=low` is ignored by the Qwen3.5 9B template), so thinking tokens share
         # the OUTPUT budget. With 300 the model thinks everything away and is cut off WITHOUT
@@ -783,7 +783,7 @@ if ($SkipUi) {
         }
         $shared = [hashtable]::Synchronized(@{ Cancel = $false; Cts = $null; AccessMode = 'full'
             AskTool = $null; AskDetail = $null; AskAnswer = $null; AskId = $null; AskDeadline = $null })
-        $job = Start-ThreadJob -FilePath (Join-Path $Root 'agent\qwen-inference.ps1') -ArgumentList $jobData, $shared
+        $job = Start-ThreadJob -FilePath (Join-Path $Root 'agent\mamidlabs-inference.ps1') -ArgumentList $jobData, $shared
         $items = @(Receive-Job -Job $job -Wait); Remove-Job -Job $job -Force
         $errEvent = @($items | Where-Object { $_.kind -eq 'error' })
         if ($errEvent.Count) { throw "UI turn errored: $($errEvent[0].text)" }

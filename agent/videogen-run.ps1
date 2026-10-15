@@ -16,11 +16,11 @@ Add-Type -AssemblyName System.Drawing
 # Derive the install root from this file's own location. IMPORTANT: this file is started with
 # Start-ThreadJob -FilePath; that reads the target file as TEXT and runs it in a new
 # runspace - $PSScriptRoot is ALWAYS EMPTY in that context (verified on a real machine).
-# The primary source is the value qwen-desktop.ps1 passes explicitly via JobData.root;
+# The primary source is the value mamidlabs-desktop.ps1 passes explicitly via JobData.root;
 # $PSScriptRoot only kicks in when this file is run directly with '&' or '-File'
 # (manual testing/debugging).
 $root = if ($JobData.root) { [string]$JobData.root } elseif ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { (Get-Location).Path }
-$manage = Join-Path $root 'scripts\manage-qwen.ps1'
+$manage = Join-Path $root 'scripts\manage-mamidlabs.ps1'
 # The stop/restore flow of the language model is shared with imagegen-run.ps1 (Amp #17).
 . (Join-Path $root 'agent\media-model-swap.ps1')
 $comfyDir = Join-Path $root 'ComfyUI'

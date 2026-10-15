@@ -4,10 +4,10 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 # Derive the install root from this file's own location. IMPORTANT: this file is started with
-# Start-ThreadJob -FilePath (qwen-desktop.ps1); that reads the target file as TEXT and runs it
+# Start-ThreadJob -FilePath (mamidlabs-desktop.ps1); that reads the target file as TEXT and runs it
 # in a new runspace - $PSScriptRoot/$PSCommandPath/$MyInvocation.MyCommand.Path are ALWAYS
 # EMPTY in that context (verified on a real machine: a probe script proved it).
-# Therefore the primary source is qwen-desktop.ps1 passing its own (known-good) $root
+# Therefore the primary source is mamidlabs-desktop.ps1 passing its own (known-good) $root
 # explicitly via JobData.root; $PSScriptRoot only kicks in when this file is run directly
 # with -File (manual testing/debugging). It is defined as a function (the same pattern as
 # Get-LocalProfileAliases in model-registry.ps1): when the file is loaded only for its
@@ -27,7 +27,7 @@ $root = Get-InstallRoot
 # Invoke-PythonTool, Start-LocalModelRestore and Invoke-ImageOcrWithModelSwap functions run
 # in isolation, these accessors are used instead of top-level variables.
 function Get-PythonExe { Join-Path (Get-InstallRoot) 'venv\app\Scripts\python.exe' }
-function Get-ToolsPyPath { Join-Path (Get-InstallRoot) 'agent\qwen-agent-tools.py' }
+function Get-ToolsPyPath { Join-Path (Get-InstallRoot) 'agent\mamidlabs-agent-tools.py' }
 function Get-OfficePyPath { Join-Path (Get-InstallRoot) 'agent\office-tools.py' }
 function Get-OcrPyPath { Join-Path (Get-InstallRoot) 'agent\ocr-tools.py' }
 function Get-OcrPythonExe { Join-Path (Get-InstallRoot) 'venv\ocr\Scripts\python.exe' }
@@ -36,7 +36,7 @@ function Get-WhisperPyPath { Join-Path (Get-InstallRoot) 'agent\whisper-tools.py
 function Get-MediaPythonExe { Join-Path (Get-InstallRoot) 'venv\imagegen\Scripts\python.exe' }
 # The audio transcription pipeline runs in its own environment (faster-whisper + transformers/AST + pyannote).
 function Get-AsrPythonExe { Join-Path (Get-InstallRoot) 'venv\asr\Scripts\python.exe' }
-function Get-ManageQwenPath { Join-Path (Get-InstallRoot) 'scripts\manage-qwen.ps1' }
+function Get-ManageMamidLabsPath { Join-Path (Get-InstallRoot) 'scripts\manage-mamidlabs.ps1' }
 function Get-AuditLogPath { Join-Path (Get-InstallRoot) 'logs\audit.jsonl' }
 # The HF cache (whisper large-v3-tr + the AST audio-event model) lives UNDER THE INSTALL ROOT;
 # the worker/tools must use it OFFLINE. If the app does not set HF_HOME at runtime the worker
@@ -373,7 +373,7 @@ function Wait-LocalModelStopped {
 # The Qwen3.8 27B template on MAX/FLASH understands the reasoning_effort key. The Qwen3.5 9B
 # template on Lite ignores it (measured: token count did not change with low effort);
 # there thinking is ON and UNLIMITED (no --reasoning-budget is passed; see
-# scripts/manage-qwen.ps1). So on a hard question thinking can consume the WHOLE output
+# scripts/manage-mamidlabs.ps1). So on a hard question thinking can consume the WHOLE output
 # budget (--predict) and produce no visible answer; the real recovery is
 # Set-NoThinkingRequest below.
 function Set-LowEffortRequest([hashtable]$body) {
@@ -398,7 +398,7 @@ function Start-LocalModelRestore([string]$profile) {
     $arguments = @(
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
-        '-File', (Get-ManageQwenPath),
+        '-File', (Get-ManageMamidLabsPath),
         '-Action', 'start',
         '-Profile', $profile
     )
@@ -430,7 +430,7 @@ function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = 
     if ($swapModel) {
         Emit 'status' 'Moving the language model to RAM; freeing VRAM for OCR…' | Out-Null
         try {
-            & (Get-ManageQwenPath) -Action stop | Out-Null
+            & (Get-ManageMamidLabsPath) -Action stop | Out-Null
             Wait-LocalModelStopped
         } catch { $ocrError = $_ }
     }
@@ -704,7 +704,7 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
     if (!$path -or !(Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Audio file not found.' }
     if ($swapModel) {
         Emit 'status' 'Temporarily stopping the language model; freeing VRAM for transcription…' | Out-Null
-        try { & (Get-ManageQwenPath) -Action stop | Out-Null; Wait-LocalModelStopped } catch { $err = $_ }
+        try { & (Get-ManageMamidLabsPath) -Action stop | Out-Null; Wait-LocalModelStopped } catch { $err = $_ }
     }
     if (!$err) {
         $whisperPy = Get-WhisperPyPath; $asrPy = Get-AsrPythonExe
@@ -748,7 +748,7 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
         if ($err -and !$Shared.Cancel -and !$swapModel -and $provider -eq 'local') {
             try {
                 Emit 'status' 'Could not transcribe the audio; unloading the language model temporarily and retrying…' | Out-Null
-                & (Get-ManageQwenPath) -Action stop | Out-Null
+                & (Get-ManageMamidLabsPath) -Action stop | Out-Null
                 Wait-LocalModelStopped
                 $swapModel = $true
                 $retryPayload = $payloadBase.Clone(); $retryPayload['device'] = 'cuda'; $retryPayload['need_swap'] = $true
@@ -1639,7 +1639,7 @@ function Get-PlainText($content) {
 }
 
 # F1: In-turn context overflow guard. Tool results accumulate during a turn and grow the prompt;
-# llama-server runs with --no-context-shift (see manage-qwen.ps1), so when the prompt exceeds
+# llama-server runs with --no-context-shift (see manage-mamidlabs.ps1), so when the prompt exceeds
 # ctx-size the request returns an ERROR and the turn fails. So at the START of every turn the
 # estimated prompt size is measured and old outputs are shortened if needed. The estimate uses
 # the same approach as the desktop's Estimate-ContextTokens (chars/3; an image part is a fixed

@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 # Derive the install root from this file's own location. IMPORTANT: this file is started with
 # Start-ThreadJob -FilePath; that reads the target file as TEXT and runs it in a new
 # runspace - $PSScriptRoot is ALWAYS EMPTY in that context (verified on a real machine).
-# The primary source is the value qwen-desktop.ps1/media-settings.ps1/hf-settings.ps1/profile-catalog.ps1
+# The primary source is the value mamidlabs-desktop.ps1/media-settings.ps1/hf-settings.ps1/profile-catalog.ps1
 # pass explicitly via JobData.root.
 $root = if ($JobData.root) { [string]$JobData.root } elseif ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { (Get-Location).Path }
 $process=$null

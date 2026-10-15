@@ -1,4 +1,4 @@
-"""VRAM-based admission (manage-qwen.ps1 Test-MemoryBudget).
+"""VRAM-based admission (manage-mamidlabs.ps1 Test-MemoryBudget).
 
 Required memory = model file + a safety margin; the mmproj runs on the CPU in all profiles
 and does not count toward the VRAM budget. Before measuring,
@@ -19,7 +19,7 @@ def read_text(path: str) -> str:
 
 
 def run_pwsh_functions(script: str) -> str:
-    """Runs PowerShell functions in a real pwsh (functions extracted from manage-qwen.ps1
+    """Runs PowerShell functions in a real pwsh (functions extracted from manage-mamidlabs.ps1
     are loaded via the `Get-Functions` prelude)."""
     import shutil
     import subprocess
@@ -46,7 +46,7 @@ function Get-Functions([string]$path) {
 
 
 def test_memory_budget_function_exists_and_is_called_before_start():
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     assert "function Test-MemoryBudget" in manager
     # The projector is NOT part of the budget: it runs on the CPU in all three profiles.
     assert "Test-MemoryBudget $model $Profile $projector" in manager
@@ -68,7 +68,7 @@ def test_idle_comfy_policy_is_profile_aware():
     Rationale: the LITE target machine is 8 GB VRAM / 16 GB RAM; the 9B is at the card's limit
     and the ComfyUI context spills it. On a 16 GB card LITE users can keep it open with
     `comfyKeepAlive=true`; MAX/FLASH always close. In API mode the script is not called."""
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     # Default OFF (no idle VRAM/RAM).
     assert "$comfyKeepAlive = $false" in manager
     assert "$settings.comfyKeepAlive" in manager
@@ -84,14 +84,14 @@ def test_idle_comfy_policy_is_profile_aware():
 
 
 def test_idle_comfy_is_only_stopped_when_its_queue_is_empty():
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     stop = manager.split("function Stop-IdleComfy")[1].split("function Get-ManagedServers")[0]
     assert "http://127.0.0.1:8188/queue" in stop
     assert "@($queue.queue_running).Count -gt 0 -or @($queue.queue_pending).Count -gt 0) { return $false }" in stop
 
 
 def test_memory_budget_uses_measured_free_vram_and_estimated_need():
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     assert "memory.free" in manager
     assert "(Get-Item -LiteralPath $modelPath).Length" in manager
     assert "$freeMiB -lt $neededMiB" in manager
@@ -101,12 +101,12 @@ def test_memory_budget_skips_cleanly_when_no_nvidia_gpu():
     """Without nvidia-smi (AMD/Intel GPU or no driver installed) the check must be
     skipped silently - it must not block the installation, llama-server will give
     the real error anyway."""
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     assert "if (!$smi) { return }" in manager
 
 
 def test_start_action_accepts_skip_memory_check_switch():
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     assert "[switch]$SkipMemoryCheck" in manager
 
 
@@ -120,7 +120,7 @@ def test_max_budget_requires_a_full_vram_fit():
     the real protection."""
     import re
 
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     match = re.search(r"\$overheadMiB = if \(\$profileName -eq 'lite'\) \{ (\d+) \} else \{ (\d+) \}", manager)
     assert match, "profile-aware overheadMiB line not found"
     overhead = int(match.group(2))  # else branch = MAX/FLASH
@@ -140,7 +140,7 @@ def test_lite_budget_is_not_tightened_by_the_max_fix():
     and its tolerance stays 1024."""
     import re
 
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     match = re.search(r"\$overheadMiB = if \(\$profileName -eq 'lite'\) \{ (\d+) \} else \{ (\d+) \}", manager)
     assert match, "profile-aware overheadMiB line not found"
     assert int(match.group(1)) == 300, "LITE margin was enlarged (breaks the LITE install)"
@@ -155,7 +155,7 @@ def test_projector_runs_on_cpu_and_stays_out_of_vram_budget():
     8 GB card on the GPU and was pushing the big embedding tensor onto the CPU; on the CPU
     VRAM drops to 7249/8188 MiB (708 MiB free) and chat speed is unchanged. So the mmproj
     runs on the CPU in all three profiles and does not count toward the VRAM budget."""
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     # --no-mmproj-offload is used in both profile branches (LITE + MAX/FLASH).
     assert manager.count("'--mmproj', $projector, '--no-mmproj-offload'") >= 2
     # The Lite budget no longer ADDS the projector size to the model size (on the CPU, not in VRAM).
@@ -169,7 +169,7 @@ def test_memory_budget_tolerates_small_overflow_for_mtp_grown_lite():
     tensor on the CPU and tolerates a small overflow (measured: loaded at ~165 MiB over,
     ~41 tok/s). A small overflow must not block; only a clear overflow (~1 GB over the margin)
     stops it."""
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     assert "$toleranceMiB = if ($profileName -eq 'lite') { 1024 } else { 0 }" in manager
     assert "if ($freeMiB -lt ($neededMiB - $toleranceMiB))" in manager
     assert "Write-Warning" in manager
@@ -181,7 +181,7 @@ def test_orphan_app_gpu_workers_are_cleaned_before_model_load():
     automatically. After a crash or forced close the remaining CUDA contexts (~140-600 MiB)
     can eat the language model's thin margin and cause "not enough VRAM". The cleanup only
     targets processes under the install root; other applications are never touched."""
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     assert "function Get-AppGpuWorkers" in manager
     assert "function Stop-OrphanWorkers" in manager
     # GPU worker scripts are targeted (audio + OCR); ComfyUI has its own lifecycle (main.py).
@@ -195,7 +195,7 @@ def test_orphan_app_gpu_workers_are_cleaned_before_model_load():
 def test_orphan_worker_selection_only_matches_app_gpu_workers():
     """Behavior (real pwsh): Get-AppGpuWorkers selects ONLY audio/OCR workers whose python
     lives under the install root; it excludes python from another root, ComfyUI, and tools
-    that do not use the GPU (qwen-agent-tools.py)."""
+    that do not use the GPU (mamidlabs-agent-tools.py)."""
     script = r"""
 $root = 'C:\fake\root'
 function Get-CimInstance { param([string]$Class, [string]$Filter, $ErrorAction) $script:fake }
@@ -204,11 +204,11 @@ $script:fake = @(
   [pscustomobject]@{ ProcessId=111; ExecutablePath='C:\fake\root\venv\asr\Scripts\python.exe'; CommandLine='"C:\fake\root\venv\asr\Scripts\python.exe" "C:\fake\root\agent\whisper-tools.py" --serve' },
   [pscustomobject]@{ ProcessId=222; ExecutablePath='C:\fake\root\venv\ocr\Scripts\python.exe'; CommandLine='"C:\fake\root\venv\ocr\Scripts\python.exe" "C:\fake\root\agent\ocr-tools.py"' },
   [pscustomobject]@{ ProcessId=333; ExecutablePath='C:\Other\python.exe'; CommandLine='whisper-tools.py' },
-  [pscustomobject]@{ ProcessId=444; ExecutablePath='C:\fake\root\venv\app\Scripts\python.exe'; CommandLine='"C:\fake\root\agent\qwen-agent-tools.py"' },
+  [pscustomobject]@{ ProcessId=444; ExecutablePath='C:\fake\root\venv\app\Scripts\python.exe'; CommandLine='"C:\fake\root\agent\mamidlabs-agent-tools.py"' },
   [pscustomobject]@{ ProcessId=555; ExecutablePath='C:\fake\root\venv\imagegen\Scripts\python.exe'; CommandLine='C:\fake\root\ComfyUI\main.py' }
 )
 (Get-AppGpuWorkers | ForEach-Object { [int]$_.ProcessId } | Sort-Object) -join ','
 """
-    script = script.replace("MANAGER_PATH", str(ROOT / "scripts" / "manage-qwen.ps1"))
+    script = script.replace("MANAGER_PATH", str(ROOT / "scripts" / "manage-mamidlabs.ps1"))
     out = run_pwsh_functions(script)
     assert out.strip() == "111,222", out

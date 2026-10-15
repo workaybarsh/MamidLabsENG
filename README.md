@@ -118,13 +118,13 @@ been installed.
 
 ```mermaid
 flowchart TD
-    UI["Interface<br>qwen-desktop.ps1 · WinForms"] --> AG["Agent layer<br>qwen-inference.ps1"]
+    UI["Interface<br>mamidlabs-desktop.ps1 · WinForms"] --> AG["Agent layer<br>mamidlabs-inference.ps1"]
     AG --> LL["llama.cpp b10998<br>language model and image projector"]
     AG --> PY["Python tools<br>documents · OCR · web"]
     AG --> API["API providers<br>OpenAI · Claude · Gemini · DeepSeek · custom"]
     UI --> MED["Media pipeline<br>imagegen-run · videogen-run"]
     MED --> CU["ComfyUI b0f4b7b<br>Krea-2 · Identity Edit · Wan 2.2"]
-    MQ["manage-qwen.ps1<br>profile and memory gate"] --> LL
+    MQ["manage-mamidlabs.ps1<br>profile and memory gate"] --> LL
     MED --> SW["media-model-swap.ps1<br>VRAM handover"]
     SW --> MQ
 ```

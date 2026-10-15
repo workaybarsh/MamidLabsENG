@@ -3,7 +3,7 @@
 #
 # Start-Process -RedirectStandardOutput calls CreateProcess with bInheritHandles=TRUE:
 # the child receives all of the caller's inheritable handles, including the script's own
-# stdout pipe. The pipe does not close while the child lives; so "manage-qwen.ps1 |
+# stdout pipe. The pipe does not close while the child lives; so "manage-mamidlabs.ps1 |
 # Out-String", redirecting smoke-test.ps1 output to a file or Start-Process -Wait
 # never finished (seen on a real machine). Fix: clear the inherit flag of the std handles
 # at launch time and then restore it.

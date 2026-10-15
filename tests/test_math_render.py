@@ -1,4 +1,4 @@
-"""LaTeX (matematik) -> okunur Unicode donusumu (qwen-desktop.ps1 Convert-MathText).
+"""LaTeX (matematik) -> okunur Unicode donusumu (mamidlabs-desktop.ps1 Convert-MathText).
 
 Model matematik yaniti urettiginde ham "$$", "\\frac{}{}", "\\int" gibi isaretler
 arayuzde "bozuk sembol" gibi gorunuyordu. Convert-MathText bunlari Unicode
@@ -32,7 +32,7 @@ def run_convert(samples) -> str:
     pwsh = shutil.which("pwsh")
     if not pwsh:
         pytest.skip("PowerShell 7 is unavailable")
-    src = read_text("qwen-desktop.ps1")
+    src = read_text("mamidlabs-desktop.ps1")
     fns = extract_functions(src, [
         "Read-MathGroup", "Read-MathAtom", "Add-MathAccent",
         "Convert-ToSuperscript", "Convert-ToSubscript", "Expand-MathCommands",

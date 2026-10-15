@@ -713,7 +713,7 @@ def test_worker_plan_action_uses_path_duration(monkeypatch, tmp_path):
 def test_transcription_uses_asr_environment_not_imagegen():
     """The audio worker runs in its OWN environment (venv\\asr); venv\\imagegen has no
     faster-whisper."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "function Get-AsrPythonExe" in worker
     assert "venv\\asr\\Scripts\\python.exe" in worker
     plan = worker.split("function Get-AudioTranscriptionPlan")[1].split("function ")[0]
@@ -726,7 +726,7 @@ def test_asr_worker_uses_install_hf_cache():
     never set HF_HOME at runtime; the worker fell back to the DEFAULT HF cache, the AST audio-event
     model was not there, so the events model could not be loaded and ALL voice input failed. The
     installer uses the same path (install-mamidlabs.ps1)."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "function Get-HfHome" in worker
     assert "tools\\hf-home" in worker
     # The one-shot python tool and the persistent worker both get HF_HOME.
@@ -735,7 +735,7 @@ def test_asr_worker_uses_install_hf_cache():
     srv = worker.split("function Start-AsrServerProcess")[1].split("function ")[0]
     assert "HF_HOME" in srv and "Get-HfHome" in srv
     # It is also set at app startup (so every child reached through the UI inherits it).
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "$env:HF_HOME = Join-Path $root 'tools\\hf-home'" in desktop
 
 
@@ -743,7 +743,7 @@ def test_python_tool_sets_hf_home_for_child(tmp_path):
     """Behavior: Invoke-PythonTool gives the child process HF_HOME=<root>\\tools\\hf-home, so the
     audio worker (and the other python tools) use the install cache offline (real pwsh + real
     Python)."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     probe = tmp_path / "probe.py"
     probe.write_text("import os\nprint(os.environ.get('HF_HOME',''))\n", encoding="utf-8")
     script = _invoke_python_tool_harness(worker) + f"""
@@ -761,7 +761,7 @@ def test_worker_maps_selected_profile_to_asr_tier():
     """The UI maps the SELECTED language-model profile to the audio-pipeline tier ('lite'->
     'lite', otherwise 'pro') and passes it as the `profile` field on both the plan and the
     transcribe requests."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "function Get-AsrProfileName" in worker
     fn = worker.split("function Get-AsrProfileName")[1].split("function ")[0]
     assert "return 'lite'" in fn
@@ -771,8 +771,8 @@ def test_worker_maps_selected_profile_to_asr_tier():
 
 
 def test_desktop_pipes_audio_to_worker_and_shows_transcript():
-    desktop = read_text("qwen-desktop.ps1")
-    worker = read_text("agent/qwen-inference.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "currentTurnAudioPaths" in desktop
     assert "currentAudioPaths = @($script:currentTurnAudioPaths)" in desktop
     assert "function Invoke-TranscribeWithModelSwap" in worker
@@ -785,7 +785,7 @@ def test_desktop_pipes_audio_to_worker_and_shows_transcript():
 def test_microphone_red_button_cancels_recording():
     """While recording, the red microphone click CANCELS the recording (stop, delete, send
     nothing). Finishing and sending is done via the right-click menu or the Send button."""
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "function Start-MicrophoneCapture" in desktop
     assert "mciSendString" in desktop
     assert "open new type waveaudio alias" in desktop
@@ -804,12 +804,12 @@ def test_microphone_menu_has_non_speech_events_toggle():
     """The microphone menu has a "Non-speech sounds" checkbox: checked -> AST events are
     captured, unchecked -> only the speech transcript. Stored in api.json -> audioEvents and
     passed to the worker."""
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "Non-speech sounds" in desktop
     assert "$script:audioEvents" in desktop
     assert "audioEvents = [bool]$script:audioEvents" in desktop
     assert "$script:apiSettings.audioEvents = $script:audioEvents" in desktop
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "events = $audioEvents" in worker
 
 
@@ -818,10 +818,10 @@ def test_transcription_uses_model_swap_for_local_provider():
     the SELECTED profile (lite/pro); the device/swap decision is made from the REAL free
     VRAM/RAM measured when the audio job starts plus the recording duration; the model is
     unloaded only when required and restored afterwards."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
     plan = worker.split("function Get-AudioTranscriptionPlan")[1].split("function ")[0]
-    assert "(Get-ManageQwenPath) -Action stop" in block
+    assert "(Get-ManageMamidLabsPath) -Action stop" in block
     assert "Start-LocalModelRestore" in block
     # The plan helper calls whisper-tools.py (it decides the device/swap).
     assert "Get-WhisperPyPath" in plan and "action = 'plan'" in plan
@@ -846,16 +846,16 @@ def test_transcription_uses_model_swap_for_local_provider():
 
 def test_swap_status_message_reflects_process_stop():
     """Cosmetic but important: during the swap the language model is NOT moved to RAM;
-    `manage-qwen -Action stop` STOPS the process (RAM-friendly). The status text must reflect
+    `manage-mamidlabs -Action stop` STOPS the process (RAM-friendly). The status text must reflect
     that (not the misleading "Moving the language model to RAM"). Code behavior is unchanged."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
     assert "stopping the language model" in block
     assert "Moving the language model to RAM" not in block
 
 
 def test_transcription_honors_cancel_and_stop_does_not_wait_for_restore():
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
     assert "$Shared.Cancel" in block
     wait = worker.split("function Wait-LocalModelReady")[1].split("function ")[0]
@@ -872,7 +872,7 @@ def test_inference_uses_warm_asr_server_with_fallback():
     Also, before the language model is reloaded into VRAM the audio models are dropped and the
     worker is STOPPED (the remaining CUDA context ~140 MiB could eat the 27B's thin margin);
     it is restarted IN THE BACKGROUND after the turn so the next turn is warm."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     for fn in ("Get-AsrServerStatePath", "Send-AsrServerLine", "Get-AsrServerEndpoint",
                "Start-AsrServerProcess", "Start-AsrServer", "Start-AsrServerAsync",
                "Ensure-AsrServer", "Stop-AsrServer", "Unload-AsrServerModels",
@@ -905,7 +905,7 @@ def test_worker_steers_model_away_from_reading_failed_audio():
     word; no transcript bubble is produced either. Also, if the plan says 'no swap' but no
     transcript is obtained after all, the language model is unloaded and retried ONCE with a CLEAN
     GPU/RAM."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "function Set-AudioUnavailableNote" in worker
     # In BOTH failure paths of a failed transcript (empty/error result + exception) the steering
     # note is added.
@@ -925,7 +925,7 @@ def test_worker_steers_model_away_from_reading_failed_audio():
 def test_set_audio_unavailable_note_isolated(tmp_path):
     """Set-AudioUnavailableNote is exercised in isolation: the steering note is added to the last
     user message and explicitly steers the model away from reading the file (real pwsh)."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     fn = _extract_ps_function(worker, "Set-AudioUnavailableNote")
     script = fn + """
 $items = [Collections.ArrayList]::new()
@@ -949,7 +949,7 @@ def test_audio_turn_hides_bound_file_tools_unless_file_intent():
     find/read/write the audio FILE with list_bound_files/read_bound_file/write_bound_file (it
     wasted turns on that in the UI test). If the user explicitly asks for a file (Test-FileIntent)
     the tools are still offered."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "$audioAttachedThisTurn = @($job.currentAudioPaths" in worker
     assert "if (!($audioAttachedThisTurn -and !(Test-FileIntent $userText)))" in worker
     guard = worker.split("$audioAttachedThisTurn = @($job.currentAudioPaths")[1]
@@ -961,7 +961,7 @@ def test_transcript_note_tells_model_not_to_open_the_audio_file(tmp_path):
     """A successful transcript also tells the model NOT to open the audio FILE with tools
     (symmetric to Set-AudioUnavailableNote); otherwise it takes it for an attached document and
     wastes turns. Runs with a real pwsh."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     fn = _extract_ps_function(worker, "Add-TranscriptToMessages")
     script = fn + """
 $items = [Collections.ArrayList]::new()
@@ -978,7 +978,7 @@ $ok = Add-TranscriptToMessages $items 'Speaker: hello' 'audio.wav'
 
 
 def test_audio_turn_preempts_language_model_loading():
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "function Stop-ModelSwitchForAudio" in desktop
     begin = desktop.split("function Begin-Generation {")[1].split("function Set-LastUserImage")[0]
     assert "$turnAudio" in begin and "Stop-ModelSwitchForAudio" in begin
@@ -987,7 +987,7 @@ def test_audio_turn_preempts_language_model_loading():
 
 
 def test_python_tool_subprocess_is_killed_instantly_on_stop():
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     block = worker.split("function Invoke-PythonTool")[1].split("function ")[0]
     assert "ReadToEndAsync" in block
     assert "$Shared.Cancel" in block
@@ -1003,7 +1003,7 @@ def test_python_tool_has_wall_clock_timeout():
     deadlocked the whole job waited forever. There is now an upper bound (default 180 s;
     overridable by a parameter or $payload.timeoutSeconds) and when it is exceeded the subprocess
     tree is killed and an error returned; cancel behavior is preserved."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     block = worker.split("function Invoke-PythonTool")[1].split("function ")[0]
     assert "function Invoke-PythonTool([hashtable]$payload, [string]$scriptPath = $null, [string]$pythonPath = $null, [int]$timeoutSeconds = 0)" in worker
     assert "$payload.timeoutSeconds" in block
@@ -1018,7 +1018,7 @@ def test_python_tool_has_wall_clock_timeout():
 def test_python_tool_wall_clock_timeout_kills_subprocess(tmp_path):
     """D2 behavior: a subprocess sleeping forever is killed at the timeout and the job returns an
     error WITHOUT hanging (real pwsh + a real Python process)."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     fn = _invoke_python_tool_harness(worker)
     sleeper = tmp_path / "sleeper.py"
     sleeper.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
@@ -1042,7 +1042,7 @@ def test_transcribe_sets_finite_timeout_from_recording_duration():
     carries a FINITE `timeoutSeconds` derived from the recording duration, and the plan
     action returns the recording duration (`duration_seconds`) so the timeout can be
     computed from it."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "function Get-AudioTimeoutSeconds" in worker
     block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
     assert "Get-AudioTimeoutSeconds" in block
@@ -1054,7 +1054,7 @@ def test_transcribe_sets_finite_timeout_from_recording_duration():
 def test_audio_timeout_seconds_is_clamped(tmp_path):
     """Get-AudioTimeoutSeconds rule: max(600, d*4+300), capped at 3600 s; if the duration is
     unknown/0 -> 1800 s. Verified with a real pwsh."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     fn = _extract_ps_function(worker, "Get-AudioTimeoutSeconds")
     script = fn + """
 'T0=' + (Get-AudioTimeoutSeconds 0)
@@ -1078,7 +1078,7 @@ def test_inference_loop_guards_against_context_overflow():
     every turn the estimated prompt size is computed; if the budget is exceeded the OLDEST tool
     outputs are shortened, and if it still does not fit the model is asked for a visible answer
     without continuing with tools. max_tokens is also capped to the remaining room."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "function Estimate-MessagesTokens" in worker
     assert "function Compress-TurnMessages" in worker
     assert "$promptTokensEst = Estimate-MessagesTokens $messages" in worker
@@ -1098,7 +1098,7 @@ def test_estimate_and_compress_turn_messages_isolated(tmp_path):
     """F1 behavior: the estimate grows with tool output; Compress-TurnMessages shortens the
     OLDEST over-budget tool output, keeps the system message and the LAST user message, and does
     not delete a message (the assistant tool_calls / tool pairing is not broken)."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     fn = _extract_ps_function(worker, "Estimate-MessagesTokens") + "\n\n" + \
         _extract_ps_function(worker, "Compress-TurnMessages")
     script = fn + """
@@ -1138,7 +1138,7 @@ def test_audit_log_has_size_rotation():
     (5 MB) is exceeded the current file is rotated to audit.1.jsonl (overwritten if present) and
     the new record goes to a clean file. The rotation is inside the same try; audit writing NEVER
     fails the turn (the existing catch swallows)."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     block = worker.split("function Write-AuditLog")[1].split("$endpoint =")[0]
     assert "5MB" in block
     assert "audit.1.jsonl" in block
@@ -1154,7 +1154,7 @@ def test_write_audit_log_rotates_when_oversized(tmp_path):
     """F3 behavior (real pwsh): an audit.jsonl over 5 MB is rotated to audit.1.jsonl before the
     next write (overwriting an existing rotation file), and the new line goes to the clean file.
     Because the file is small after the rotation, the second write does not rotate again."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     fn = _extract_ps_function(worker, "Get-AuditLock") + "\n\n" + \
         _extract_ps_function(worker, "Write-AuditLog")
     log_dir = tmp_path / "logs"
@@ -1189,7 +1189,7 @@ def test_reasoning_repeat_guard_uses_same_threshold():
     without a visible answer. The SAME threshold/pattern is applied to the reasoning accumulation
     and the stream is stopped safely; if there is no visible answer the existing 'empty answer'
     path (which does not look at finishReason) still applies unchanged."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     block = worker.split("if ($delta.reasoning_content) {")[1].split("if ($delta.content) {")[0]
     assert "(Test-RepeatedOutput $result.reasoning)" in block
     assert "Remove-RepeatedTail $result.reasoning" in block
@@ -1238,7 +1238,7 @@ def test_reasoning_repeat_stops_stream_early(tmp_path):
         script = f"""
 $job = @{{ messages = @(@{{ role = 'user'; content = 'hi' }}); compactOnly = $true; model = 'test'; contextLimit = 32768; maxTokens = 8192; agent = $false; internet = $false; office = $false; documentCreate = $false }}
 $shared = @{{ Cancel = $false }}
-. '{ROOT}\\agent\\qwen-inference.ps1' $job $shared | Out-Null
+. '{ROOT}\\agent\\mamidlabs-inference.ps1' $job $shared | Out-Null
 $endpoint = 'http://127.0.0.1:{server.server_port}/v1/chat/completions'
 $script:http = [Net.Http.HttpClient]::new(); $script:http.Timeout = [Threading.Timeout]::InfiniteTimeSpan
 $turn = @{{ reasoning = ''; content = ''; usage = $null; toolParts = @{{}}; finishReason = $null }}
@@ -1259,8 +1259,8 @@ try {{ Invoke-ChatCompletion @{{ messages = @() }} $shared $false $turn | Out-Nu
 
 
 def test_stop_cancels_work_but_never_kills_an_in_flight_model_load():
-    desktop = read_text("qwen-desktop.ps1")
-    cancel = desktop.split("function Cancel-Generation {")[1].split("function Stop-LocalQwen")[0]
+    desktop = read_text("mamidlabs-desktop.ps1")
+    cancel = desktop.split("function Cancel-Generation {")[1].split("function Stop-LocalMamidLabs")[0]
     assert "switchProcess" not in cancel
     assert "pendingModelChange" not in cancel
 
@@ -1345,7 +1345,7 @@ def test_empty_answer_recovery_disables_thinking(tmp_path):
     guaranteed way, since LITE ignores reasoning_effort) and also asks /no_think so the
     model writes the answer directly. Trigger: the visible answer is EMPTY or was cut off
     at the output cap leaving a broken fragment."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "function Set-NoThinkingRequest" in worker
     assert "$body.chat_template_kwargs = @{ enable_thinking = $false }" in worker
     # Trigger: visible answer EMPTY or cut off ('length') leaving a broken fragment.
@@ -1377,7 +1377,7 @@ def test_asr_profile_name_ignores_non_local_provider(tmp_path):
     $null for a non-local provider so the worker picks the tier from real VRAM
     (config.select_profile); local + lite -> 'lite', local + max/flash -> 'pro'.
     The function is exercised in isolation in a real pwsh."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     fn = _extract_ps_function(worker, "Get-AsrProfileName")
     script = fn + """
 
@@ -1404,6 +1404,6 @@ def test_transcribe_cpu_fallback_overrides_device_without_duplicate_key():
     present), so the CPU fallback payload cannot be merged with '+'. It must clone and
     overwrite the field; otherwise a failed CUDA transcription never falls back to CPU
     and the transcript silently disappears ("Item has already been added. Key: device")."""
-    worker = read_text("agent/qwen-inference.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert "$payloadBase + @{" not in worker
     assert "$cpuPayload['device'] = 'cpu'" in worker

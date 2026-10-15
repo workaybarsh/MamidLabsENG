@@ -47,7 +47,7 @@ def run_pwsh_functions(script: str) -> str:
 
 
 def test_rooted_relative_path_inside_bound_folder_resolves_without_doubling(tmp_path):
-    inference_path = str(ROOT / "agent" / "qwen-inference.ps1").replace("\\", "\\\\")
+    inference_path = str(ROOT / "agent" / "mamidlabs-inference.ps1").replace("\\", "\\\\")
     folder = str(tmp_path).replace("\\", "\\\\")
     rooted = str(tmp_path / "fibonacci.py").replace("\\", "\\\\")
     out = run_pwsh_functions(rf"""
@@ -65,7 +65,7 @@ Write-Output ('r:' + (Invoke-Tool 'write_bound_file' $a $folder))
 
 def test_rooted_relative_path_outside_bound_folder_is_still_rejected(tmp_path):
     """The safety boundary must hold: a rooted path outside the bound folder is still rejected."""
-    inference_path = str(ROOT / "agent" / "qwen-inference.ps1").replace("\\", "\\\\")
+    inference_path = str(ROOT / "agent" / "mamidlabs-inference.ps1").replace("\\", "\\\\")
     bound = tmp_path / "bound"
     bound.mkdir()
     outside = tmp_path / "outside.py"
@@ -85,7 +85,7 @@ Write-Output ('r:' + (Invoke-Tool 'write_bound_file' $a $folder))
 
 
 def test_normal_relative_path_is_unaffected(tmp_path):
-    inference_path = str(ROOT / "agent" / "qwen-inference.ps1").replace("\\", "\\\\")
+    inference_path = str(ROOT / "agent" / "mamidlabs-inference.ps1").replace("\\", "\\\\")
     folder = str(tmp_path).replace("\\", "\\\\")
     out = run_pwsh_functions(rf"""
 $JobData = @{{ root = '{tmp_path}' }}
@@ -103,7 +103,7 @@ def test_run_command_survives_nested_quoted_powershell_command(tmp_path):
     """This used to print the 'if' line as is without running it
     (the nested quotes of a command passed directly as an argument to cmd.exe /c
     got broken). Now the command is written to a temporary .cmd file and run."""
-    inference_path = str(ROOT / "agent" / "qwen-inference.ps1").replace("\\", "\\\\")
+    inference_path = str(ROOT / "agent" / "mamidlabs-inference.ps1").replace("\\", "\\\\")
     folder = str(tmp_path).replace("\\", "\\\\")
     out = run_pwsh_functions(rf"""
 $JobData = @{{ root = '{tmp_path}' }}
@@ -122,7 +122,7 @@ Write-Output ('r:' + (Invoke-Tool 'run_command' $a $folder))
 def test_run_command_percent_sign_is_not_swallowed_by_cmd(tmp_path):
     """A single "%" in a command written to a .cmd file must not be taken by cmd.exe
     for a parameter reference and silently swallowed (e.g. modulo "42 % 2 -eq 0")."""
-    inference_path = str(ROOT / "agent" / "qwen-inference.ps1").replace("\\", "\\\\")
+    inference_path = str(ROOT / "agent" / "mamidlabs-inference.ps1").replace("\\", "\\\\")
     folder = str(tmp_path).replace("\\", "\\\\")
     out = run_pwsh_functions(rf"""
 $JobData = @{{ root = '{tmp_path}' }}
@@ -140,10 +140,10 @@ Write-Output ('r:' + (Invoke-Tool 'run_command' $a $folder))
 def test_run_command_percent_env_var_reference_still_expands(tmp_path, monkeypatch):
     """A real (matched, has a closing "%" on the line) environment variable reference like
     "%FOO%" should still expand normally; only an unmatched/lone "%" is escaped (see the
-    run_command comment in qwen-inference.ps1 and
+    run_command comment in mamidlabs-inference.ps1 and
     test_run_command_percent_sign_is_not_swallowed_by_cmd)."""
     monkeypatch.setenv("MAMIDLABS_TEST_VAR", "hello-world")
-    inference_path = str(ROOT / "agent" / "qwen-inference.ps1").replace("\\", "\\\\")
+    inference_path = str(ROOT / "agent" / "mamidlabs-inference.ps1").replace("\\", "\\\\")
     folder = str(tmp_path).replace("\\", "\\\\")
     out = run_pwsh_functions(rf"""
 $JobData = @{{ root = '{tmp_path}' }}
@@ -163,7 +163,7 @@ def test_run_command_non_ascii_characters_survive_temp_script_roundtrip(tmp_path
     command/output survive without corruption (previously [Text.Encoding]::Default produced
     UTF-8 without BOM on pwsh 7, not ANSI, but cmd.exe read the file with its own OEM code
     page so non-ASCII characters could get garbled)."""
-    inference_path = str(ROOT / "agent" / "qwen-inference.ps1").replace("\\", "\\\\")
+    inference_path = str(ROOT / "agent" / "mamidlabs-inference.ps1").replace("\\", "\\\\")
     folder = str(tmp_path).replace("\\", "\\\\")
     out = run_pwsh_functions(rf"""
 $JobData = @{{ root = '{tmp_path}' }}
@@ -179,7 +179,7 @@ Write-Output ('r:' + (Invoke-Tool 'run_command' $a $folder))
 
 
 def test_run_command_temp_script_is_cleaned_up(tmp_path):
-    inference_path = str(ROOT / "agent" / "qwen-inference.ps1").replace("\\", "\\\\")
+    inference_path = str(ROOT / "agent" / "mamidlabs-inference.ps1").replace("\\", "\\\\")
     folder = str(tmp_path).replace("\\", "\\\\")
     temp_before = set(Path(__import__("tempfile").gettempdir()).glob("mamidlabs-cmd-*.cmd"))
     run_pwsh_functions(rf"""

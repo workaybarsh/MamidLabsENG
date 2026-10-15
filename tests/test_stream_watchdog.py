@@ -49,7 +49,7 @@ def test_finished_stream_that_never_closes_does_not_hang(tmp_path):
             f"""
 $job = @{{ messages = @(@{{ role = 'user'; content = 'hello' }}); compactOnly = $true; provider = 'local'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $false; internet = $false; office = $false; documentCreate = $false }}
 $shared = @{{ Cancel = $false }}
-. '{ROOT}\\agent\\qwen-inference.ps1' $job $shared | Out-Null
+. '{ROOT}\\agent\\mamidlabs-inference.ps1' $job $shared | Out-Null
 $endpoint = 'http://127.0.0.1:{server.server_port}/v1/chat/completions'
 # On compactOnly exit the script closes its own HttpClient.
 $script:http = [Net.Http.HttpClient]::new(); $script:http.Timeout = [Threading.Timeout]::InfiniteTimeSpan
@@ -134,7 +134,7 @@ def _run_drop_scenario(tmp_path, handler_cls, name):
             f"""
 $job = @{{ messages = @(@{{ role = 'user'; content = 'hello' }}); compactOnly = $true; provider = 'local'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $false; internet = $false; office = $false; documentCreate = $false }}
 $shared = @{{ Cancel = $false }}
-. '{ROOT}\\agent\\qwen-inference.ps1' $job $shared | Out-Null
+. '{ROOT}\\agent\\mamidlabs-inference.ps1' $job $shared | Out-Null
 $endpoint = 'http://127.0.0.1:{server.server_port}/v1/chat/completions'
 $script:http = [Net.Http.HttpClient]::new(); $script:http.Timeout = [Threading.Timeout]::InfiniteTimeSpan
 $turn = @{{ reasoning = ''; content = ''; usage = $null; toolParts = @{{}}; finishReason = $null }}

@@ -32,7 +32,7 @@ def run_pwsh(tmp_path, body: str) -> dict:
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $job = @{{ messages = @(@{{ role = 'user'; content = 'hello' }}); compactOnly = $true; provider = 'local'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $true; internet = $false; office = $false; documentCreate = $true }}
 $shared = [hashtable]::Synchronized(@{{ Cancel = $false; AccessMode = 'ask'; AskTool = $null; AskDetail = $null; AskAnswer = $null; AskId = $null; AskDeadline = $null }})
-. '{ROOT}\\agent\\qwen-inference.ps1' $job $shared | Out-Null
+. '{ROOT}\\agent\\mamidlabs-inference.ps1' $job $shared | Out-Null
 {body}
 """,
         encoding="utf-8-sig",
@@ -115,7 +115,7 @@ $second = Invoke-Tool 'run_command' ([pscustomobject]@{ command = 'py hello.py' 
 
 
 def test_desktop_uses_self_closing_approval_dialog_instead_of_messagebox():
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "The agent wants to make a change on your computer" not in desktop.split("function Show-ApprovalDialog")[0]
     assert "[System.Windows.Forms.MessageBox]::Show(\n                \"The agent" not in desktop
     update = desktop.split("function Update-ApprovalDialog")[1].split("function Show-ApprovalDialog")[0]
@@ -132,8 +132,8 @@ def test_desktop_uses_self_closing_approval_dialog_instead_of_messagebox():
 
 
 def test_denied_note_is_shown_but_not_sent_back_to_the_model():
-    desktop = read_text("qwen-desktop.ps1")
-    inference = read_text("agent/qwen-inference.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     assert "if ($script:deniedNote) { Emit 'denied' $script:deniedNote }" in inference
     done = desktop.split("        'done' {")[1].split("        'cancelled' {")[0]
     assert "$b.deniedNote" in done
@@ -145,7 +145,7 @@ def test_denial_note_is_added_to_the_request_copy_only():
     """After a denial an explicit note is added to the model call; it is not written to the persistent
     history ($messages), so the KV cache prefix is not broken. Because the note can be merged with
     the web-failure note it goes into $systemNotes and is written to the request copy ([System note])."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     assert "$systemNotes += (" in inference
     assert "DENIED" in inference and "do not guess the reason" in inference
     assert "$body.messages = @($sendMessages) + @(@{ role = 'user'; content = ('[System note] '" in inference

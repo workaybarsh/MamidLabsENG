@@ -20,11 +20,11 @@ Add-Type -AssemblyName System.Drawing
 # Derive the install root from this file's own location. IMPORTANT: this file is started with
 # Start-ThreadJob -FilePath; that reads the target file as TEXT and runs it in a new
 # runspace - $PSScriptRoot is ALWAYS EMPTY in that context (verified on a real machine).
-# The primary source is the value qwen-desktop.ps1 passes explicitly via JobData.root;
+# The primary source is the value mamidlabs-desktop.ps1 passes explicitly via JobData.root;
 # $PSScriptRoot only kicks in when this file is run directly with '&' or '-File'
 # (manual testing/debugging).
 $root = if ($JobData.root) { [string]$JobData.root } elseif ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { (Get-Location).Path }
-$manage = Join-Path $root 'scripts\manage-qwen.ps1'
+$manage = Join-Path $root 'scripts\manage-mamidlabs.ps1'
 # The stop/restore flow of the language model is shared with videogen-run.ps1 (Amp #17).
 . (Join-Path $root 'agent\media-model-swap.ps1')
 $comfyDir = Join-Path $root 'ComfyUI'
@@ -270,7 +270,7 @@ try {
     }
     $sourceB = [string]$JobData.sourceImageB
     if ($mode -eq 'identity_edit') {
-        # Not offered on LITE (8 GB VRAM) (qwen-inference.ps1 removes it from the tool's enum); if
+        # Not offered on LITE (8 GB VRAM) (mamidlabs-inference.ps1 removes it from the tool's enum); if
         # the model still asks for it with an old/cached tool call it is explicitly rejected here. Reason:
         # the GGUF diffusion model + the text/image encoder do not fit in VRAM together and it goes up
         # to 10-15 min (see the hardware table in AGENTS.md; a small r64/r128 LoRA does not fix it either).
@@ -314,7 +314,7 @@ try {
     Emit 'status' $(if ($lite) { 'Loading Krea-2 Turbo (GGUF, low-VRAM mode)...' } else { 'Loading Krea-2 Turbo...' })
     $comfy = Start-OrReuseComfy $python $comfyDir $comfyOut $comfyIn $logs $comfyUrl $lite 180 $Shared
 
-    # Comes in on only when the user explicitly asks for a realistic image (qwen-inference.ps1 Test-RealismIntent).
+    # Comes in on only when the user explicitly asks for a realistic image (mamidlabs-inference.ps1 Test-RealismIntent).
     $realism = [bool]$JobData.realism
     # In identity editing the realism LoRA is not added to the chain; the source photo is already realistic.
     if ($mode -eq 'identity_edit') { $realism = $false }

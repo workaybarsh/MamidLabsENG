@@ -62,7 +62,7 @@ if($settings){
         $projector=@(Get-ChildItem -LiteralPath (Split-Path $model) -Filter '*mmproj*.gguf' -File | Select-Object -First 1 -ExpandProperty FullName)[0]
     }
 }
-$gate = [System.Threading.Mutex]::new($false, 'Local\QwenLocalModelControl')
+$gate = [System.Threading.Mutex]::new($false, 'Local\MamidLabsModelControl')
 $ownsGate = $false
 
 # Memory gate: decides whether to start based on the estimated need + measured free VRAM +
@@ -447,9 +447,9 @@ try {
     }
     # Start-Process joins ArgumentList on Windows; quote paths explicitly.
     $serverArgs=@($serverArgs | ForEach-Object {if($_ -match '\s'){'"'+$_+'"'}else{$_}})
-    # Start without inheriting the caller's stdout pipe; otherwise "manage-qwen | ..." never finishes.
+    # Start without inheriting the caller's stdout pipe; otherwise "manage-mamidlabs | ..." never finishes.
     $child = Start-DetachedProcess $server $serverArgs (Split-Path $server) `
-        (Join-Path $logs "qwen-$Profile.stdout.log") (Join-Path $logs "qwen-$Profile.stderr.log")
+        (Join-Path $logs "mamidlabs-$Profile.stdout.log") (Join-Path $logs "mamidlabs-$Profile.stderr.log")
     if (!$child) { throw 'The model process could not be started.' }
     "Loading: $desiredAlias (PID $($child.Id))"
 }

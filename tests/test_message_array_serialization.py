@@ -1,7 +1,7 @@
 """A real regression: a single-message chat turn with no tools blew up with a 400
 error (a side effect of the Amp #28 fix).
 
-In qwen-inference.ps1 $body.messages had been assigned DIRECTLY as a hashtable value
+In mamidlabs-inference.ps1 $body.messages had been assigned DIRECTLY as a hashtable value
 in the form "if (...) {...} else {...}". In PowerShell, when the output of an if/else
 expression is captured into a hashtable value or a variable this way, a SINGLE-ELEMENT
 array is "unwrapped" into a single object (array unwrapping); ConvertTo-Json writes it

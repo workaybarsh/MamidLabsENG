@@ -49,7 +49,7 @@ def parse_alias_table(text: str, variable: str) -> dict:
 # --------------------------------------------------------------- profile definition
 
 def test_manager_accepts_lite_profile():
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
 
     assert "ValidateSet('max', 'flash', 'lite')" in manager
     # Lite uses a separate 9B model; it must not fall back to the 27B file.
@@ -59,7 +59,7 @@ def test_manager_accepts_lite_profile():
 
 def test_alias_tables_agree_between_manager_and_registry():
     """If the alias tables in the two files diverge, the model restore returns to the wrong profile."""
-    manager = parse_alias_table(read_text("scripts/manage-qwen.ps1"), "$profileAliases")
+    manager = parse_alias_table(read_text("scripts/manage-mamidlabs.ps1"), "$profileAliases")
     registry = parse_alias_table(read_text("agent/model-registry.ps1"), "$script:localProfileAliases")
 
     assert manager == registry
@@ -87,7 +87,7 @@ def test_lite_stays_within_eight_gigabyte_budget():
     7885 MiB (~72 MiB free) and llama.cpp was pushing the big embedding tensor onto the
     CPU. Chat speed is unchanged (~40-79 tok/s, depending on MTP acceptance); image
     reading is only a little slower."""
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     lite_block = manager.split("if ($Profile -eq 'lite') {", 1)[1]
 
     assert "$liteFile = 'Huihui-Qwen3.5-9B-abliterated.i1-Q5_K_M.gguf'" in lite_block
@@ -105,7 +105,7 @@ def test_max_flash_server_args_are_locked():
     machine. A silent edit could break PRO; this test locks the whole tuple (mmproj on the CPU,
     --image-min-tokens 1024, batch 512/256, threads 6/12, xhigh/low; MTP is added only if the
     GGUF carries MTP layers)."""
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
     for frag in [
         "'--model', $model, '--mmproj', $projector, '--no-mmproj-offload', '--image-min-tokens', '1024'",
         "'--ctx-size', '32768', '--predict', $predict, '--parallel', '1'",
@@ -122,7 +122,7 @@ def test_max_flash_server_args_are_locked():
 
 def test_settings_are_loaded_before_the_profile_reads_them():
     """If $settings is assigned after the profile block, liteModel/liteContext are silently ignored."""
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
 
     assigned = manager.index("$settings = Get-Content -LiteralPath $settingsPath")
     used = manager.index("$settings.liteModel")
@@ -142,7 +142,7 @@ def test_registry_exposes_lite_entry_matching_server_context():
 
 def test_model_bar_only_lists_profiles_with_chat_files_present():
     """LITE could appear selectable on the bottom bar on a PC where only MAX was installed
-    (or vice versa); selecting it made manage-qwen.ps1 fail with a missing-file error. Now
+    (or vice versa); selecting it made manage-mamidlabs.ps1 fail with a missing-file error. Now
     only a profile whose language model files are on disk is listed."""
     registry = read_text("agent/model-registry.ps1")
     catalog = read_text("agent/profile-catalog.ps1")
@@ -204,7 +204,7 @@ Write-Output ('lite:' + (Test-LocalProfileChatFilesPresent 'lite'))
 
 
 def test_desktop_resolves_profile_through_alias_helper():
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
 
     # The old "-like '*-flash'" derivation existed in three places; it took lite for max.
     assert "-like '*-flash'" not in desktop
@@ -220,8 +220,8 @@ def test_lite_thinks_without_a_reasoning_budget():
     (user request): `--reasoning-budget` is not passed, so the model thinks as long as needed.
     Thinking stays on (--reasoning on, deepseek format) and the system prompt tells the model to
     think deeply and not to cap its thinking time."""
-    manager = read_text("scripts/manage-qwen.ps1")
-    desktop = read_text("qwen-desktop.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
 
     assert "--reasoning-budget" not in manager
     assert "$liteThinkBudget" not in manager
@@ -231,7 +231,7 @@ def test_lite_thinks_without_a_reasoning_budget():
     assert "'--reasoning-format', 'deepseek'" in manager
     # The deep-thinking instruction was SOFTENED: thinking tokens share the output budget,
     # so the model could think very long and skip writing the visible answer; it is now told
-    # to always write its answer too (see the thinking-off recovery in qwen-inference.ps1).
+    # to always write its answer too (see the thinking-off recovery in mamidlabs-inference.ps1).
     assert "Think deeply and carefully" in desktop
     assert "ALWAYS WRITE YOUR ANSWER" in desktop
 
@@ -242,7 +242,7 @@ def test_mtp_speculative_decoding_is_enabled_when_model_has_mtp_layers():
     (agent/mtp_inject.py). --spec-type draft-mtp needs NO separate draft model and is
     lossless. The flag is added only if the model really carries MTP layers; otherwise
     llama.cpp fails with "model doesn't contain MTP layers"."""
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
 
     assert "'--spec-type', 'draft-mtp'" in manager
     # For every profile that has MTP layers (max/flash/lite); not custom, guarded by the GGUF check.
@@ -261,7 +261,7 @@ def test_thinking_is_only_switched_off_for_empty_answer_recovery():
     recovery. On LITE reasoning_effort is ignored, so thinking can consume the whole output
     budget and leave no answer; the recovery path retries with `enable_thinking = $false`
     (Set-NoThinkingRequest). The main request/compaction still ask for low effort."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
 
     assert "function Set-LowEffortRequest" in inference
     assert "function Set-NoThinkingRequest" in inference
@@ -282,7 +282,7 @@ def test_lite_system_prompt_encourages_deep_reasoning():
     is only present for the lite profile (the prefix is fixed per profile, so the KV
     cache is not broken). The instruction was SOFTENED: not "extend thinking endlessly"
     but "think enough and ALWAYS WRITE YOUR ANSWER" (thinking shares the output budget)."""
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
 
     assert "Think deeply and carefully" in desktop
     idx = desktop.index("Think deeply and carefully")
@@ -373,7 +373,7 @@ $proDefs  = @(Get-ToolDefinitions $proJob)
 "LITE_MODES=$((($liteDefs | Where-Object { $_.function.name -eq 'generate_image' }).function.parameters.properties.mode.enum) -join ',')"
 "PRO_MODES=$((($proDefs  | Where-Object { $_.function.name -eq 'generate_image' }).function.parameters.properties.mode.enum) -join ',')"
 """
-    script = script.replace("INFERENCE", str(ROOT / "agent" / "qwen-inference.ps1"))
+    script = script.replace("INFERENCE", str(ROOT / "agent" / "mamidlabs-inference.ps1"))
     out = run_pwsh_functions(script)
     got = dict(line.split("=", 1) for line in out.strip().splitlines() if "=" in line)
     # Every tool is offered the same way in every profile (the tool set is profile-independent).
@@ -451,7 +451,7 @@ def test_every_profile_is_fully_downloadable():
 
 
 def test_lite_language_model_matches_manager_default():
-    """The GGUF in the catalog and the file manage-qwen.ps1 opens must be the same."""
+    """The GGUF in the catalog and the file manage-mamidlabs.ps1 opens must be the same."""
     lite = next(p for p in load_catalog()["profiles"] if p["id"] == "lite")
     gguf = [
         e
@@ -463,8 +463,8 @@ def test_lite_language_model_matches_manager_default():
 
     assert len(gguf) == 1
     name = gguf[0]["target"].rsplit("/", 1)[-1]
-    assert name in read_text("scripts/manage-qwen.ps1")
-    # manage-qwen.ps1 looks for the file in this folder.
+    assert name in read_text("scripts/manage-mamidlabs.ps1")
+    # manage-mamidlabs.ps1 looks for the file in this folder.
     assert gguf[0]["target"].startswith("models/Huihui-Qwen3.5-9B-abliterated-i1-GGUF/")
 
 
@@ -503,7 +503,7 @@ def test_downloader_rejects_paths_outside_the_repository():
 
 
 def test_profile_menu_is_wired_into_the_desktop():
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     catalog = read_text("agent/profile-catalog.ps1")
 
     assert "profile-catalog.ps1')" in desktop

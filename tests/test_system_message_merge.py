@@ -60,7 +60,7 @@ function BuildSend($messages) {
 
 
 def test_fix_is_present_in_source_and_merges_instead_of_duplicating():
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     assert "[string]$rest[0].role -eq 'system'" in inference
     assert "$merged = @{ role = 'system'; content = ([string]$rest[0].content)" in inference
     # At most one system message must be produced; the old unconditional "@($toolTrustGuard) + $rest"

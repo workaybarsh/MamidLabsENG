@@ -30,11 +30,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture
 def qat():
-    """Loads qwen-agent-tools.py from its file path; it patches socket.getaddrinfo
+    """Loads mamidlabs-agent-tools.py from its file path; it patches socket.getaddrinfo
     at import time, so the real one is restored afterwards (same pattern as
     test_dns_rebinding_fix)."""
     real_getaddrinfo = socket.getaddrinfo
-    spec = importlib.util.spec_from_file_location("qat_offline", ROOT / "agent" / "qwen-agent-tools.py")
+    spec = importlib.util.spec_from_file_location("qat_offline", ROOT / "agent" / "mamidlabs-agent-tools.py")
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -133,7 +133,7 @@ def test_offline_real_tool_process_fails_cleanly():
     payload = json.dumps({"action": "search_web", "query": "offline test", "count": 2})
 
     proc = subprocess.run(
-        [exe, str(ROOT / "agent" / "qwen-agent-tools.py")],
+        [exe, str(ROOT / "agent" / "mamidlabs-agent-tools.py")],
         input=payload, capture_output=True, text=True, encoding="utf-8",
         timeout=150, env=env,
     )

@@ -157,7 +157,7 @@ def fetch_page(request):
     url = str(request.get('url', ''))
     try:
         safe_url = _validate_remote_url(url)
-        with _open_remote_url(safe_url, {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QwenLocal/1.0'}, 25) as response:
+        with _open_remote_url(safe_url, {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MamidLabs/1.0'}, 25) as response:
             charset = response.headers.get_content_charset() or 'utf-8'
             raw = _read_limited(response, MAX_PAGE_BYTES).decode(charset, errors='replace')
     except Exception as exc:
@@ -194,7 +194,7 @@ def find_reference_image(request):
     except Exception as exc:
         return json.dumps({'error': 'image search failed: %s' % exc}, ensure_ascii=False)
 
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QwenLocal/1.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MamidLabs/1.0'}
     for item in results:
         url = item.get('image') or item.get('thumbnail')
         if not url:

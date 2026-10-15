@@ -19,7 +19,7 @@ def read_text(path: str) -> str:
 
 
 def test_backup_function_exists_and_is_wired_into_both_write_tools():
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     assert "function Backup-FileBeforeOverwrite" in inference
     assert "$backup = Backup-FileBeforeOverwrite $target" in inference
     assert inference.count("$backup = Backup-FileBeforeOverwrite $target") == 2, (
@@ -30,7 +30,7 @@ def test_backup_function_exists_and_is_wired_into_both_write_tools():
 def test_backup_only_runs_when_a_file_already_exists():
     """On the first write (no file) no backup is needed - the Test-Path check already
     ensures that, but without an explicit test a regression would go unnoticed."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     fn = inference.split("function Backup-FileBeforeOverwrite")[1].split("function Wait-LocalModelStopped")[0]
     assert "if (!(Test-Path -LiteralPath $target -PathType Leaf)) { return $null }" in fn
 
@@ -38,7 +38,7 @@ def test_backup_only_runs_when_a_file_already_exists():
 def test_backup_failure_is_not_silently_swallowed():
     """If the backup fails (disk full, permission problem) it throws ON PURPOSE;
     silently allowing an irreversible write would be wrong."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     fn = inference.split("function Backup-FileBeforeOverwrite")[1].split("function Wait-LocalModelStopped")[0]
     assert "try" not in fn or "catch" not in fn, (
         "Backup-FileBeforeOverwrite must not swallow the error itself; the general "
@@ -71,7 +71,7 @@ function Get-Functions([string]$path) {
 
 
 def test_overwrite_backs_up_the_previous_version_with_real_content(tmp_path):
-    inference_path = str(ROOT / "agent" / "qwen-inference.ps1").replace("\\", "\\\\")
+    inference_path = str(ROOT / "agent" / "mamidlabs-inference.ps1").replace("\\", "\\\\")
     folder = str(tmp_path).replace("\\", "\\\\")
     out = run_pwsh_functions(rf"""
 $JobData = @{{ root = '{tmp_path}' }}

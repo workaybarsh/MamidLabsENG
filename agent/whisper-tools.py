@@ -134,7 +134,7 @@ def unload(_req: dict | None = None) -> dict:
 
     The persistent (warm) worker holds the models in-process; this is called before the
     language model is reloaded into VRAM so the audio models are released first (see
-    qwen-inference.ps1). The process KEEPS RUNNING (only the models are dropped), so the
+    mamidlabs-inference.ps1). The process KEEPS RUNNING (only the models are dropped), so the
     imports/caches stay warm.
     """
     from transcriber import asr, diarize, events

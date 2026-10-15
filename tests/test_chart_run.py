@@ -14,8 +14,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "agent" / "chart-run.ps1"
-INFERENCE = ROOT / "agent" / "qwen-inference.ps1"
-DESKTOP = ROOT / "qwen-desktop.ps1"
+INFERENCE = ROOT / "agent" / "mamidlabs-inference.ps1"
+DESKTOP = ROOT / "mamidlabs-desktop.ps1"
 
 
 def read_text(path: Path) -> str:

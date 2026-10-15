@@ -1,4 +1,4 @@
-"""Binary file detection for read_bound_file in agent/qwen-inference.ps1.
+"""Binary file detection for read_bound_file in agent/mamidlabs-inference.ps1.
 
 If an .exe/.zip/image is read as text, garbage characters end up in the model context
 (wasted tokens, undefined behavior). Binary files are detected and rejected; UTF-8 text
@@ -19,7 +19,7 @@ def read_text(path: str) -> str:
 
 
 def test_read_bound_file_checks_for_binary_before_reading_as_text():
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
 
     assert "function Test-BinaryFile" in inference
     assert "if (Test-BinaryFile $target)" in inference
@@ -30,7 +30,7 @@ def test_read_bound_file_checks_for_binary_before_reading_as_text():
 
 
 def _run_function_isolated(function_text: str, invocation: str, tmp_path: Path) -> str:
-    """Runs the function in isolation, without dot-sourcing the whole qwen-inference.ps1
+    """Runs the function in isolation, without dot-sourcing the whole mamidlabs-inference.ps1
     (including the top-level code that expects JobData/Shared). Uses -File instead of
     -Command: non-ASCII characters in a -Command argument can get garbled between the
     Python -> pwsh encoding layers; writing to a file with a UTF-8 BOM (the same technique
@@ -49,7 +49,7 @@ def _run_function_isolated(function_text: str, invocation: str, tmp_path: Path) 
 
 
 def _extract_function(name: str) -> str:
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     start = inference.index(f"function {name}(")
     # A simple brace counter: finds the close of the function body.
     depth = 0
@@ -70,7 +70,7 @@ def _extract_function(name: str) -> str:
     ("assets/icons/mamidlabs.ico", True),
     ("assets/icons/mamidlabs-64.png", True),
     ("README.md", False),
-    ("scripts/manage-qwen.ps1", False),
+    ("scripts/manage-mamidlabs.ps1", False),
 ])
 def test_binary_detection_on_real_repository_files(filename, expect_binary, tmp_path):
     """Runs on real repository files; not mock data."""

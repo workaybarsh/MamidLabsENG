@@ -26,8 +26,8 @@ def test_custom_provider_base_url_is_passed_to_the_worker():
     must pass apiSettings + baseUrl into jobData and the worker must use them for real
     requests; otherwise the custom provider fails with "enter a base address" in chat
     (only verification works). Found in a real end-to-end test."""
-    desktop = read_text("qwen-desktop.ps1")
-    worker = read_text("agent/qwen-inference.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
+    worker = read_text("agent/mamidlabs-inference.ps1")
     assert desktop.count("apiSettings = $script:apiSettings") >= 2
     assert desktop.count("baseUrl = (Get-CustomBaseUrl)") >= 2
     assert "$script:apiSettings = if ($JobData.apiSettings)" in worker
@@ -39,7 +39,7 @@ def test_custom_provider_base_url_is_passed_to_the_worker():
 
 def test_model_profiles_use_max_flash_and_lite_names():
     registry = read_text("agent/model-registry.ps1")
-    manager = read_text("scripts/manage-qwen.ps1")
+    manager = read_text("scripts/manage-mamidlabs.ps1")
 
     assert "builtin-max" in registry
     assert "builtin-flash" in registry
@@ -51,7 +51,7 @@ def test_model_profiles_use_max_flash_and_lite_names():
 
 
 def test_ocr_only_returns_text_without_explanation_request():
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
 
     assert "function Test-OcrExplainIntent" in inference
     assert "$ocrDirect = !(Test-OcrExplainIntent $userText)" in inference
@@ -61,13 +61,13 @@ def test_ocr_only_returns_text_without_explanation_request():
 
 
 def test_image_ocr_swaps_local_model_and_command_tool_uses_approval():
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     ocr = read_text("agent/ocr-tools.py")
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
 
     assert "function Invoke-ImageOcrWithModelSwap" in inference
     assert "action = 'ocr_image'; path = [string]$paths[0]; device = 'gpu'" in inference
-    assert "& (Get-ManageQwenPath) -Action stop" in inference
+    assert "& (Get-ManageMamidLabsPath) -Action stop" in inference
     assert "Start-LocalModelRestore ([string]$JobData.profile)" in inference
     assert "function Request-Approval([string]$toolName" in inference
     assert "Request-Approval 'run_command'" in inference
@@ -93,7 +93,7 @@ def test_image_ocr_swaps_local_model_and_command_tool_uses_approval():
 def test_generation_tools_are_gated_by_installed_components():
     """Image/video and multi-image OCR are offered only when the component is installed (or via
     API); otherwise the model used to call a missing tool and behave erratically."""
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "imagegen = ($hasMedia -or $imageApiOk)" in desktop
     assert "videogen = ($hasMedia -or $videoApiOk)" in desktop
     assert "$hasMedia = Test-Path -LiteralPath (Join-Path $root 'ComfyUI\\main.py')" in desktop
@@ -101,7 +101,7 @@ def test_generation_tools_are_gated_by_installed_components():
 
 
 def test_multi_image_selection_is_preserved_until_send_validation():
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
 
     add_image_start = desktop.index("function Add-SelectedImage")
     add_image_end = desktop.index("function Add-SelectedVideo", add_image_start)
@@ -119,7 +119,7 @@ def test_provider_adapters_preserve_forced_tool_choice():
 
 
 def test_api_video_tools_do_not_advertise_unsupported_video_continuation():
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
 
     assert "$videoModes = @('text', 'image')" in inference
     assert "$videoModes += 'video'" in inference
@@ -132,7 +132,7 @@ def test_stream_watchdog_uses_fresh_connection_and_survives_dropped_stream():
     was forcibly closed by the remote host." (WSAECONNRESET). The fix: local requests
     close the connection (a fresh one per turn) and a drop with answer text in hand is
     not treated as an error."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
 
     assert "if ($provider -eq 'local') { $request.Headers.ConnectionClose = $true }" in inference
     assert "$result.finishReason = 'connection-closed'" in inference
@@ -142,8 +142,8 @@ def test_web_tool_failure_is_detected_and_discourages_workarounds():
     """When web search / page download fails because of the network, a system note
     stops the model from working around it with run_command (ping/curl...); the tool
     failure is detected reliably."""
-    inference = read_text("agent/qwen-inference.ps1")
-    desktop = read_text("qwen-desktop.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
 
     assert "function Test-WebToolFailure" in inference
     assert "$script:webToolFailCount" in inference
@@ -170,7 +170,7 @@ def test_web_tool_failure_is_detected_and_discourages_workarounds():
 def test_run_command_is_only_offered_on_explicit_command_intent():
     """Unless the user explicitly asks for a command/terminal, run_command is NOT offered to
     the model; so the small model cannot divert to absurd command attempts on a web failure."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
 
     assert "function Test-CommandIntent" in inference
     assert "if (Test-CommandIntent $userText) {" in inference
@@ -187,7 +187,7 @@ def test_command_intent_detection_matrix():
     script = r"""
 $job = @{ messages = @(@{ role = 'user'; content = 'x' }); compactOnly = $true; provider = 'local'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $false; internet = $false; office = $false; documentCreate = $false }
 $shared = @{ Cancel = $false }
-. '__ROOT__\agent\qwen-inference.ps1' $job $shared | Out-Null
+. '__ROOT__\agent\mamidlabs-inference.ps1' $job $shared | Out-Null
 $cases = @(
   @{ t = 'run this command: ipconfig'; e = $true }
   @{ t = 'open the terminal and type dir'; e = $true }
@@ -227,7 +227,7 @@ def test_web_tool_failure_detection_matrix():
     script = r"""
 $job = @{ messages = @(@{ role = 'user'; content = 'x' }); compactOnly = $true; provider = 'local'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $false; internet = $false; office = $false; documentCreate = $false }
 $shared = @{ Cancel = $false }
-. '__ROOT__\agent\qwen-inference.ps1' $job $shared | Out-Null
+. '__ROOT__\agent\mamidlabs-inference.ps1' $job $shared | Out-Null
 $cases = @(
   @{ n = 'search_web'; r = '{"error":"Web search failed"}'; e = $true }
   @{ n = 'search_web'; r = '[{"title":"x","href":"u"}]'; e = $false }
@@ -262,7 +262,7 @@ def test_custom_provider_retries_and_tolerates_partial_stream():
     """D3: for 'custom' (an OpenAI-compatible custom endpoint) a transient connection error gets
     a bounded retry + partial-answer tolerance. Remote providers (openai/claude/gemini/deepseek)
     are PRESERVED: only local + custom get this tolerance."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
 
     assert "$retryableProvider = $provider -eq 'local' -or $provider -eq 'custom'" in inference
     assert "if (!$retryableProvider -or $networkRetried" in inference
@@ -322,7 +322,7 @@ def test_custom_provider_dropped_stream_is_not_an_error(tmp_path):
             f"""
 $job = @{{ messages = @(@{{ role = 'user'; content = 'hi' }}); compactOnly = $true; provider = 'custom'; baseUrl = '{base}'; model = 'test'; contextLimit = 32768; maxTokens = 100; agent = $false; internet = $false; office = $false; documentCreate = $false }}
 $shared = @{{ Cancel = $false }}
-. '{ROOT}\\agent\\qwen-inference.ps1' $job $shared | Out-Null
+. '{ROOT}\\agent\\mamidlabs-inference.ps1' $job $shared | Out-Null
 # On the compactOnly exit the script closes its own HttpClient.
 $script:http = [Net.Http.HttpClient]::new(); $script:http.Timeout = [Threading.Timeout]::InfiniteTimeSpan
 $turn = @{{ reasoning = ''; content = ''; usage = $null; toolParts = @{{}}; finishReason = $null }}
@@ -350,7 +350,7 @@ try {{
 
 
 def test_ocr_model_swap_keeps_json_response_separate_from_status_events():
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     start = inference.index("function Invoke-ImageOcrWithModelSwap")
     end = inference.index("function Invoke-Tool", start)
     ocr_swap = inference[start:end]
@@ -361,7 +361,7 @@ def test_ocr_model_swap_keeps_json_response_separate_from_status_events():
 
 
 def test_security_contracts_cover_ssrf_archive_and_local_output_paths():
-    tools = read_text("agent/qwen-agent-tools.py")
+    tools = read_text("agent/mamidlabs-agent-tools.py")
     office = read_text("agent/office-tools.py")
     media = read_text("agent/api-media.py")
     video_tools = read_text("agent/media-tools.py")
@@ -391,7 +391,7 @@ def test_security_contracts_cover_ssrf_archive_and_local_output_paths():
 
 
 def test_chat_history_remains_account_encrypted():
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
 
     assert "MAMIDLABS-CHAT-DPAPI-V1" in desktop
     assert "Protect-ChatText $json" in desktop
@@ -405,18 +405,18 @@ def test_single_instance_check_verifies_the_window_class():
     it from EVER starting (seen on a real machine; the UI smoke step reported
     'window closed before opening'). The single-instance check now accepts only a
     real WinForms window (class name WindowsForms10.*)."""
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "GetClassName" in desktop
     assert "WindowsForms10.*" in desktop
-    idx_find = desktop.index("[QwenWindow]::FindWindow([NullString]::Value, $appTitle)")
+    idx_find = desktop.index("[MamidLabsWindow]::FindWindow([NullString]::Value, $appTitle)")
     idx_class = desktop.index("WindowsForms10.*", idx_find)
     idx_return = desktop.index("return", idx_find)
     assert idx_find < idx_class < idx_return
 
 
 def test_remote_url_validation_blocks_local_and_non_http_targets():
-    path = ROOT / "agent" / "qwen-agent-tools.py"
-    spec = importlib.util.spec_from_file_location("qwen_agent_tools", path)
+    path = ROOT / "agent" / "mamidlabs-agent-tools.py"
+    spec = importlib.util.spec_from_file_location("mamidlabs_agent_tools", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -442,8 +442,8 @@ def test_archive_reader_stops_before_unbounded_memory_growth():
 
 
 def test_previous_image_payload_is_not_kept_for_follow_up_messages():
-    desktop = read_text("qwen-desktop.ps1")
-    inference = read_text("agent/qwen-inference.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
 
     assert "$turnHasImage = [bool]$script:currentTurnHasImage" in desktop
     assert "$script:currentTurnHasImage -and" in desktop
@@ -497,11 +497,11 @@ def test_runtime_ocr_intent_matrix():
     if not pwsh:
         pytest.skip("PowerShell 7 is unavailable")
 
-    # qwen-inference.ps1 derives $root from its own location; it is dot-sourced through ROOT.
+    # mamidlabs-inference.ps1 derives $root from its own location; it is dot-sourced through ROOT.
     script = r"""
 $job = @{ messages = @(@{ role = 'user'; content = 'Read the text in the image' }); compactOnly = $true; provider = 'local'; model = 'test'; contextLimit = 32768; maxTokens = 1200; agent = $false; internet = $false; office = $false; documentCreate = $false }
 $shared = @{ Cancel = $false }
-. '__ROOT__\agent\qwen-inference.ps1' $job $shared | Out-Null
+. '__ROOT__\agent\mamidlabs-inference.ps1' $job $shared | Out-Null
 foreach ($text in @('Read the text in the image', 'Explain what you read in this image', 'Explain the text in the image', "What's in the image", 'Read the text in the image and state the confidence score')) {
     Write-Output (('OCR=' + [bool](Test-OcrIntent $text)) + '|EXPLAIN=' + [bool](Test-OcrExplainIntent $text))
 }
@@ -536,8 +536,8 @@ foreach ($text in @('Read the text in the image', 'Explain what you read in this
 
 
 def test_multi_image_ocr_is_an_explicit_one_turn_mode():
-    desktop = read_text("qwen-desktop.ps1")
-    inference = read_text("agent/qwen-inference.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
 
     assert "$script:multiImageOcrMode = $false" in desktop
     assert "function Test-MultiImageOcrActivationIntent" in desktop
@@ -555,7 +555,7 @@ def test_multi_image_ocr_is_an_explicit_one_turn_mode():
 
 def test_generated_artifacts_can_be_opened_directly():
     """A generated file (image/video/document) must be openable from the chat bubble in one click."""
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "function Open-BubbleArtifact" in desktop
     assert "Open-BubbleArtifact $this.Tag" in desktop
     assert "Start-Process -FilePath $path" in desktop
@@ -581,7 +581,7 @@ def test_system_prompt_requires_verification_and_forbids_fabrication():
     could consume the output budget and leave no visible answer; the model is now told to
     ALWAYS WRITE ITS ANSWER too. It is fixed, so the prefix never changes and the KV cache
     is not broken."""
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "Give evidence-based, correct answers" in desktop
     assert "review your critical steps" in desktop
     assert "ALWAYS WRITE YOUR ANSWER" in desktop

@@ -176,8 +176,8 @@ does not use it.
 ## Managing the model server manually
 
 ```powershell
-%LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\manage-qwen.ps1 -Action switch -Profile max
-%LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\manage-qwen.ps1 -Action stop
+%LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\manage-mamidlabs.ps1 -Action switch -Profile max
+%LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\manage-mamidlabs.ps1 -Action stop
 ```
 
 `-Action` values: `start`, `switch`, `stop`, `closecomfy`. Profile values: `max`, `flash`, `lite`.
@@ -192,4 +192,4 @@ does not use it.
 | No image or video can be generated | Check the `logs\comfyui.stderr.log` file. `WinError 10022` lines are harmless. |
 | "The photo editing LoRA was not found" | Download the LoRA with **Download missing** in the Profile manager (`krea2_identity_edit_v1_2.safetensors`, [conradlocke/krea2-identity-edit](https://huggingface.co/conradlocke/krea2-identity-edit), ~1.7 GB). |
 | "The comfyui-krea2edit node pack for photo editing is not installed" | Install the node pack with `install-mamidlabs.ps1 -Stage comfyui`. |
-| The shortcut does not work | Run the installation again; the shortcut opens the app through `launch-qwen-desktop.vbs` with the bundled PowerShell 7. |
+| The shortcut does not work | Run the installation again; the shortcut opens the app through `launch-mamidlabs-desktop.vbs` with the bundled PowerShell 7. |

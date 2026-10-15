@@ -1,5 +1,5 @@
 ﻿# llama-server alias per profile. Must stay identical to the $profileAliases table in
-# scripts\manage-qwen.ps1; test_qwen_contracts checks this.
+# scripts\manage-mamidlabs.ps1; test_mamidlabs_contracts checks this.
 # The table is deliberately built inside a function: it is defined even when the file is
 # loaded only for its functions, and no method is called on null.
 function Get-LocalProfileAliases {
@@ -41,7 +41,7 @@ function Update-ProviderSelection {
         # Only a profile whose language model files are on disk is listed (ComfyUI media
         # models excluded - the install may have used -SkipMedia and they are not needed for
         # chat); otherwise LITE (or MAX/FLASH) could be selected on a PC where it was never
-        # installed, and manage-qwen.ps1 would fail with a missing-file error on selection.
+        # installed, and manage-mamidlabs.ps1 would fail with a missing-file error on selection.
         $script:modelEntries=@()
         foreach ($def in (Get-BuiltinProfileDefinitions)) {
             if (Test-LocalProfileChatFilesPresent $def.profile) {
@@ -95,10 +95,10 @@ function Select-RegisteredModel {
     $script:providerId=$entry.provider
     $script:ctxLimit=$entry.contextLimit;$script:compactAt=[int]($script:ctxLimit*.67)
     Save-ApiSettings;Update-LiveMetrics
-    if($entry.profile -eq 'off'){Stop-LocalQwen}
-    elseif($entry.provider -eq 'local'){Restart-LocalQwen $entry.profile}
+    if($entry.profile -eq 'off'){Stop-LocalMamidLabs}
+    elseif($entry.provider -eq 'local'){Restart-LocalMamidLabs $entry.profile}
     else{
-        Stop-LocalQwen
+        Stop-LocalMamidLabs
         $metric.Text="$($entry.label) selected."
     }
 }

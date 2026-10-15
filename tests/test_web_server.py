@@ -136,7 +136,7 @@ def test_model_switch_only_allows_known_ids():
 
 
 def test_web_settings_is_wired_into_the_desktop_ui():
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "web-settings.ps1" in desktop
     assert "Show-WebSettings" in desktop
     assert "'Web management…'" in desktop

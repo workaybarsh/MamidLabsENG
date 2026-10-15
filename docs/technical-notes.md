@@ -11,10 +11,10 @@ choosing the folder in the wizard or with `install-mamidlabs.ps1 -Root <path>`.
 ## Architecture
 
 ```
-qwen-desktop.ps1  (WinForms interface, single window)
+mamidlabs-desktop.ps1  (WinForms interface, single window)
       │
-      ├─ agent/qwen-inference.ps1   → llama-server /v1/chat/completions (stream + tool loop)
-      │       ├─ agent/qwen-agent-tools.py  → web search, page reading, finding reference images
+      ├─ agent/mamidlabs-inference.ps1   → llama-server /v1/chat/completions (stream + tool loop)
+      │       ├─ agent/mamidlabs-agent-tools.py  → web search, page reading, finding reference images
       │       ├─ agent/office-tools.py      → read/write PDF / Word / Excel / PowerPoint
       │       └─ agent/ocr-tools.py         → PaddleOCR on the GPU for plain images, on the CPU for PDFs
       │
@@ -23,7 +23,7 @@ qwen-desktop.ps1  (WinForms interface, single window)
       │       └─ agent/media-tools.py       → video frame extraction, thumbnails
       │
       ├─ agent/media-model-swap.ps1 → VRAM handover, ComfyUI lifecycle
-      ├─ scripts/manage-qwen.ps1    → start / stop llama-server / switch profile, memory gate
+      ├─ scripts/manage-mamidlabs.ps1    → start / stop llama-server / switch profile, memory gate
       │       └─ agent/process-launch.ps1   → detaches long-lived processes from the caller's output pipe
       └─ agent/profile-catalog.ps1  → profile catalog, missing file scan, download
               └─ agent/profiles.json        → file list and sources per profile
@@ -43,7 +43,7 @@ qwen-desktop.ps1  (WinForms interface, single window)
 | Chat history | `%LOCALAPPDATA%\Programs\MamidLabs\chats` |
 | Logs | `%LOCALAPPDATA%\Programs\MamidLabs\logs` |
 
-Launch: the **MamidLabs** shortcut on the desktop → `launch-qwen-desktop.vbs`
+Launch: the **MamidLabs** shortcut on the desktop → `launch-mamidlabs-desktop.vbs`
 (no console window opens; if the app is already open it is brought to the front).
 
 ## Profiles
@@ -85,7 +85,7 @@ Measured on an RTX 5060 Ti 16 GB with llama.cpp's memory dump (32K context):
 On the GPU the image projector asked for another 1,133 MiB with weights and compute buffer; it
 exceeded the total free space and spilled ~420 MiB into shared memory. With the projector moved to
 the CPU, chat went from 19.6 to 25.0 tok/s and reading a single image from 56–58 s to 29 s. The
-memory check in `scripts/manage-qwen.ps1` asks for the model file + 750 MiB (threshold 15350 = the
+memory check in `scripts/manage-mamidlabs.ps1` asks for the model file + 750 MiB (threshold 15350 = the
 measured footprint). **ComfyUI lifecycle**
 (`settings/api.json` → `comfyKeepAlive`, default `false`): ComfyUI runs **only during image/video
 generation**; it is closed when the job ends and before the language model loads, so it holds
@@ -99,7 +99,7 @@ again.
 **Automatic VRAM cleanup:** before the language model loads, leftover app-owned **GPU workers** are
 closed too — an idle persistent audio worker (`whisper-tools.py --serve`) and the OCR worker
 (`ocr-tools.py`); after a crash or forced close their remaining CUDA contexts (~140–600 MiB) can eat
-the 27B's thin margin. `scripts/manage-qwen.ps1` → `Get-AppGpuWorkers`/`Stop-OrphanWorkers` runs
+the 27B's thin margin. `scripts/manage-mamidlabs.ps1` → `Get-AppGpuWorkers`/`Stop-OrphanWorkers` runs
 **before** the memory gate, waits for the driver to release VRAM and retries the gate a bounded
 number of times (~7 s). The cleanup only targets processes under the install root; other
 applications are never touched.
@@ -333,7 +333,7 @@ always follow a prompt note, there are two **hard guards**: (1) once a web tool 
 same request, **web tools are no longer offered** to the model in later rounds (this stops the search
 loop); (2) `run_command` refuses **network-probe commands** (`ping`, `curl`, `wget`, `nslookup`,
 `ipconfig`, …) without running them. These guards only trigger **after** a web failure; they do not
-affect a user's unrelated, explicit command request. Contract tests: `tests/test_qwen_contracts.py`.
+affect a user's unrelated, explicit command request. Contract tests: `tests/test_mamidlabs_contracts.py`.
 
 Moreover, **`run_command` is offered to the model only when the user explicitly asks for a command
 or a terminal** (`Test-CommandIntent`): patterns such as command, terminal, console, cmd,
@@ -572,7 +572,7 @@ pipeline lives in the `agent/transcriber/` package and runs in `venv\asr`:
   `Invoke-PythonTool` path (behavior preserved).
 - **HF cache (`HF_HOME`):** the audio models (whisper large-v3 + AST) live in the install root's HF
   cache (`tools\hf-home`) and are used **offline** at runtime; the app sets
-  `$env:HF_HOME = <root>\tools\hf-home` in `qwen-desktop.ps1` and `agent/qwen-inference.ps1` passes
+  `$env:HF_HOME = <root>\tools\hf-home` in `mamidlabs-desktop.ps1` and `agent/mamidlabs-inference.ps1` passes
   `Get-HfHome` to both the one-shot `Invoke-PythonTool` (child process env) and the persistent
   `Start-AsrServerProcess`. Without it the worker falls back to the DEFAULT HF cache, AST is not
   there, and because `events.tag()` guards the load with `try/except` the transcript still completes

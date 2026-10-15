@@ -1,4 +1,4 @@
-"""DNS rebinding protection for agent/qwen-agent-tools.py.
+"""DNS rebinding protection for agent/mamidlabs-agent-tools.py.
 
 The IP addresses resolved while validating a URL are pinned for the connection.
 Otherwise the real connection resolves the host again, and a malicious low-TTL record
@@ -29,12 +29,12 @@ requires_internet = pytest.mark.skipif(not _has_internet(), reason="no internet 
 
 @pytest.fixture
 def qat(monkeypatch):
-    """Loads qwen-agent-tools.py from its file path instead of importing it (because of
+    """Loads mamidlabs-agent-tools.py from its file path instead of importing it (because of
     the hyphenated file name). After each test socket.getaddrinfo and the pin table are
     restored to the real module state; since the module changes socket.getaddrinfo at
     import time, this prevents leaks between tests."""
     real_getaddrinfo = socket.getaddrinfo
-    spec = importlib.util.spec_from_file_location("qat_under_test", ROOT / "agent" / "qwen-agent-tools.py")
+    spec = importlib.util.spec_from_file_location("qat_under_test", ROOT / "agent" / "mamidlabs-agent-tools.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     try:

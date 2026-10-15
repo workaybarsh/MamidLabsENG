@@ -257,8 +257,8 @@ function Invoke-Preflight {
         Write-Warn 'Visual C++ Redistributable (2015-2022, x64) not found; llama-server may not run.'
     } else { Write-Ok 'Visual C++ Redistributable available' }
 
-    if (!(Test-Path -LiteralPath (Join-Path $Source 'qwen-desktop.ps1') -PathType Leaf)) {
-        throw ('qwen-desktop.ps1 is missing in the source folder: ' + $Source)
+    if (!(Test-Path -LiteralPath (Join-Path $Source 'mamidlabs-desktop.ps1') -PathType Leaf)) {
+        throw ('mamidlabs-desktop.ps1 is missing in the source folder: ' + $Source)
     }
     Write-Ok ('Source package: ' + $Source)
 }
@@ -283,7 +283,7 @@ function Invoke-Layout {
 
     # If the app is open the icons and scripts are locked; copying stops halfway and the
     # installation is left in a mixed version. First check whether anything is open.
-    $app = Join-Path $Root 'qwen-desktop.ps1'
+    $app = Join-Path $Root 'mamidlabs-desktop.ps1'
     $running = @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" | Where-Object {
         $_.CommandLine -and $_.CommandLine.IndexOf($app, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
     if ($running) { throw 'MamidLabs is open; the program files are locked. Close the app and run the installation again.' }
@@ -292,7 +292,7 @@ function Invoke-Layout {
     # source package; a script-based install must copy it to the root (and to setup-source) too.
     # Source == Root: the files are already in place; copying a file onto itself errors.
     if (!$sameRoot) {
-        foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE', 'EULA.txt')) {
+        foreach ($file in @('mamidlabs-desktop.ps1', 'launch-mamidlabs-desktop.vbs', 'README.md', 'LICENSE', 'EULA.txt')) {
             $from = Join-Path $Source $file
             if (Test-Path -LiteralPath $from -PathType Leaf) {
                 Copy-Item -LiteralPath $from -Destination (Join-Path $Root $file) -Force
@@ -329,7 +329,7 @@ function Invoke-Layout {
     $sourceFull = [IO.Path]::GetFullPath($Source).TrimEnd('\')
     if ((Test-Path -LiteralPath $setupSource -PathType Container) -and ($sourceFull -ine $setupSourceFull)) {
         # The same top-level file list (including EULA.txt) is also written to the source package.
-        foreach ($file in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs', 'README.md', 'LICENSE', 'EULA.txt')) {
+        foreach ($file in @('mamidlabs-desktop.ps1', 'launch-mamidlabs-desktop.vbs', 'README.md', 'LICENSE', 'EULA.txt')) {
             $from = Join-Path $Source $file
             if (Test-Path -LiteralPath $from -PathType Leaf) { Copy-Item -LiteralPath $from -Destination $setupSource -Force }
         }
@@ -373,7 +373,7 @@ function Invoke-Layout {
             $pointsHere = (($existing.TargetPath + ' ' + $existing.Arguments + ' ' + $existing.WorkingDirectory).IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0)
             if (!$pointsHere) { $linkPath = Join-Path $desktop ('MamidLabs (' + (Split-Path -Leaf $Root) + ').lnk') }
         }
-        $target = Join-Path $Root 'launch-qwen-desktop.vbs'
+        $target = Join-Path $Root 'launch-mamidlabs-desktop.vbs'
         $icon = Join-Path $Root 'assets\icons\mamidlabs.ico'
         if ((Test-Path -LiteralPath $target -PathType Leaf) -and (!(Test-Path -LiteralPath $linkPath) -or $Force)) {
             $shortcut = $shell.CreateShortcut($linkPath)
@@ -709,10 +709,10 @@ function Invoke-ComfyUI {
 function Invoke-Verify {
     Write-Step 'Installation verification'
     $checks = @(
-        @{ label = 'Application';          path = 'qwen-desktop.ps1' },
+        @{ label = 'Application';          path = 'mamidlabs-desktop.ps1' },
         @{ label = 'Profile catalog';      path = 'agent\profiles.json' },
         @{ label = 'Profile module';       path = 'agent\profile-catalog.ps1' },
-        @{ label = 'Model manager';        path = 'scripts\manage-qwen.ps1' },
+        @{ label = 'Model manager';        path = 'scripts\manage-mamidlabs.ps1' },
         @{ label = 'Bundled PowerShell 7'; path = 'runtime\pwsh\pwsh.exe' },
         @{ label = 'llama-server';         path = ('llama.cpp\' + $script:LlamaBuild + '\llama-server.exe') },
         @{ label = 'app environment';       path = 'venv\app\Scripts\python.exe' }
@@ -771,7 +771,7 @@ function Invoke-Verify {
     } else {
         Write-Host '   Installation complete. Next steps:' -ForegroundColor Green
         Write-Host ''
-        Write-Host ('   1. Open the app:  ' + (Join-Path $Root 'launch-qwen-desktop.vbs'))
+        Write-Host ('   1. Open the app:  ' + (Join-Path $Root 'launch-mamidlabs-desktop.vbs'))
         Write-Host '   2. Choose the profile from the Profiles menu at the top left.'
         Write-Host '   3. Fetch the missing model files with "Profile manager -> Download missing".'
         if ($Profile -eq 'lite') {

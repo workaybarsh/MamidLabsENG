@@ -21,7 +21,7 @@ def test_long_chat_round_trips_and_legacy_chats_stay_readable(tmp_path):
     pwsh = shutil.which("pwsh")
     if not pwsh:
         pytest.skip("pwsh not found")
-    desktop = (ROOT / "qwen-desktop.ps1").read_text(encoding="utf-8-sig")
+    desktop = (ROOT / "mamidlabs-desktop.ps1").read_text(encoding="utf-8-sig")
     header = "\n".join(
         line for line in desktop.splitlines()
         if line.startswith(("Add-Type -AssemblyName System.Security.Cryptography.ProtectedData", "$chatProtectionPrefix"))
@@ -61,7 +61,7 @@ def test_reloaded_chat_keeps_tool_history_for_continuation(tmp_path):
     pwsh = shutil.which("pwsh")
     if not pwsh:
         pytest.skip("pwsh not found")
-    desktop = (ROOT / "qwen-desktop.ps1").read_text(encoding="utf-8-sig")
+    desktop = (ROOT / "mamidlabs-desktop.ps1").read_text(encoding="utf-8-sig")
     header = "\n".join(
         line for line in desktop.splitlines()
         if line.startswith(("Add-Type -AssemblyName System.Security.Cryptography.ProtectedData", "$chatProtectionPrefix"))

@@ -160,25 +160,25 @@ def test_catalog_lists_the_identity_lora_for_max_and_flash_but_not_lite():
 
 
 def test_lite_profile_does_not_offer_identity_edit_mode():
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     assert "identityEditAvailable = -not [bool]$job.imageProfileLite" in inference
     imagegen = read_text("agent/imagegen-run.ps1")
     assert "if ($lite) { throw 'Photo editing" in imagegen
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "imageProfileLite = ([string]$script:apiSettings.localProfile -eq 'lite')" in desktop
 
 
 def test_edit_mode_is_offered_regardless_of_chat_provider():
     """The image pipeline is independent of the chat provider (the chat may be Claude, the image local);
     with a cloud image provider a request with mode != new also goes to the editing endpoint."""
-    inference = read_text("agent/qwen-inference.ps1")
+    inference = read_text("agent/mamidlabs-inference.ps1")
     assert "@('new', 'regenerate', 'style_reference', 'identity_edit')" in inference
     api_media = read_text("agent/api-media.py")
     assert "job.get('mode') != 'new'" in api_media
 
 
 def test_desktop_passes_scene_and_person_for_two_image_edits():
-    desktop = read_text("qwen-desktop.ps1")
+    desktop = read_text("mamidlabs-desktop.ps1")
     assert "function Set-LastUserImage" in desktop
     assert "sourceImageB = $sourceImageB" in desktop
     assert "$sourceImage = $script:previousUserImage" in desktop

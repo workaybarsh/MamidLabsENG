@@ -581,7 +581,7 @@ function Show-ProfileManager([string]$focusId) {
              "`r`nFiles shared with other profiles are kept." + $warn + "`r`n`r`nDelete?"),
             'Delete profile', 'YesNo', 'Warning')
         if ($answer -ne 'Yes') { return }
-        if ($isActive) { try { Stop-LocalQwen } catch { } }
+        if ($isActive) { try { Stop-LocalMamidLabs } catch { } }
         $result = Remove-ProfileFiles $profile.id
         $list.Items[$index] = "$($profile.label) — $(Get-ProfileStatusLabel $profile.id)"
         & $refresh

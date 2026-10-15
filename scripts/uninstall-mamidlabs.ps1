@@ -98,16 +98,16 @@ if (Test-ProtectedPath $Root) {
     Write-Line "Safety: $Root is a system or user folder; nothing was removed." 'Red'
     exit 1
 }
-$markers = @('agent\profiles.json', 'qwen-desktop.ps1', 'launch-qwen-desktop.vbs')
+$markers = @('agent\profiles.json', 'mamidlabs-desktop.ps1', 'launch-mamidlabs-desktop.vbs')
 if (!($markers | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) })) {
-    Write-Line "Safety: $Root does not look like a MamidLabs installation (no qwen-desktop.ps1 / agent\profiles.json); nothing was removed." 'Red'
+    Write-Line "Safety: $Root does not look like a MamidLabs installation (no mamidlabs-desktop.ps1 / agent\profiles.json); nothing was removed." 'Red'
     exit 1
 }
 
 # -------------------------------------------------------------------- plan
 # Everything the installation creates in the root. Entries not listed here are asked about.
 $programEntries = @('agent', 'scripts', 'assets', 'models', 'logs', 'llama.cpp', 'ComfyUI', 'venv',
-    'runtime', 'tools', 'setup-source', 'requirements', 'qwen-desktop.ps1', 'launch-qwen-desktop.vbs',
+    'runtime', 'tools', 'setup-source', 'requirements', 'mamidlabs-desktop.ps1', 'launch-mamidlabs-desktop.vbs',
     'README.md', 'LICENSE', 'EULA.txt')
 $userEntries = @('chats', 'outputs', 'settings')
 $wizardEntries = @('unins000.exe', 'unins000.dat', 'unins000.msg')

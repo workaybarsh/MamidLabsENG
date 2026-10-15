@@ -1,6 +1,6 @@
 """Office document tools: reading and creating PDF / Word / PowerPoint / Excel.
 
-Reads JSON from stdin, writes JSON to stdout. Called by qwen-inference.ps1.
+Reads JSON from stdin, writes JSON to stdout. Called by mamidlabs-inference.ps1.
 """
 import json
 import os
