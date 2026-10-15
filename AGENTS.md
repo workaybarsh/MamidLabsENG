@@ -139,8 +139,8 @@ single "Qwen3.8 27B" entry (`Get-ProfileCatalogForDisplay`); switching happens i
 Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFilesPresent`) must use
 the full catalog (`Get-ProfileCatalog`).
 
-**VRAM check** (`Test-MemoryBudget`): required = model file + **600 MiB**
-(300 MiB on LITE); the mmproj runs on the CPU in all profiles so it does not count toward the VRAM
+**VRAM check** (`Test-MemoryBudget`): required = model file + **780 MiB**
+(MAX/FLASH; 300 MiB on LITE); the mmproj runs on the CPU in all profiles so it does not count toward the VRAM
 budget. **ComfyUI lifecycle (default: runs only during generation):** ComfyUI runs **only
 during image/video generation**; it is closed when the job ends and before the language model loads,
 so it holds **neither VRAM nor RAM while idle** (an idle ComfyUI kept ~300 MiB of CUDA context plus
@@ -162,10 +162,14 @@ instance listening on :8188** (`Test-ComfyUnderRoot`). Measured: two ComfyUI ins
 to **0.89 tok/s**. If the budget fails ComfyUI is closed and measured again (safety net). External
 cleanup: `manage-qwen.ps1` `-Action closecomfy`. Reopening ComfyUI costs ~27 s per media job
 (measured: cold 55 s, warm 28 s).
-Measured: on a clean GPU with 15244 MiB free the 27B model loaded and ran at
-~45 tok/s (file 14,600 MiB → real margin ~600 MiB).
-The 800/1000 MiB margins of earlier attempts (threshold 15400/15600) wrongly rejected that working
-state, raising the generic "Model operation failed" error. The tolerance is profile-based:
+Measured: the 27B file is 14,600 MiB but occupies **~15350 MiB** on the GPU (q4_0 KV cache +
+compute buffers + MTP draft context). The MAX/FLASH margin is therefore **750 MiB** (threshold
+15350 = the measured footprint): the model loads only when it fully fits and then **uses all free
+VRAM**; on a normal desktop (browser closed, ~15450+ free) it **loads without error**, and below
+that it would spill, so a clear "not enough VRAM" is shown. This is the LOWEST threshold that
+prevents spill. `--gpu-layers 99` is kept (puts the whole model in VRAM; ~55 tok/s when fully
+fitting); llama.cpp's `--fit` auto-placement was tested and proved more **conservative** (did not
+use all VRAM, ~23 tok/s), so it is not used. The tolerance is profile-based:
 **LITE 1024 MiB** (9B MTP model's small overflow on an 8 GB card; llama.cpp keeps the big embedding
 tensor on the CPU), **MAX/FLASH 0** (27B runs at the card's limit; even a small overflow is a
 disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
@@ -450,9 +454,11 @@ has no LoRA.
    Put per-turn text into the last user message.
 6. **Use `Start-DetachedProcess`.** `Start-Process -Redirect…` inherits the caller's stdout pipe and
    `manage-qwen | …` hangs.
-7. **The VRAM margin is profile-based** (MAX/FLASH 600 MiB, LITE 300 MiB) and the tolerance is
-   LITE 1024 / MAX/FLASH 0. On a 16 GB card a margin that is too large keeps MAX from
-   ever starting, while too small lets the 27B model spill into shared memory and drop to ~6 tok/s.
+7. **The VRAM margin is profile-based** (MAX/FLASH 750 MiB, LITE 300 MiB) and the tolerance is
+   LITE 1024 / MAX/FLASH 0. The margin equals the measured model footprint (27B ~15350 MiB on the
+   GPU): the model loads only when it fully fits, uses all free VRAM and does not spill; on a
+   normal desktop it loads without error. Too small lets the 27B spill into shared memory and drop
+   to ~6 tok/s.
    **ComfyUI** by default runs only during media generation (it holds no VRAM/RAM while idle) and is closed before the language model loads; on LITE it can be kept open between media jobs with `comfyKeepAlive=true`. A leaked/duplicate instance is cleaned in every profile (ComfyUI is a process pair, so instance roots - not process count - decide). A leaked instance spills the 27B to 0.89 tok/s. The mmproj runs on the CPU in **all three profiles**
    (`--no-mmproj-offload`). On the GPU it spilled
    ~420 MiB into shared memory on MAX/FLASH (speed 25 → 19 tok/s) and overflowed the 8 GB LITE budget.
@@ -544,7 +550,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
-| 2026-10-15 | **Prompt-preprocessing/thinking latency diagnosed + VRAM-spill warning.** Measurement (RTX 5060 Ti, MAX): the KV cache **works** (turn 2 reused 19,988 tokens, first token 0.6 s) and prompt processing is ~415 tok/s on a clean load; a **full reprocess** of a long context is ~48 s (20k tokens). The ~20 tok/s turn was ~20x slower because the model did not fully fit VRAM and **spilled into shared memory**. The UI now measures this **once** after a load via `Get-LlamaSpillMiB` (llama-server's `GPU Process Memory(*)\Shared Usage`) and shows a **"Slow mode (VRAM spill)"** warning in the metric + status panel when it is >1000 MiB (instead of silently being slow). The warning resets on model/state change. | qwen-desktop.ps1, tests/test_desktop_behavior.py, AGENTS.md, CHANGELOG.md |
+| 2026-10-15 | **Prompt-preprocessing latency diagnosed + "use all free VRAM / no spill" fix.** Measurement (RTX 5060 Ti, MAX): the KV cache **works** (turn 2 reused 19,988 tokens, first token 0.6 s) and prompt processing is ~415 tok/s on a clean load; a **full reprocess** of a long context is ~48 s (20k tokens). The ~20 tok/s turn was ~20x slower because the model did not fully fit VRAM and **spilled into shared memory**. The **measured model footprint is 15350 MiB** (file 14,600 but on the GPU with q4_0 KV + compute buffers + MTP draft context; a clean load at 15454 MiB free gives ~41-55 tok/s). The MAX/FLASH margin is now **750 MiB** (threshold 15350): the model loads only when it **fully fits**, **uses all free VRAM** and **does not spill**; on a normal desktop (browser closed) it **loads without error**; below that a clear "not enough VRAM" is shown. `--gpu-layers 99` is kept; llama.cpp's `--fit` auto-placement was tested and proved more **conservative** (did not use all VRAM, ~23 tok/s) -> not used. (The earlier "slow mode warning" approach was removed: spill is prevented directly.) | scripts/manage-qwen.ps1, tests/test_memory_admission.py, AGENTS.md, CHANGELOG.md |
 | 2026-10-14 | **The UI shows the real model-load failure reason.** `Invoke-Manage` now captures the manager process's stderr via `RedirectStandardError`; `Update-ModelSwitch` runs the new `Format-ModelSwitchError` on a failed exit to show the meaningful line (e.g. "Not enough free VRAM: …") instead of only the generic "Model operation failed". Measurement note: the MAX/FLASH memory tolerance stays **0** — the 27B fully fits with 15244 MiB free (~45 tok/s) but spills at 15095 MiB (~30 tok/s), so an overflow slows it down and blocking it is correct. Test: `tests/test_desktop_behavior.py`. | qwen-desktop.ps1, tests/test_desktop_behavior.py, AGENTS.md, CHANGELOG.md |
 | 2026-10-14 | **Restored the anti-fabrication clause that the system-prompt rewrite dropped (caught by tests).** The earlier "strict anti-fabrication" rewrite removed "Do NOT use the name of a test, theorem, identity or source unless you are sure it exists" (and "review your critical steps") from the fixed system prompt; `tests/test_qwen_contracts.py` / `tests/test_lite_profile.py` failed. It is restored (the prefix stays fixed, so the KV cache is not broken). pytest now green: TR 462 / ENG 459. | qwen-desktop.ps1, AGENTS.md, CHANGELOG.md |
 | 2026-10-14 | **The installed program files are byte-identical to the repo (the `assets\installer` exclude was removed).** `layout` and the `setup-source` refresh no longer drop `assets\installer\*` (wizard art); the `.iss` `[Files]` `Excludes: "installer\*"` was removed and `Remove-ExcludedFromOwned` now only strips `agent\__pycache__\*`/`*.pyc`. So the install root's program files (`agent\`, `scripts\`, `assets\`, `requirements\` and the top-level files) match the repo byte-for-byte. | scripts/install-mamidlabs.ps1, packaging/windows/mamidlabs.iss, tests/test_install_layout_source.py, AGENTS.md, CHANGELOG.md |

@@ -502,26 +502,3 @@ def test_desktop_captures_manager_stderr_for_specific_errors():
     assert "function Format-ModelSwitchError" in desktop
     assert "Format-ModelSwitchError $detail" in desktop
 
-
-def test_desktop_warns_when_the_model_spills_into_shared_memory():
-    """If the model does not fully fit in VRAM, llama.cpp keeps part of the weights in shared
-    memory and chat runs markedly slower (measured: 27B ~55 tok/s when it fits; ~20 tok/s
-    prompt processing when it spills). The UI shows a clear warning instead of silently being
-    slow: after a load Get-LlamaSpillMiB is checked ONCE and >1000 MiB shows 'Slow mode'."""
-    desktop = (ROOT / "qwen-desktop.ps1").read_text(encoding="utf-8-sig")
-    assert "function Get-LlamaSpillMiB" in desktop
-    assert "GPU Process Memory(*)\\Shared Usage" in desktop
-    assert "$script:spillChecked" in desktop and "$script:spillWarn" in desktop
-    assert "$spill -gt 1000" in desktop
-    assert "Slow mode" in desktop
-    assert desktop.count("$script:spillChecked = $false") >= 2
-
-
-def test_get_llama_spill_mib_returns_a_non_negative_int(tmp_path):
-    """Get-LlamaSpillMiB returns 0 when there is no llama-server process or the counter cannot
-    be read (no false warning); otherwise a non-negative integer."""
-    run_ps(tmp_path, r"""
-$m = Get-LlamaSpillMiB
-Assert ($m -is [int] -and $m -ge 0) "Get-LlamaSpillMiB must return a non-negative int, got: $m"
-""")
-

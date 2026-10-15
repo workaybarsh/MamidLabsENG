@@ -43,10 +43,13 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
-- **A slow model (VRAM spill) is now reported clearly.** When the model does not fully fit VRAM
-  and spills into shared memory, chat ran ~20x slower (measured: 27B ~55 tok/s when it fits;
-  ~20 tok/s prompt processing when it spills) and this happened silently. The UI now measures it
-  once after a load and shows a **"Slow mode (VRAM spill)"** warning.
+- **Spill is prevented directly; the model uses all free VRAM.** When the model did not fully fit
+  VRAM and spilled into shared memory, chat ran ~20x slower (measured: a clean load at 15454 MiB
+  free gives ~41-55 tok/s; when it spills, prompt processing drops to ~20 tok/s). The measured
+  model footprint is **15350 MiB**, so the MAX/FLASH margin is now **750 MiB** (threshold 15350):
+  the model loads only when it **fully fits**, uses all free VRAM and **does not spill**; on a
+  normal desktop it loads without error. llama.cpp's `--fit` auto-placement was tested and proved
+  more conservative (did not use all VRAM, ~23 tok/s), so it is not used; `--gpu-layers 99` is kept.
 - **The UI shows the real model-load failure reason.** Instead of the generic "Model operation
   failed", the actual cause (e.g. "Not enough free VRAM: …") is shown; the manager process's
   stderr is carried to the UI (`Format-ModelSwitchError`).

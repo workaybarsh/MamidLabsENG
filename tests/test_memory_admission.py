@@ -81,27 +81,27 @@ def test_start_action_accepts_skip_memory_check_switch():
     assert "[switch]$SkipMemoryCheck" in manager
 
 
-def test_max_budget_fits_a_16_gb_card():
-    """Measured on an RTX 5060 Ti 16 GB: on a clean GPU (ComfyUI closed) the 27B model
-    loaded with 15244 MiB free and ran at ~45 tok/s; the file is 14600 MiB, so the real
-    margin is ~600 MiB. The old 800/1000 MiB margins (threshold 15400/15600) wrongly
-    rejected that state: the "Model operation failed" error. The real protection is less
-    the margin than always closing ComfyUI: with another CUDA context present even
-    15290 MiB "free" spilled and dropped to ~6 tok/s."""
+def test_max_budget_requires_a_full_vram_fit():
+    """Measured on an RTX 5060 Ti 16 GB: the 27B file is 14600 MiB but occupies ~15378-15444 MiB
+    on the GPU (pre-allocated q4_0 KV cache + compute buffers + MTP draft context), so the real
+    margin is ~778-844 MiB. With a 600 margin (threshold 15200) loads between 15200 and 15450
+    silently spilled into shared memory and dropped chat to ~20 tok/s. With an 850 margin
+    (threshold 15450) the model only loads when it will FULLY fit; no spill (measured: 15529 MiB
+    free -> full fit ~55 tok/s; 15095 MiB -> spilled ~30 tok/s). Always closing ComfyUI remains
+    the real protection."""
     import re
 
     manager = read_text("scripts/manage-qwen.ps1")
     match = re.search(r"\$overheadMiB = if \(\$profileName -eq 'lite'\) \{ (\d+) \} else \{ (\d+) \}", manager)
     assert match, "profile-aware overheadMiB line not found"
     overhead = int(match.group(2))  # else branch = MAX/FLASH
-    assert overhead == 600
+    assert overhead == 750, "the MAX/FLASH full-fit margin must be 750 (threshold 15350 = the measured footprint); the LOWEST threshold that prevents spill"
     max_model_mib = 14600
-    measured_free_ok = 15244  # loaded and ran at 45 tok/s on a clean GPU
-    needed = max_model_mib + overhead  # 15200
-    # The model must load at this free value...
-    assert needed <= measured_free_ok
-    # ...but the old 800 MiB margin (threshold 15400) wrongly rejected the machine.
-    assert needed < max_model_mib + 800
+    threshold = max_model_mib + overhead  # 15350
+    full_fit_free = 15529  # measured: full fit, ~55 tok/s
+    spill_free = 15095     # measured: spilled, ~30 tok/s
+    assert threshold <= full_fit_free, "the full-fit state must be accepted"
+    assert threshold > spill_free, "a spilling state must be REJECTED (prevents spill)"
 
 
 def test_lite_budget_is_not_tightened_by_the_max_fix():

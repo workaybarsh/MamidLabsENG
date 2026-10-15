@@ -153,12 +153,6 @@ $script:stackY = 8
 $script:dirty = $false
 $script:shuttingDown = $false
 $script:lastSpeed = 0
-# If the model does not fully fit in VRAM, llama.cpp keeps part of the weights in shared
-# system memory; chat then runs markedly SLOW (measured: the 27B does ~55 tok/s when it fits;
-# when it spills, prompt processing drops to ~20 tok/s). After a load this is checked ONCE and
-# a clear warning is shown (instead of silently being slow).
-$script:spillChecked = $false
-$script:spillWarn = $null
 # Last speed test result; preserved when the 2 s status timer rewrites the panel.
 $script:benchReport = ''
 $script:streamGenerating = $false
@@ -1962,35 +1956,13 @@ function Stop-LocalQwen {
     $script:modelReady = $false
     $script:activeModel = $null
     $script:modelSwitchError = $null
-    $script:spillChecked = $false
-    $script:spillWarn = $null
     $script:pendingModelChange = @{ action = 'stop'; profile = ''; modelId = '' }
     Update-ModelSwitch
     $statusCtrl.Text = 'Stopping the model… The interface will stay open.'
 }
 
-# Returns the GPU memory (in MiB) the llama-server process holds in SHARED system memory
-# instead of VRAM. After a load a large value (e.g. >1 GB) means the model partly spilled to
-# the CPU/shared memory and chat runs markedly slower. Returns 0 on any error (no false warning).
-function Get-LlamaSpillMiB {
-    try {
-        $pids = @(Get-Process -Name 'llama-server' -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.Id })
-        if (!$pids.Count) { return 0 }
-        $rows = (Get-Counter '\GPU Process Memory(*)\Shared Usage' -ErrorAction Stop).CounterSamples
-        $sum = 0.0
-        foreach ($row in $rows) {
-            if ($row.InstanceName -match 'pid_(\d+)') {
-                if ($pids -contains [int]$Matches[1]) { $sum += [double]$row.CookedValue }
-            }
-        }
-        return [int][math]::Round($sum / 1MB)
-    } catch { return 0 }
-}
-
 function Restart-LocalQwen([string]$profile) {
     $wanted = Get-SelectedLocalAlias
-    $script:spillChecked = $false
-    $script:spillWarn = $null
     if ($script:modelReady -and $script:activeModel -eq $wanted -and !$script:switchProcess -and !$script:pendingModelChange) {
         $statusCtrl.Text = "$($profile.ToUpperInvariant()) is already loaded; the model was not reloaded."
         return
@@ -3451,21 +3423,9 @@ $timer.Add_Tick({
         if (!$active -or $active -ne (Get-SelectedLocalAlias)) { throw 'The selected model is not ready yet' }
         $script:activeModel = $active
         $script:modelReady = $true
-        # Once per load: did the model spill into shared memory? (slow-mode warning)
-        if (!$script:spillChecked) {
-            $script:spillChecked = $true
-            $script:spillWarn = $null
-            if ($script:providerId -eq 'local') {
-                $spill = Get-LlamaSpillMiB
-                if ($spill -gt 1000) {
-                    $script:spillWarn = "Slow mode: the model partly spilled into shared memory (~$spill MiB). Chat runs markedly slower; close other GPU-using apps (browser etc.) and re-select the model."
-                }
-            }
-        }
         if ($script:pendingSend) { Begin-Generation }
         $state = if ($script:busy) { 'Responding' } elseif ($script:multiImageOcrMode) { 'Multi-image reading on' } else { 'Ready' }
         $warn = if ($script:contextTokens -gt $script:compactAt) { '  [compaction queued]' } else { '' }
-        if ($script:spillWarn) { $state = 'Slow mode (VRAM spill)' }
         if (!$script:busy) {
             $metric.Text = "$state$warn"
         }
@@ -3481,7 +3441,6 @@ $timer.Add_Tick({
             "multi OCR     : $(if ($script:multiImageOcrMode) { 'on — several images accepted next turn' } else { 'off — single-image mmproj' })"
             'generation tools: automatic by message'
             "bound folder  : $folderState"
-            if ($script:spillWarn) { ''; $script:spillWarn }
             if ($script:benchReport) { ''; $script:benchReport }
         ) -join "`r`n"
     } catch {

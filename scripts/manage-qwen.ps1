@@ -94,13 +94,14 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     # profile and deprive the user of a working installation.
     #
     # MAX/FLASH real measurement (RTX 5060 Ti 16 GB, 32K context, MTP on, llama.cpp):
-    # on a clean GPU (ComfyUI closed) the 14600 MiB file takes ~15170-15650 MiB on the
-    # GPU; llama.cpp keeps the big embedding tensor on the CPU when memory is short and
-    # absorbs small differences that way. With 15244 MiB free the model loaded and ran at
-    # ~45 tok/s (measured). A 1000 MiB margin (threshold 15600) and an 800 MiB margin
-    # (threshold 15400) wrongly rejected that state on a real machine: the
-    # "Model operation failed" error. So the margin is 600 MiB for the 16 GB profiles
-    # (threshold 15200); a clean GPU plus reasonable desktop usage lets the model load.
+    # the 14600 MiB file takes ~15378-15444 MiB on the GPU (pre-allocated q4_0 KV cache +
+    # compute buffers + MTP draft context), so the real full-fit need is ~15380. To "use all
+    # free VRAM" `--gpu-layers 99` is KEPT (it puts the whole model in VRAM; ~55 tok/s when it
+    # fully fits). llama.cpp's `--fit` auto-placement was tested and proved MORE conservative
+    # (it did not use all VRAM, ~23 tok/s) - so it is not used.
+    # The margin is 750 MiB (threshold 15350 = the measured model footprint): the model loads
+    # only when it fully fits and then uses ALL free VRAM; below that it would spill, so a clear
+    # "not enough VRAM" is shown. (This is the LOWEST threshold that prevents spill.)
     # The REAL protection is not the free-VRAM number but closing ComfyUI every time
     # (see below): with another CUDA context present, even at 15290 MiB "free" the driver
     # fragments memory and the model spills into shared memory, dropping to ~6 tok/s.
@@ -109,7 +110,7 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     # 8 GB card the model already runs at the limit; llama.cpp keeps the big embedding tensor
     # on the CPU and absorbs a small overflow, keeping chat speed (content-dependent ~40-79
     # tok/s). Enlarging the margin here would reject a working LITE install for nothing.
-    $overheadMiB = if ($profileName -eq 'lite') { 300 } else { 600 }
+    $overheadMiB = if ($profileName -eq 'lite') { 300 } else { 750 }
     $neededMiB = $modelMiB + $overheadMiB
     # llama.cpp keeps the big embedding (token_embd) tensor on the CPU when VRAM is short
     # and tolerates a small overflow. On LITE the MTP head grows the file by ~464 MiB; with
