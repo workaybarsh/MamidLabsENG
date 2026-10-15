@@ -43,6 +43,10 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   deeply and not to cap its thinking time. The former 300-token budget was removed.
 
 ### Fixed
+- **A slow model (VRAM spill) is now reported clearly.** When the model does not fully fit VRAM
+  and spills into shared memory, chat ran ~20x slower (measured: 27B ~55 tok/s when it fits;
+  ~20 tok/s prompt processing when it spills) and this happened silently. The UI now measures it
+  once after a load and shows a **"Slow mode (VRAM spill)"** warning.
 - **The UI shows the real model-load failure reason.** Instead of the generic "Model operation
   failed", the actual cause (e.g. "Not enough free VRAM: …") is shown; the manager process's
   stderr is carried to the UI (`Format-ModelSwitchError`).

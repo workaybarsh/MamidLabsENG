@@ -380,7 +380,7 @@ disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
 
 ```powershell
 python -m pip install pytest -r requirements\app.txt
-python -m pytest -q          # ~461 tests, ~135 s (465 collected, 461 passed, 4 skipped); no extra setup needed (tests/conftest.py)
+python -m pytest -q          # ~463 tests, ~169 s (467 collected, 463 passed, 4 skipped); no extra setup needed (tests/conftest.py)
 %LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\smoke-test.ps1 -Profile flash -SkipVideo
 ```
 
@@ -544,6 +544,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-15 | **Prompt-preprocessing/thinking latency diagnosed + VRAM-spill warning.** Measurement (RTX 5060 Ti, MAX): the KV cache **works** (turn 2 reused 19,988 tokens, first token 0.6 s) and prompt processing is ~415 tok/s on a clean load; a **full reprocess** of a long context is ~48 s (20k tokens). The ~20 tok/s turn was ~20x slower because the model did not fully fit VRAM and **spilled into shared memory**. The UI now measures this **once** after a load via `Get-LlamaSpillMiB` (llama-server's `GPU Process Memory(*)\Shared Usage`) and shows a **"Slow mode (VRAM spill)"** warning in the metric + status panel when it is >1000 MiB (instead of silently being slow). The warning resets on model/state change. | qwen-desktop.ps1, tests/test_desktop_behavior.py, AGENTS.md, CHANGELOG.md |
 | 2026-10-14 | **The UI shows the real model-load failure reason.** `Invoke-Manage` now captures the manager process's stderr via `RedirectStandardError`; `Update-ModelSwitch` runs the new `Format-ModelSwitchError` on a failed exit to show the meaningful line (e.g. "Not enough free VRAM: …") instead of only the generic "Model operation failed". Measurement note: the MAX/FLASH memory tolerance stays **0** — the 27B fully fits with 15244 MiB free (~45 tok/s) but spills at 15095 MiB (~30 tok/s), so an overflow slows it down and blocking it is correct. Test: `tests/test_desktop_behavior.py`. | qwen-desktop.ps1, tests/test_desktop_behavior.py, AGENTS.md, CHANGELOG.md |
 | 2026-10-14 | **Restored the anti-fabrication clause that the system-prompt rewrite dropped (caught by tests).** The earlier "strict anti-fabrication" rewrite removed "Do NOT use the name of a test, theorem, identity or source unless you are sure it exists" (and "review your critical steps") from the fixed system prompt; `tests/test_qwen_contracts.py` / `tests/test_lite_profile.py` failed. It is restored (the prefix stays fixed, so the KV cache is not broken). pytest now green: TR 462 / ENG 459. | qwen-desktop.ps1, AGENTS.md, CHANGELOG.md |
 | 2026-10-14 | **The installed program files are byte-identical to the repo (the `assets\installer` exclude was removed).** `layout` and the `setup-source` refresh no longer drop `assets\installer\*` (wizard art); the `.iss` `[Files]` `Excludes: "installer\*"` was removed and `Remove-ExcludedFromOwned` now only strips `agent\__pycache__\*`/`*.pyc`. So the install root's program files (`agent\`, `scripts\`, `assets\`, `requirements\` and the top-level files) match the repo byte-for-byte. | scripts/install-mamidlabs.ps1, packaging/windows/mamidlabs.iss, tests/test_install_layout_source.py, AGENTS.md, CHANGELOG.md |
