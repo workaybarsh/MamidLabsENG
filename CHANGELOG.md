@@ -12,6 +12,12 @@ editing, video generation and chart drawing. The language model runs on `llama.c
 Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API providers.
 
 ### Fixed
+- **Legacy engine files renamed away no longer linger on an update.** When the engine/plumbing names
+  moved to MamidLabs, the top-level `qwen-desktop.ps1` / `launch-qwen-desktop.vbs` files stayed
+  behind in existing installs (Inno `ignoreversion` / `Copy-Item -Force` does not delete the old
+  file). `layout` now removes those names from the root and `setup-source` (`Remove-LegacyTopFiles`);
+  the `.iss` `[InstallDelete]` (upgrade) + `[UninstallDelete]` (uninstall) and the uninstaller
+  `$programEntries` target the same names.
 - **Voice input failed on a normally launched app because `HF_HOME` was never set at runtime.** The
   audio models (whisper large-v3 + the AST audio-event model) live in the install root's HF cache
   (`tools\hf-home`, the installer sets `HF_HOME` there during install only). At runtime the app set

@@ -108,6 +108,7 @@ if (!($markers | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) })) 
 # Everything the installation creates in the root. Entries not listed here are asked about.
 $programEntries = @('agent', 'scripts', 'assets', 'models', 'logs', 'llama.cpp', 'ComfyUI', 'venv',
     'runtime', 'tools', 'setup-source', 'requirements', 'mamidlabs-desktop.ps1', 'launch-mamidlabs-desktop.vbs',
+    'qwen-desktop.ps1', 'launch-qwen-desktop.vbs',
     'README.md', 'LICENSE', 'EULA.txt')
 $userEntries = @('chats', 'outputs', 'settings')
 $wizardEntries = @('unins000.exe', 'unins000.dat', 'unins000.msg')

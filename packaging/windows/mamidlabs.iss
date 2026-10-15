@@ -103,6 +103,12 @@ Source: "..\..\agent\profiles.json"; Flags: dontcopy
 [Run]
 Filename: "{app}\launch-mamidlabs-desktop.vbs"; Description: "Open MamidLabs now"; Flags: postinstall shellexec nowait skipifsilent; Check: LauncherExists
 
+[InstallDelete]
+; Top-level files renamed away from the old "qwen" engine names must not linger on an upgrade
+; (Inno ignoreversion does not delete the old file).
+Type: files; Name: "{app}\qwen-desktop.ps1"
+Type: files; Name: "{app}\launch-qwen-desktop.vbs"
+
 [UninstallDelete]
 ; The real cleanup is done by scripts\uninstall-mamidlabs.ps1 (CurUninstallStepChanged): it stops
 ; the processes and deletes the models/caches/chats, the desktop shortcut belonging to this
@@ -120,6 +126,8 @@ Type: filesandordirs; Name: "{app}\requirements"
 Type: filesandordirs; Name: "{app}\logs"
 Type: files; Name: "{app}\mamidlabs-desktop.ps1"
 Type: files; Name: "{app}\launch-mamidlabs-desktop.vbs"
+Type: files; Name: "{app}\qwen-desktop.ps1"
+Type: files; Name: "{app}\launch-qwen-desktop.vbs"
 Type: files; Name: "{app}\README.md"
 Type: files; Name: "{app}\LICENSE"
 Type: files; Name: "{app}\EULA.txt"

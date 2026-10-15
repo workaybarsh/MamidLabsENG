@@ -315,6 +315,9 @@ function Invoke-Layout {
     }
     Write-Ok ('Program files copied -> ' + $Root)
 
+    # Top-level files renamed away from the old "qwen" engine names (if present) must not linger.
+    Remove-LegacyTopFiles $Root
+
     # A wizard-installed root also keeps the program source under {root}\setup-source; Inno's
     # cancel/rollback and reinstall use it. Script-based updating (this stage) did not refresh
     # that folder, so it stayed at the previous version; if present it is refreshed with the
@@ -342,6 +345,7 @@ function Invoke-Layout {
             Copy-Item -LiteralPath $from -Destination $setupSource -Recurse -Force
             Remove-ExcludedFromOwned $to $folder
         }
+        Remove-LegacyTopFiles $setupSource
         $assets = Join-Path $Source 'assets'
         if (Test-Path -LiteralPath $assets) {
             # assets\installer (wizard art) is copied too: the installed program files must stay
@@ -470,6 +474,19 @@ function Remove-ExcludedFromOwned([string]$path, [string]$name) {
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         Get-ChildItem -LiteralPath $path -Recurse -Force -File -Filter '*.pyc' -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Top-level files renamed away from the old "qwen" engine names must not linger on an update:
+# Inno `ignoreversion` / `Copy-Item -Force` does not delete the old file. Renames inside folders
+# are already handled when the owned folders are pruned; only the top-level files (root +
+# setup-source) are removed here. The .iss [InstallDelete]/[UninstallDelete] and the uninstaller
+# $programEntries target the same names.
+function Remove-LegacyTopFiles([string]$dir) {
+    if (!$dir -or !(Test-Path -LiteralPath $dir)) { return }
+    foreach ($legacy in @('qwen-desktop.ps1', 'launch-qwen-desktop.vbs')) {
+        $path = Join-Path $dir $legacy
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
     }
 }
 

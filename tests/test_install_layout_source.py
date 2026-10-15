@@ -239,3 +239,30 @@ def test_layout_from_wizard_nested_source_copies_program_files(tmp_path):
         assert (root / folder / "probe-marker.txt").exists(), proc.stdout + proc.stderr
     # The source package itself is not emptied by a self-copy.
     assert (src / "agent" / "probe-marker.txt").exists(), proc.stdout + proc.stderr
+
+
+def test_layout_removes_legacy_renamed_top_files(tmp_path):
+    """Top-level files renamed away from the old "qwen" engine names
+    (`qwen-desktop.ps1`, `launch-qwen-desktop.vbs`) must not linger on an update: Inno
+    `ignoreversion` / `Copy-Item -Force` does not delete the old file. `layout` removes them
+    from both the root and `setup-source`; the .iss `[InstallDelete]`/`[UninstallDelete]` and
+    the uninstaller `$programEntries` target the same names."""
+    d = tmp_path / "root"
+    d.mkdir()
+    (d / "qwen-desktop.ps1").write_text("# old app", encoding="utf-8")
+    (d / "launch-qwen-desktop.vbs").write_text("' old launcher", encoding="utf-8")
+    (d / "keep.txt").write_text("keep", encoding="utf-8")
+    run_installer_ps(f"Remove-LegacyTopFiles '{d}'; Write-Output 'done'")
+    assert not (d / "qwen-desktop.ps1").exists()
+    assert not (d / "launch-qwen-desktop.vbs").exists()
+    assert (d / "keep.txt").exists()
+    script = read_text("scripts/install-mamidlabs.ps1")
+    # Definition + two calls (root and setup-source).
+    assert script.count("Remove-LegacyTopFiles") >= 3
+    assert "'qwen-desktop.ps1', 'launch-qwen-desktop.vbs'" in script
+    iss = read_text("packaging/windows/mamidlabs.iss")
+    assert "[InstallDelete]" in iss
+    assert 'Type: files; Name: "{app}\\qwen-desktop.ps1"' in iss
+    assert 'Type: files; Name: "{app}\\launch-qwen-desktop.vbs"' in iss
+    uninstall = read_text("scripts/uninstall-mamidlabs.ps1")
+    assert "'qwen-desktop.ps1', 'launch-qwen-desktop.vbs'" in uninstall
