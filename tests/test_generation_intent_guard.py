@@ -78,8 +78,11 @@ def test_worker_refuses_unprompted_generation_calls():
 
 
 def test_web_failure_note_is_appended(tmp_path):
-    """When a web tool failed and the answer does not say so, an honest note is
-    appended; when it already says so, the answer is unchanged."""
+    """When a web tool was TRIED and NEVER succeeded and the answer does not say so, an
+    honest note is appended; when it already says so, the answer is unchanged. A partial
+    failure (one page 403 / one query "no results") does NOT make the search fail: if at
+    least one web call succeeded the "search failed" note is not added (real test: 4 of 7
+    calls succeeded)."""
     pwsh = shutil.which("pwsh")
     if not pwsh:
         pytest.skip("pwsh not found")
@@ -91,6 +94,7 @@ def test_web_failure_note_is_appended(tmp_path):
         "$script:webToolFailCount = 0; $r['none'] = Add-WebFailureNote 'hello'\n"
         "$script:webToolFailCount = 1; $r['plain'] = Add-WebFailureNote 'hello'\n"
         "$script:webToolFailCount = 1; $r['ack'] = Add-WebFailureNote 'The web search failed.'\n"
+        "$script:webToolFailCount = 1; $script:webToolSuccess = $true; $r['mixed'] = Add-WebFailureNote 'hello'\n"
         "$r | ConvertTo-Json -Compress\n"
     )
     script = tmp_path / "note.ps1"
@@ -102,6 +106,7 @@ def test_web_failure_note_is_appended(tmp_path):
     assert got["none"] == "hello"
     assert "The web search failed" in got["plain"]
     assert got["ack"] == "The web search failed."
+    assert got["mixed"] == "hello"
 
 
 def test_document_tool_requires_a_document_context():
@@ -194,6 +199,10 @@ def test_strict_fabrication_guard_strips_citations_and_blocks_current_info(tmp_p
         f"$r['no_web'] = Get-FinalAnswer 'See https://docs.python.org/3/' {other} $true\n"
         "$script:webToolAttempted = $true; $script:webToolSuccess = $true\n"
         f"$r['web_ok'] = Get-FinalAnswer 'Result: iPhone 16. Source: https://apple.com' {cur} $true\n"
+        # Partial failure: one call returned 403/empty but other calls got data ->
+        # the "search failed" note is NOT added and citations are kept (real test finding).
+        "$script:webToolFailCount = 1; $script:webToolAttempted = $true; $script:webToolSuccess = $true\n"
+        f"$r['partial'] = Get-FinalAnswer 'Zonguldak tomorrow 21 degrees. Source: https://www.example-news.com/weather/zonguldak/' {cur} $true\n"
         "$r | ConvertTo-Json -Compress\n"
     )
     script = tmp_path / "strict.ps1"
@@ -207,6 +216,7 @@ def test_strict_fabrication_guard_strips_citations_and_blocks_current_info(tmp_p
     assert "reversed()" in got["strip"]
     assert "docs.python.org" in got["no_web"]
     assert "apple.com" in got["web_ok"] and "iPhone 16" in got["web_ok"]
+    assert "example-news.com" in got["partial"] and "web search failed" not in got["partial"]
 
 
 def test_friendly_error_message_maps_raw_dotnet(tmp_path):

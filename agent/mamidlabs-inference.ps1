@@ -813,6 +813,11 @@ function Test-WebToolFailure([string]$name, $result) {
 # answer is not passed off as a search result.
 function Add-WebFailureNote([string]$text) {
     if ($script:webToolFailCount -le 0 -or [string]::IsNullOrWhiteSpace($text)) { return $text }
+    # A partial failure is NOT "the search failed": if one page returned 403 or one query
+    # came back "no results" while OTHER calls returned data, the answer still rests on a
+    # real source. The note is appended only when web was TRIED and NEVER succeeded
+    # (see the real test: 4 of 7 web calls succeeded yet the answer got a "search failed" note).
+    if ($script:webToolSuccess) { return $text }
     $normalized = $text.ToLowerInvariant()
     if ($normalized -match 'fail|unavailable|unable to|could not|no internet|offline|error|not verified|unverified') { return $text }
     return $text + "`n`n[The web search failed; the information in the answer could not be verified against an up-to-date source.]"
@@ -1044,7 +1049,7 @@ function Invoke-Tool([string]$name, $arguments, [string]$folder) {
         # refused without running; the model then tells the user web access could not be
         # established. It does not affect a user's explicit command request because it only
         # triggers AFTER a web failure and only for network-probe commands.
-        if ($script:webToolFailCount -gt 0 -and
+        if ($script:webToolFailCount -gt 0 -and !$script:webToolSuccess -and
             $command -match '(?i)(^|[^a-z])(ping|tracert|traceroute|pathping|nslookup|resolve-dnsname|test-netconnection|test-connection|curl|wget|invoke-webrequest|invoke-restmethod|\biwr\b|\birm\b|telnet|ftp|ssh|ipconfig|netstat|\barp\b|\broute\b)([^a-z]|$)') {
             return 'No network command was run because the web tool failed. Do not work around it; tell the user web access could not be established right now and do not invent the result.'
         }
@@ -2139,7 +2144,7 @@ try {
         # visible answer from the findings at hand.
         $offeredTools = if ($forceFinalAnswer) {
             @()
-        } elseif ($script:webToolFailCount -ge 2) {
+        } elseif ($script:webToolFailCount -ge 2 -and !$script:webToolSuccess) {
             $blocked = @('search_web', 'fetch_page', 'find_reference_image')
             if (!(Test-FileIntent $userText)) { $blocked += @('list_bound_files', 'read_bound_file') }
             @($toolDefinitions | Where-Object { $_.function.name -notin $blocked })
@@ -2167,7 +2172,7 @@ try {
                 'do not offer a diagnosis or alternative commands, and do not guess and present the result. In your answer only say briefly that the operation ' +
                 'was not done because the user did not grant permission; mention that they can ask again if they want.')
         }
-        if ($script:webToolFailCount -gt 0) {
+        if ($script:webToolFailCount -gt 0 -and !$script:webToolSuccess) {
             if ($script:webToolFailCount -ge 2) {
                 $systemNotes += (
                     'Web access is now CLEARLY UNAVAILABLE (repeated failures). STOP web searching / page downloading ' +

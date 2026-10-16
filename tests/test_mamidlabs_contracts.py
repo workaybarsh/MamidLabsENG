@@ -158,7 +158,7 @@ def test_web_tool_failure_is_detected_and_discourages_workarounds():
     # After the 2nd web failure web tools are no longer offered (prevents a search loop).
     # (The F1 context guard became the first condition; the web-failure branch is kept as elseif.)
     assert "$offeredTools = if ($forceFinalAnswer)" in inference
-    assert "elseif ($script:webToolFailCount -ge 2)" in inference
+    assert "elseif ($script:webToolFailCount -ge 2 -and !$script:webToolSuccess)" in inference
     # If the user did not ask about files, the file tools are dropped too (no rummaging).
     assert "function Test-FileIntent" in inference
     assert "$blocked += @('list_bound_files', 'read_bound_file')" in inference

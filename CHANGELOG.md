@@ -12,6 +12,16 @@ editing, video generation and chart drawing. The language model runs on `llama.c
 Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API providers.
 
 ### Fixed
+- **A partial web failure is no longer reported as "the search failed".** In a real turn 4 of 7 web
+  calls succeeded, yet the answer still got "[The web search failed; the information in the answer
+  could not be verified from a current source.]": the note keyed only on `webToolFailCount > 0`, so a
+  single page returning 403 or a single query coming back "no results" was enough to call the search
+  failed. The "web access failed" decision now requires **web was tried AND never succeeded**
+  (`webToolFailCount -gt 0 -and -not webToolSuccess`); if at least one web call returned data, no
+  visible note is added, the model is not told "no internet", network-probe commands are not refused
+  and the web tools are not locked. Applied consistently to `Add-WebFailureNote`, the `run_command`
+  probe block and the main loop's system note/tool lock. Test:
+  `tests/test_generation_intent_guard.py`.
 - **Legacy engine files renamed away no longer linger on an update.** When the engine/plumbing names
   moved to MamidLabs, the top-level `qwen-desktop.ps1` / `launch-qwen-desktop.vbs` files stayed
   behind in existing installs (Inno `ignoreversion` / `Copy-Item -Force` does not delete the old
