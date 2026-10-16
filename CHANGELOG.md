@@ -11,6 +11,11 @@ editing, video generation and chart drawing. The language model runs on `llama.c
 (`llama-server`), the image/video models on `ComfyUI`, on the user's NVIDIA graphics card. OpenAI,
 Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API providers.
 
+### Documentation
+- **Added a "Platform support" section to the README.** The Linux and macOS ports are
+  marked **experimental**, with one-click platform badges linking to those repositories;
+  the quick navigation links to the new section as well.
+
 ### Fixed
 - **A partial web failure is no longer reported as "the search failed".** In a real turn 4 of 7 web
   calls succeeded, yet the answer still got "[The web search failed; the information in the answer

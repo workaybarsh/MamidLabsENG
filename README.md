@@ -5,7 +5,13 @@
 <h1 align="center">MamidLabs</h1>
 
 <p align="center">
-  <a href="https://github.com/workaybarsh/MamidLabsTR"><b>For Türkçe</b></a>
+  <a href="https://github.com/workaybarsh/MamidLabsTR"><b>Türkçe için tıklayınız</b></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/workaybarsh/MamidLabsENG"><img src="https://img.shields.io/badge/Windows-stable-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Windows (stable)"></a>
+  <a href="https://github.com/workaybarsh/mamidlabs_linux"><img src="https://img.shields.io/badge/Linux-experimental-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux (experimental)"></a>
+  <a href="https://github.com/workaybarsh/mamidlabs_mac"><img src="https://img.shields.io/badge/macOS-experimental-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS (experimental)"></a>
 </p>
 
 <p align="center">
@@ -18,6 +24,7 @@
 </p>
 
 <p align="center">
+  <a href="#platform-support">Platform support</a> ·
   <a href="#features">Features</a> ·
   <a href="#hardware-profiles">Hardware profiles</a> ·
   <a href="#system-requirements">System requirements</a> ·
@@ -35,6 +42,34 @@ MamidLabs brings chat, web search, reading and creating documents, OCR, audio tr
 image and video generation together in a single desktop window. The language, image and video models
 run on the user's own graphics card. The internet is used only for installation, downloading models,
 web search and optional API providers.
+
+---
+
+## Platform support
+
+MamidLabs is built for **Windows**, and this is the stable edition. The same product
+has two **experimental** ports that share the tool set and the pinned constants:
+
+| Platform | Repository | Install | Status |
+|---|---|---|---|
+| **Windows** (this repository) | `MamidLabsTR` / `MamidLabsENG` | `MamidLabs_Setup.exe` | **Stable** (PowerShell + WinForms) |
+| **Linux** | [workaybarsh/mamidlabs_linux](https://github.com/workaybarsh/mamidlabs_linux) | `.deb` (setup wizard) | **Experimental** (Python 3.12 + PySide6) |
+| **macOS** | [workaybarsh/mamidlabs_mac](https://github.com/workaybarsh/mamidlabs_mac) | `.dmg` (setup wizard) | **Experimental** (Python 3.12 + PySide6) |
+
+### Also available for Linux and macOS
+
+> **Also available for Linux and macOS.**
+>
+> The non-Windows platforms are **experimental** ports: the interface was rewritten
+> in Python + PySide6 (Qt6) and uses the same engines (llama.cpp + ComfyUI). Both
+> ship a **setup wizard** whose first step asks whether to install in Turkish or
+> English.
+>
+> - **Linux** → **[workaybarsh/mamidlabs_linux](https://github.com/workaybarsh/mamidlabs_linux)** — `.deb` package; the wizard measures the hardware and suggests the LITE/PRO profile.
+> - **macOS** → **[workaybarsh/mamidlabs_mac](https://github.com/workaybarsh/mamidlabs_mac)** — `.dmg` package; the suggestion is based on Apple Silicon and unified memory.
+>
+> The Windows edition stays stable in this repository; the Linux and macOS ports are
+> under development.
 
 <p align="center">
   <img src="docs/media/sultan-parrot-keeper.jpg" alt="An old man in a red caftan and turban feeding cockatiels in a tiled interior" width="560">
