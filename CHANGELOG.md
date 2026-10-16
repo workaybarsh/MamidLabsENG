@@ -15,6 +15,16 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
 - **Added a "Platform support" section to the README.** The Linux and macOS ports are
   marked **experimental**, with one-click platform badges linking to those repositories;
   the quick navigation links to the new section as well.
+- **Simplified the README's platform section.** The platform badges ("labels")
+  under the title were removed; the arrow and the separate repository link on the
+  "Linux → repo" / "macOS → repo" lines were removed and the "Repository" column
+  was dropped from the table. The **Linux** and **macOS** words themselves are now
+  clickable and lead to the matching repository. The `MamidLabs_Setup.exe`, `.deb`
+  and `.dmg` entries in the Install column are clickable and lead to the **direct
+  download** (`releases/latest/download/...`). The "Also available for Linux and
+  macOS" section was removed. (GitHub Actions workflows were added to the
+  `mamidlabs_linux` and `mamidlabs_mac` repositories that publish fixed-name
+  packages — `mamidlabs.deb` / `MamidLabs.dmg` — on a `v*` tag.)
 
 ### Fixed
 - **Fixed the flakiness of `test_python_tool_sets_hf_home_for_child` (it failed once in CI).**
