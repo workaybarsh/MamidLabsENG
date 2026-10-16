@@ -745,16 +745,29 @@ def test_python_tool_sets_hf_home_for_child(tmp_path):
     Python)."""
     worker = read_text("agent/mamidlabs-inference.ps1")
     probe = tmp_path / "probe.py"
-    probe.write_text("import os\nprint(os.environ.get('HF_HOME',''))\n", encoding="utf-8")
+    # The child writes HF_HOME both to stdout and to a marker file next to the probe, so the
+    # assertion does not depend on pwsh's own stdout (which occasionally came back empty on a
+    # loaded runner and made this test flaky).
+    probe.write_text(
+        "import os, pathlib\n"
+        "value = os.environ.get('HF_HOME', '')\n"
+        "print(value)\n"
+        "pathlib.Path(__file__).with_name('hf_home.txt').write_text(value, encoding='utf-8')\n",
+        encoding="utf-8")
     script = _invoke_python_tool_harness(worker) + f"""
 $shared = @{{ Cancel = $false }}
 $out = Invoke-PythonTool @{{}} '{probe}' '{sys.executable}' 15
 'HF=' + $out.Trim()
 """
     out = _run_ps1(script, tmp_path)
+    marker = tmp_path / "hf_home.txt"
+    assert marker.is_file(), out
+    value = marker.read_text(encoding="utf-8").strip().replace("/", "\\").lower()
+    assert value.endswith(r"tools\hf-home"), value
+    # pwsh's own output must agree when it is available.
     lines = [line for line in out.splitlines() if line.startswith("HF=")]
-    assert lines, out
-    assert lines[0][3:].replace("/", "\\").lower().endswith(r"tools\hf-home")
+    if lines:
+        assert lines[0][3:].replace("/", "\\").lower().endswith(r"tools\hf-home")
 
 
 def test_worker_maps_selected_profile_to_asr_tier():

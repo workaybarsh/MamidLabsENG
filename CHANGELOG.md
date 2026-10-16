@@ -17,6 +17,13 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   the quick navigation links to the new section as well.
 
 ### Fixed
+- **Fixed the flakiness of `test_python_tool_sets_hf_home_for_child` (it failed once in CI).**
+  The test read `Invoke-PythonTool`'s `HF_HOME` for the child only from pwsh's own stdout;
+  on a loaded runner that output occasionally came back empty and the test showed a
+  **false red**. The child now also writes the `HF_HOME` value to `hf_home.txt` beside the
+  probe, the primary assertion reads that file (a deterministic signal) and pwsh's own
+  output is verified as well when it is available. The same fix was applied to the Turkish
+  edition.
 - **A partial web failure is no longer reported as "the search failed".** In a real turn 4 of 7 web
   calls succeeded, yet the answer still got "[The web search failed; the information in the answer
   could not be verified from a current source.]": the note keyed only on `webToolFailCount > 0`, so a
