@@ -25,6 +25,10 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   macOS" section was removed. (GitHub Actions workflows were added to the
   `mamidlabs_linux` and `mamidlabs_mac` repositories that publish fixed-name
   packages — `mamidlabs.deb` / `MamidLabs.dmg` — on a `v*` tag.)
+- **The README's Install column now shows the real file names.** Instead of
+  `.deb (setup wizard)` / `.dmg (setup wizard)`, the Linux and macOS rows read
+  `mamidlabs.deb` / `MamidLabs.dmg`, matching the Windows `MamidLabs_Setup.exe`
+  row; the links still lead to the direct download.
 
 ### Fixed
 - **Fixed the flakiness of `test_python_tool_sets_hf_home_for_child` (it failed once in CI).**

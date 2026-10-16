@@ -47,8 +47,8 @@ has two **experimental** ports that share the tool set and the pinned constants:
 | Platform | Install | Status |
 |---|---|---|
 | **Windows** (this repository) | [MamidLabs_Setup.exe](https://github.com/workaybarsh/MamidLabsENG/releases/latest/download/MamidLabs_Setup.exe) | **Stable** (PowerShell + WinForms) |
-| **[Linux](https://github.com/workaybarsh/mamidlabs_linux)** | [.deb](https://github.com/workaybarsh/mamidlabs_linux/releases/latest/download/mamidlabs.deb) (setup wizard) | **Experimental** (Python 3.12 + PySide6) |
-| **[macOS](https://github.com/workaybarsh/mamidlabs_mac)** | [.dmg](https://github.com/workaybarsh/mamidlabs_mac/releases/latest/download/MamidLabs.dmg) (setup wizard) | **Experimental** (Python 3.12 + PySide6) |
+| **[Linux](https://github.com/workaybarsh/mamidlabs_linux)** | [mamidlabs.deb](https://github.com/workaybarsh/mamidlabs_linux/releases/latest/download/mamidlabs.deb) | **Experimental** (Python 3.12 + PySide6) |
+| **[macOS](https://github.com/workaybarsh/mamidlabs_mac)** | [MamidLabs.dmg](https://github.com/workaybarsh/mamidlabs_mac/releases/latest/download/MamidLabs.dmg) | **Experimental** (Python 3.12 + PySide6) |
 
 <p align="center">
   <img src="docs/media/sultan-parrot-keeper.jpg" alt="An old man in a red caftan and turban feeding cockatiels in a tiled interior" width="560">
