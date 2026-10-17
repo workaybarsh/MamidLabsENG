@@ -31,6 +31,19 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   row; the links still lead to the direct download.
 
 ### Fixed
+- **The VRAM spill that halved PRO/FLASH speed is fixed with an automatic 32K → 16K context
+  fallback.** Live measurement (llama.cpp's own buffer report on an RTX 5060 Ti 16 GB) showed the
+  27B has a **real GPU footprint of ~15.77 GiB at a 32K context** (model buffer 13945 MiB + KV
+  576 MiB + recurrent-state buffer 598.5 MiB + compute ~112 MiB + the CUDA context) but a normal
+  Windows desktop leaves only **~15.50 GiB free**; the old fixed **750 MiB** margin (threshold
+  15350) therefore admitted a 32K load that **spilled ~400 MiB into Windows shared memory**, taking
+  generation from **~40 tok/s down to ~27 tok/s**. The margin is now **context-aware** (1200 MiB at
+  32K, 800 at 16K; LITE 300 unchanged) and MAX/FLASH **tries 32K first, falling back to 16K** when
+   it does not fully fit — the same model and weights, half the KV cache — so the model stays fully
+  in VRAM (measured 16K footprint 15324 MiB, ~40 tok/s, no spill). The chosen context drives both
+  the memory gate and `--ctx-size`, and the UI **reads the real context back** from the running
+  server (`/props` → `default_generation_settings.n_ctx`) so the compaction threshold matches.
+  Version unchanged (`MyAppVersion` stays 1.0.0).
 - **Fixed the flakiness of `test_python_tool_sets_hf_home_for_child` (it failed once in CI).**
   The test read `Invoke-PythonTool`'s `HF_HOME` for the child only from pwsh's own stdout;
   on a loaded runner that output occasionally came back empty and the test showed a

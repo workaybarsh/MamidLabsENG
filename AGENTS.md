@@ -140,9 +140,13 @@ single "Qwen3.8 27B" entry (`Get-ProfileCatalogForDisplay`); switching happens i
 Lookups by id (`Get-ProfileEntry`, `Get-ProfileState`, `Test-LocalProfileChatFilesPresent`) must use
 the full catalog (`Get-ProfileCatalog`).
 
-**VRAM check** (`Test-MemoryBudget`): required = model file + **750 MiB**
-(MAX/FLASH; 300 MiB on LITE); the mmproj runs on the CPU in all profiles so it does not count toward the VRAM
-budget. **ComfyUI lifecycle (default: runs only during generation):** ComfyUI runs **only
+**VRAM check** (`Test-MemoryBudget`, context-aware via `Get-ModelOverheadMiB`): required = model
+file + **1200 MiB at a 32K context / 800 MiB at 16K** (MAX/FLASH; 300 MiB on LITE, unchanged);
+the mmproj runs on the CPU in all profiles so it does not count toward the VRAM
+budget. **MAX/FLASH context selection:** 32K is tried first and, when its estimated footprint does
+not fit the free VRAM, it **falls back to 16K** (same model/weights, half the KV cache); the chosen
+value feeds both the gate and `--ctx-size`, and the UI reads the real value back from the server
+(`/props` → `default_generation_settings.n_ctx`) so the compaction threshold matches. **ComfyUI lifecycle (default: runs only during generation):** ComfyUI runs **only
 during image/video generation**; it is closed when the job ends and before the language model loads,
 so it holds **neither VRAM nor RAM while idle** (an idle ComfyUI kept ~300 MiB of CUDA context plus
 RAM; `comfyKeepAlive` default `false`). It reopens on demand (~27 s).
@@ -163,17 +167,20 @@ instance listening on :8188** (`Test-ComfyUnderRoot`). Measured: two ComfyUI ins
 to **0.89 tok/s**. If the budget fails ComfyUI is closed and measured again (safety net). External
 cleanup: `manage-mamidlabs.ps1` `-Action closecomfy`. Reopening ComfyUI costs ~27 s per media job
 (measured: cold 55 s, warm 28 s).
-Measured: the 27B file is 14,600 MiB but occupies **~15350 MiB** on the GPU (q4_0 KV cache +
-compute buffers + MTP draft context). The MAX/FLASH margin is therefore **750 MiB** (threshold
-15350 = the measured footprint): the model loads only when it fully fits and then **uses all free
-VRAM**; on a normal desktop (browser closed, ~15450+ free) it **loads without error**, and below
-that it would spill, so a clear "not enough VRAM" is shown. This is the LOWEST threshold that
-prevents spill. `--gpu-layers 99` is kept (puts the whole model in VRAM; ~55 tok/s when fully
-fitting); llama.cpp's `--fit` auto-placement was tested and proved more **conservative** (did not
-use all VRAM, ~23 tok/s), so it is not used. The tolerance is profile-based:
+Measured (llama.cpp b10998, RTX 5060 Ti 16 GB): the 27B file is 14,600 MiB but its real GPU
+footprint is **~15.32 GiB at a 16K context** and **~15.77 GiB at 32K** (llama.cpp's own report:
+model buffer 13945 MiB, KV 288/576 MiB, recurrent-state buffer 598.5 MiB, compute ~112 MiB). A
+normal Windows desktop only leaves ~15.50 GiB free, so 32K used to **spill ~400 MiB into shared
+memory and drop chat from ~40 to ~27 tok/s**. The margin is therefore context-aware (800/1200 MiB
+= the measured footprint); the gate **tries 32K and falls back to 16K** so the model only loads
+when it fully fits and then **uses all free VRAM**. `--gpu-layers 99` is kept (puts the whole
+model in VRAM; ~55 tok/s when fully fitting); llama.cpp's `--fit` auto-placement was tested and
+proved more **conservative** (did not use all VRAM, ~23 tok/s), so it is not used. The tolerance is
+profile-based:
 **LITE 1024 MiB** (9B MTP model's small overflow on an 8 GB card; llama.cpp keeps the big embedding
 tensor on the CPU), **MAX/FLASH 0** (27B runs at the card's limit; even a small overflow is a
-disaster). Measured: 27B ~44–58 tok/s when it fits fully, LITE ~97 tok/s.
+disaster). Measured: 27B ~40–58 tok/s when it fits fully (16K fallback ~40, 32K ~44–58), LITE
+~97 tok/s.
 Before the model loads, leftover app-owned **GPU workers** (an idle persistent audio worker or the
 OCR worker) are also closed automatically (`Stop-OrphanWorkers`), so the VRAM cleanup is automatic
 and only touches MamidLabs processes under the install root.
@@ -388,7 +395,7 @@ and only touches MamidLabs processes under the install root.
 
 ```powershell
 python -m pip install pytest -r requirements\app.txt
-python -m pytest -q          # ~150 s (478 collected, 474 passed, 4 skipped); no extra setup needed (tests/conftest.py)
+python -m pytest -q          # ~160 s (480 collected, 476 passed, 4 skipped); no extra setup needed (tests/conftest.py)
 %LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\smoke-test.ps1 -Profile flash -SkipVideo
 ```
 
@@ -420,7 +427,7 @@ python -m pytest -q          # ~150 s (478 collected, 474 passed, 4 skipped); no
 
 | | 16 GB (RTX 5060 Ti) FLASH | 8 GB (RTX 4060 Laptop) LITE |
 |---|---|---|
-| Chat | ~42–58 tok/s (MTP on) | ~97 tok/s (on 16 GB with MTP) |
+| Chat | ~40–58 tok/s (MTP on; 32K ~44–58, 16K fallback ~40) | ~97 tok/s (on 16 GB with MTP) |
 | Image (`new`), end to end | 60–95 s | 68–139 s |
 | Regenerate from an image (`regenerate`) | not measured | ~110–140 s |
 | Photo editing (`identity_edit`) | 74–160 s (one/two images) | **not supported** |
@@ -439,7 +446,7 @@ the mode is never offered, `imagegen-run.ps1` rejects it as a second line of def
 has no LoRA.
 
 **Audio transcription and CUDA context (measured):** transcription (faster-whisper large-v3 + AST)
-uses ~3.9 GB on the GPU; it does **not** fit alongside the 27B (~15350 MiB) on the same 16 GB card,
+uses ~3.9 GB on the GPU; it does **not** fit alongside the 27B (~15.3–15.8 GiB) on the same 16 GB card,
 so the language model is closed before transcription (mandatory swap). After a load + unload the
 CUDA context left in the process was measured at **~140 MiB** (8860 → 8720 MiB free with a game
 running). That is why the **warm audio worker** is STOPPED before the language model is reloaded and
@@ -466,11 +473,14 @@ context at all, so it holds no VRAM while idle and does not eat the 27B's thin m
    Put per-turn text into the last user message.
 6. **Use `Start-DetachedProcess`.** `Start-Process -Redirect…` inherits the caller's stdout pipe and
    `manage-mamidlabs | …` hangs.
-7. **The VRAM margin is profile-based** (MAX/FLASH 750 MiB, LITE 300 MiB) and the tolerance is
-   LITE 1024 / MAX/FLASH 0. The margin equals the measured model footprint (27B ~15350 MiB on the
-   GPU): the model loads only when it fully fits, uses all free VRAM and does not spill; on a
-   normal desktop it loads without error. Too small lets the 27B spill into shared memory and drop
-   to ~6 tok/s.
+7. **The VRAM margin is context-aware and profile-based** (MAX/FLASH 1200 MiB @32K / 800 MiB @16K,
+   LITE 300 MiB) and the tolerance is
+   LITE 1024 / MAX/FLASH 0. The margin equals the measured model footprint (27B ~15.3 GiB at 16K /
+   ~15.8 GiB at 32K on the
+   GPU): the model loads only when it fully fits, uses all free VRAM and does not spill; a normal
+   desktop leaves only ~15.5 GiB free, so the gate **tries 32K and falls back to 16K** rather than
+   loading a known-to-spill 32K. Without the fallback the 27B spilled ~400 MiB into shared memory
+   and dropped from ~40 to ~27 tok/s.
    **ComfyUI** by default runs only during media generation (it holds no VRAM/RAM while idle) and is closed before the language model loads; on LITE it can be kept open between media jobs with `comfyKeepAlive=true`. A leaked/duplicate instance is cleaned in every profile (ComfyUI is a process pair, so instance roots - not process count - decide). A leaked instance spills the 27B to 0.89 tok/s. The mmproj runs on the CPU in **all three profiles**
    (`--no-mmproj-offload`). On the GPU it spilled
    ~420 MiB into shared memory on MAX/FLASH (speed 25 → 19 tok/s) and overflowed the 8 GB LITE budget.
@@ -572,6 +582,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-17 | **The 32K VRAM spill was fixed with an automatic 32K → 16K context fallback (PRO/FLASH speed back to ~40+ tok/s).** Found by live measurement (llama.cpp's own buffer report, RTX 5060 Ti 16 GB): the 27B has a **real GPU footprint of ~15.77 GiB at 32K** (model buffer 13945 MiB + KV 576 MiB + recurrent-state buffer 598.5 MiB + compute ~112 MiB + CUDA context) but a normal Windows desktop leaves only **~15.50 GiB free**, so the old fixed **750 MiB** margin (threshold 15350) admitted it and **~400 MiB spilled into Windows shared memory, dropping chat from ~40 to ~27 tok/s**. Fix: the margin is now **context-aware** (`Get-ModelOverheadMiB`: 1200 MiB @32K, 800 @16K, 600 below; LITE 300 unchanged) and `Test-MemoryBudget` takes the context; MAX/FLASH **tries 32K first and falls back to 16K** when 32K does not fully fit (same weights, half the KV cache; measured 16K footprint 15324 MiB, ~40 tok/s, no spill). The chosen context feeds both the gate and `--ctx-size`, and the UI **reads the real context back** from the running server (`/props` → `default_generation_settings.n_ctx`) so `ctxLimit`/`compactAt` match and a long turn cannot exceed `--ctx-size`. Version unchanged (`MyAppVersion` stays 1.0.0). Tests: `tests/test_memory_admission.py` (context-aware margin + fallback), `tests/test_lite_profile.py` (locked PRO args use `$modelCtx`), `tests/test_desktop_behavior.py` (UI read-back). | scripts/manage-mamidlabs.ps1, mamidlabs-desktop.ps1, tests/test_memory_admission.py, tests/test_lite_profile.py, tests/test_desktop_behavior.py, docs/technical-notes.md, CHANGELOG.md, AGENTS.md |
 | 2026-10-16 | **The README's Install column now shows the real file names (documentation only).** The Linux/macOS rows read `mamidlabs.deb` / `MamidLabs.dmg` instead of `.deb (setup wizard)` / `.dmg (setup wizard)`, matching the Windows `MamidLabs_Setup.exe` row; the links still lead to the direct download. | README.md, CHANGELOG.md, AGENTS.md |
 | 2026-10-16 | **Simplified the README's platform section + download links (documentation only).** The platform badges ("labels") under the title were removed; the arrow and the separate repository link on the "Linux → repo" / "macOS → repo" lines were removed, the "Repository" column was dropped from the table. The **Linux** and **macOS** words are clickable (matching repository); `MamidLabs_Setup.exe`, `.deb` and `.dmg` lead to the **direct download** (`releases/latest/download/...`). The "Also available for Linux and macOS" section was removed. Workflows were added to the `mamidlabs_linux`/`mamidlabs_mac` repos that publish fixed-name packages (`mamidlabs.deb`/`MamidLabs.dmg`) on a `v*` tag. | README.md, CHANGELOG.md, AGENTS.md |
 | 2026-10-16 | **Fixed the flakiness of `test_python_tool_sets_hf_home_for_child` (it gave a false red once in CI).** The test read the `HF_HOME` that `Invoke-PythonTool` gives the child only from pwsh's own stdout; on a loaded runner that output occasionally came back empty and the test failed **without a real regression** (the same commit passed 8/8 locally). The child now also writes `HF_HOME` to `hf_home.txt` beside the probe, the primary assertion reads that file, and pwsh's own output is verified as well when available. The measurement therefore comes from the child's real environment, not from channel noise. Applied to the Turkish edition too. | tests/test_transcriber.py, AGENTS.md, CHANGELOG.md |

@@ -104,11 +104,12 @@ def test_max_flash_server_args_are_locked():
     """MAX/FLASH (else) server arguments are LOCKED: they were smoke-verified on a real 16 GB
     machine. A silent edit could break PRO; this test locks the whole tuple (mmproj on the CPU,
     --image-min-tokens 1024, batch 512/256, threads 6/12, xhigh/low; MTP is added only if the
-    GGUF carries MTP layers)."""
+    GGUF carries MTP layers). The context is chosen at run time: `$modelCtx` is 32768 when it
+    fully fits VRAM and 16384 otherwise (see test_memory_admission.py)."""
     manager = read_text("scripts/manage-mamidlabs.ps1")
     for frag in [
         "'--model', $model, '--mmproj', $projector, '--no-mmproj-offload', '--image-min-tokens', '1024'",
-        "'--ctx-size', '32768', '--predict', $predict, '--parallel', '1'",
+        "'--ctx-size', \"$modelCtx\", '--predict', $predict, '--parallel', '1'",
         "'--gpu-layers', '99', '--flash-attn', 'on', '--cache-type-k', 'q4_0'",
         "'--cache-type-v', 'q4_0', '--cache-reuse', '256', '--batch-size', '512', '--ubatch-size', '256'",
         "'--threads', '6', '--threads-batch', '12', '--jinja', '--reasoning', 'on'",

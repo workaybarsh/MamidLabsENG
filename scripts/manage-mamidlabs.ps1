@@ -69,7 +69,25 @@ $ownsGate = $false
 # a safety margin. If another application holds the GPU, llama-server is not started;
 # otherwise the layers would spill into Windows' shared memory and slow the chat down many
 # times over. The user is told the reason explicitly.
-function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$projectorPath) {
+# Non-weight VRAM overhead (KV cache + recurrent-state buffer + compute buffers + the CUDA
+# context) of the 27B MAX/FLASH model on an RTX 5060 Ti 16 GB, read from llama.cpp's OWN report
+# (llama.cpp b10998, q4_0 KV, MTP on): CUDA0 model buffer 13945 MiB, KV 144 MiB @8192 /
+# 288 @16384 / 576 @32768, recurrent-state buffer 598.5 MiB (fixed), compute buffer 76-112 MiB;
+# the remainder is the CUDA context. So the KV cache grows ~18 MiB per 1K tokens and the rest is
+# fixed. Measured GPU footprint (dedicated + shared): 15112 MiB @8192, 15324 @16384,
+# ~15770 @32768. The 32K figure is WHY a fixed 750 MiB margin was wrong: it admitted the model
+# with only ~15.50 GiB free, so ~400 MiB spilled into Windows shared memory and chat dropped from
+# ~40 to ~27 tok/s. LITE keeps its own small margin (the 9B already fits an 8 GB card).
+function Get-ModelOverheadMiB([string]$profileName, [int]$ctx) {
+    if ($profileName -eq 'lite') { return 300 }
+    if ($ctx -ge 32768) { return 1200 }
+    if ($ctx -ge 16384) { return 800 }
+    return 600
+}
+
+# $ctx is the context size the model would be loaded with; the KV-cache share of the overhead
+# depends on it, so the estimate is context-aware.
+function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$projectorPath, [int]$ctx) {
     $smi = (Get-Command nvidia-smi -ErrorAction SilentlyContinue).Source
     if (!$smi) { return }  # Without NVIDIA drivers the check is meaningless; the real error comes from llama-server.
     $freeMiB = 0
@@ -93,15 +111,17 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     # conditions (browser + desktop holding ~1.5 GB VRAM), silently reject the default
     # profile and deprive the user of a working installation.
     #
-    # MAX/FLASH real measurement (RTX 5060 Ti 16 GB, 32K context, MTP on, llama.cpp):
-    # the 14600 MiB file takes ~15378-15444 MiB on the GPU (pre-allocated q4_0 KV cache +
-    # compute buffers + MTP draft context), so the real full-fit need is ~15380. To "use all
-    # free VRAM" `--gpu-layers 99` is KEPT (it puts the whole model in VRAM; ~55 tok/s when it
-    # fully fits). llama.cpp's `--fit` auto-placement was tested and proved MORE conservative
-    # (it did not use all VRAM, ~23 tok/s) - so it is not used.
-    # The margin is 750 MiB (threshold 15350 = the measured model footprint): the model loads
-    # only when it fully fits and then uses ALL free VRAM; below that it would spill, so a clear
-    # "not enough VRAM" is shown. (This is the LOWEST threshold that prevents spill.)
+    # MAX/FLASH real measurement (RTX 5060 Ti 16 GB, MTP on, llama.cpp; see
+    # Get-ModelOverheadMiB for the breakdown): the 14600 MiB file plus the fixed buffers puts the
+    # real GPU footprint at ~15.32 GiB with a 16K context and ~15.77 GiB with a 32K context
+    # (llama.cpp's own KV report: 288 / 576 MiB). To "use all free VRAM" `--gpu-layers 99` is
+    # KEPT (it puts the whole model in VRAM; ~40-55 tok/s when it fully fits). llama.cpp's `--fit`
+    # auto-placement was tested and proved MORE conservative (it did not use all VRAM, ~23 tok/s)
+    # - so it is not used.
+    # The margin is therefore context-aware (800 MiB @16K, 1200 MiB @32K = the measured
+    # footprint): the model loads only when it fully fits and then uses ALL free VRAM; below that
+    # it would spill, so a clear "not enough VRAM" is shown. The caller tries 32K first and falls
+    # back to 16K when 32K does not fit (see the context selection below).
     # The REAL protection is not the free-VRAM number but closing ComfyUI every time
     # (see below): with another CUDA context present, even at 15290 MiB "free" the driver
     # fragments memory and the model spills into shared memory, dropping to ~6 tok/s.
@@ -110,7 +130,7 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     # 8 GB card the model already runs at the limit; llama.cpp keeps the big embedding tensor
     # on the CPU and absorbs a small overflow, keeping chat speed (content-dependent ~40-79
     # tok/s). Enlarging the margin here would reject a working LITE install for nothing.
-    $overheadMiB = if ($profileName -eq 'lite') { 300 } else { 750 }
+    $overheadMiB = Get-ModelOverheadMiB $profileName $ctx
     $neededMiB = $modelMiB + $overheadMiB
     # llama.cpp keeps the big embedding (token_embd) tensor on the CPU when VRAM is short
     # and tolerates a small overflow. On LITE the MTP head grows the file by ~464 MiB; with
@@ -120,10 +140,10 @@ function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$pr
     # limit and, with a CUDA context (ComfyUI) open, even a small overflow pushes a component
     # into shared memory and drops production to ~6 tok/s. That is why ComfyUI is always
     # closed before measuring (see below); an overflow is not accepted on tolerance.
-    # Measured (RTX 5060 Ti): with 15244 MiB free the 27B fully FIT and ran at ~45 tok/s;
-    # with 15095 MiB it SPILLED and dropped to ~30 tok/s. So the threshold (15350) is the
-    # exact-fit boundary; even a small overflow means spilling and is not accepted. Closing
-    # GPU-using desktop apps (browser) frees more and lets the model fit fully.
+    # Measured (RTX 5060 Ti): at a 32K context with 15095-15497 MiB free the 27B SPILLED
+    # (~400 MiB into shared memory, ~27 tok/s); at a 16K context with 15497 MiB free it fully
+    # FIT (15324 MiB, ~40 tok/s). So the context is chosen to fit (32K -> 16K fallback) instead
+    # of letting a known-to-spill configuration load.
     $toleranceMiB = if ($profileName -eq 'lite') { 1024 } else { 0 }
     if ($freeMiB -lt ($neededMiB - $toleranceMiB)) {
         throw ("Not enough free VRAM: $freeMiB MiB free, the `"$profileName`" profile " +
@@ -341,19 +361,30 @@ try {
     # immediately, so a language model started right away is rejected for "not enough
     # memory" and stays down. So the memory check is retried a bounded number of times with
     # short waits.
+    # Context selection (MAX/FLASH): try 32K first, then fall back to 16K. Measured: 32K needs
+    # ~15.77 GiB on a 16 GB card but a normal Windows desktop only leaves ~15.50 GiB free, so
+    # loading it spilled ~400 MiB into shared memory and chat dropped to ~27 tok/s. At 16K the
+    # footprint is ~15.32 GiB, it fully fits and runs at ~40 tok/s (same model/weights, half the
+    # KV cache). The chosen context is used by BOTH the memory gate and --ctx-size below; the UI
+    # reads the real value back from the running server (see mamidlabs-desktop.ps1). LITE keeps
+    # its own context and has no fallback (the 9B already fits an 8 GB card).
+    $ctxCandidates = if ($Profile -eq 'lite') { @([int]$liteCtx) } else { @(32768, 16384) }
+    $modelCtx = $ctxCandidates[0]
     if (!$SkipMemoryCheck) {
         $budgetOk = $false
         $lastBudgetError = $null
         $attempts = 8
         for ($attempt = 1; $attempt -le $attempts; $attempt++) {
-            try { Test-MemoryBudget $model $Profile $projector; $budgetOk = $true; break }
-            catch {
-                $lastBudgetError = $_
-                # On the first attempt ComfyUI may be open: close it if idle and retry at once.
-                if ($attempt -eq 1 -and (Stop-IdleComfy)) { continue }
-                # Let the ASR/OCR subprocess's VRAM be released (about 7 s total).
-                if ($attempt -lt $attempts) { Start-Sleep -Milliseconds 1000 }
+            $chosenCtx = $null
+            foreach ($candidate in $ctxCandidates) {
+                try { Test-MemoryBudget $model $Profile $projector $candidate; $chosenCtx = $candidate; break }
+                catch { $lastBudgetError = $_ }
             }
+            if ($chosenCtx) { $modelCtx = $chosenCtx; $budgetOk = $true; break }
+            # On the first attempt ComfyUI may be open: close it if idle and retry at once.
+            if ($attempt -eq 1 -and (Stop-IdleComfy)) { continue }
+            # Let the ASR/OCR subprocess's VRAM be released (about 7 s total).
+            if ($attempt -lt $attempts) { Start-Sleep -Milliseconds 1000 }
         }
         if (!$budgetOk) { throw $lastBudgetError }
     }
@@ -400,10 +431,12 @@ try {
         # the free space of a 16 GB card, spills ~420 MiB into shared memory and slowed
         # everything down. RTX 5060 Ti measurement, GPU -> CPU: chat 19.6 -> 24.8 tok/s,
         # single image reading 56-58 s -> 30 s.
+        # --ctx-size is chosen above (32768 when it fully fits, otherwise 16384); the UI reads
+        # the real value back from the server so the compaction threshold matches.
         $serverArgs = @(
             '--model', $model, '--mmproj', $projector, '--no-mmproj-offload', '--image-min-tokens', '1024',
             '--alias', $desiredAlias, '--host', '127.0.0.1', '--port', '8080',
-            '--ctx-size', '32768', '--predict', $predict, '--parallel', '1',
+            '--ctx-size', "$modelCtx", '--predict', $predict, '--parallel', '1',
             '--gpu-layers', '99', '--flash-attn', 'on', '--cache-type-k', 'q4_0',
             '--cache-type-v', 'q4_0', '--cache-reuse', '256', '--batch-size', '512', '--ubatch-size', '256',
             '--threads', '6', '--threads-batch', '12', '--jinja', '--reasoning', 'on',

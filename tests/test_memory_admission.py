@@ -49,7 +49,7 @@ def test_memory_budget_function_exists_and_is_called_before_start():
     manager = read_text("scripts/manage-mamidlabs.ps1")
     assert "function Test-MemoryBudget" in manager
     # The projector is NOT part of the budget: it runs on the CPU in all three profiles.
-    assert "Test-MemoryBudget $model $Profile $projector" in manager
+    assert "Test-MemoryBudget $model $Profile $projector $candidate" in manager
     # Single GPU owner: our CUDA context (ComfyUI) is handled before measuring. The default
     # keeps it open; duplicates/leaks are closed; if the budget fails it is closed and retried.
     # See test_idle_comfy_is_kept_open_but_leaks_are_cleaned.
@@ -57,7 +57,7 @@ def test_memory_budget_function_exists_and_is_called_before_start():
     # The check must run AFTER the file existence checks (when the model path is known) but
     # BEFORE the model process is started; closing ComfyUI must come before the measurement.
     idx_comfy = manager.index("[void](Stop-IdleComfy)")
-    idx_check = manager.index("Test-MemoryBudget $model $Profile $projector")
+    idx_check = manager.index("Test-MemoryBudget $model $Profile $projector $candidate")
     idx_start = manager.index("$child = Start-DetachedProcess $server")
     assert idx_comfy < idx_check < idx_start
 
@@ -110,40 +110,48 @@ def test_start_action_accepts_skip_memory_check_switch():
     assert "[switch]$SkipMemoryCheck" in manager
 
 
-def test_max_budget_requires_a_full_vram_fit():
-    """Measured on an RTX 5060 Ti 16 GB: the 27B file is 14600 MiB but occupies ~15378-15444 MiB
-    on the GPU (pre-allocated q4_0 KV cache + compute buffers + MTP draft context), so the real
-    margin is ~778-844 MiB. With a 600 margin (threshold 15200) loads between 15200 and 15450
-    silently spilled into shared memory and dropped chat to ~20 tok/s. With an 850 margin
-    (threshold 15450) the model only loads when it will FULLY fit; no spill (measured: 15529 MiB
-    free -> full fit ~55 tok/s; 15095 MiB -> spilled ~30 tok/s). Always closing ComfyUI remains
-    the real protection."""
+def test_max_budget_margin_is_context_aware_and_prevents_spill():
+    """Measured on an RTX 5060 Ti 16 GB with the 27B, from llama.cpp's OWN report (b10998, q4_0
+    KV, MTP on): CUDA0 model buffer 13945 MiB, KV cache 576 MiB @32768 / 288 @16384,
+    recurrent-state buffer 598.5 MiB (fixed), compute buffer ~112 MiB. The non-weight overhead is
+    therefore ~1200 MiB at 32K but only ~800 MiB at 16K. The old fixed 750 MiB margin
+    (threshold 15350) admitted 32K with only ~15.50 GiB free: it SPILLED ~400 MiB into Windows
+    shared memory and chat dropped from ~40 to ~27 tok/s. Measured footprints (dedicated+shared)
+    are 15324 MiB @16384 (no spill, ~40 tok/s) and ~15770 @32768 (spilled)."""
     import re
 
     manager = read_text("scripts/manage-mamidlabs.ps1")
-    match = re.search(r"\$overheadMiB = if \(\$profileName -eq 'lite'\) \{ (\d+) \} else \{ (\d+) \}", manager)
-    assert match, "profile-aware overheadMiB line not found"
-    overhead = int(match.group(2))  # else branch = MAX/FLASH
-    assert overhead == 750, "the MAX/FLASH full-fit margin must be 750 (threshold 15350 = the measured footprint); the LOWEST threshold that prevents spill"
-    max_model_mib = 14600
-    threshold = max_model_mib + overhead  # 15350
-    full_fit_free = 15529  # measured: full fit, ~55 tok/s
-    spill_free = 15095     # measured: spilled, ~30 tok/s
-    assert threshold <= full_fit_free, "the full-fit state must be accepted"
-    assert threshold > spill_free, "a spilling state must be REJECTED (prevents spill)"
+    assert "function Get-ModelOverheadMiB" in manager
+    m32 = re.search(r"if \(\$ctx -ge 32768\) \{ return (\d+) \}", manager)
+    m16 = re.search(r"if \(\$ctx -ge 16384\) \{ return (\d+) \}", manager)
+    assert m32, "32K overhead entry not found"
+    assert m16, "16K overhead entry not found"
+    model_mib = 14600
+    threshold_32k = model_mib + int(m32.group(1))  # 15800
+    threshold_16k = model_mib + int(m16.group(1))  # 15400
+    free_normal_desktop = 15497  # measured with only the Windows desktop running
+    assert threshold_16k <= free_normal_desktop, "16K must fit a normal desktop"
+    assert threshold_32k > free_normal_desktop, "32K must NOT load when it would spill"
+    assert threshold_32k >= 15770, "the 32K margin must cover the measured spilled footprint"
+
+
+def test_max_flash_falls_back_from_32k_to_16k_context():
+    """MAX/FLASH tries 32K first and falls back to 16K when 32K does not fully fit VRAM (it used
+    to spill into shared memory). The chosen context feeds both the memory gate and --ctx-size."""
+    manager = read_text("scripts/manage-mamidlabs.ps1")
+    assert "$ctxCandidates = if ($Profile -eq 'lite') { @([int]$liteCtx) } else { @(32768, 16384) }" in manager
+    assert "foreach ($candidate in $ctxCandidates)" in manager
+    assert "if ($chosenCtx) { $modelCtx = $chosenCtx; $budgetOk = $true; break }" in manager
+    assert "'--ctx-size', \"$modelCtx\", '--predict', $predict, '--parallel', '1'" in manager
 
 
 def test_lite_budget_is_not_tightened_by_the_max_fix():
-    """The root-cause fix (larger margin, tolerance 0) applies only to the 16 GB profiles.
+    """The ctx-aware margin (and the 32K -> 16K fallback) applies only to the 16 GB profiles.
     LITE runs at the limit on an 8 GB card and llama.cpp absorbs a small overflow; enlarging
     the margin there would reject a working LITE install. So the LITE margin stays 300 MiB
     and its tolerance stays 1024."""
-    import re
-
     manager = read_text("scripts/manage-mamidlabs.ps1")
-    match = re.search(r"\$overheadMiB = if \(\$profileName -eq 'lite'\) \{ (\d+) \} else \{ (\d+) \}", manager)
-    assert match, "profile-aware overheadMiB line not found"
-    assert int(match.group(1)) == 300, "LITE margin was enlarged (breaks the LITE install)"
+    assert "if ($profileName -eq 'lite') { return 300 }" in manager
     tol = next((l for l in manager.splitlines() if "$toleranceMiB = if" in l), "")
     assert "{ 1024 } else { 0 }" in tol
 
@@ -188,7 +196,7 @@ def test_orphan_app_gpu_workers_are_cleaned_before_model_load():
     assert "(whisper-tools|ocr-tools)" in manager
     # Runs BEFORE the budget check (VRAM cleanup before the model process starts).
     idx_clean = manager.index("[void](Stop-OrphanWorkers)")
-    idx_check = manager.index("Test-MemoryBudget $model $Profile $projector")
+    idx_check = manager.index("Test-MemoryBudget $model $Profile $projector $candidate")
     assert idx_clean < idx_check
 
 

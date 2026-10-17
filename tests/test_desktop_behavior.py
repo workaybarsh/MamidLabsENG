@@ -502,3 +502,20 @@ def test_desktop_captures_manager_stderr_for_specific_errors():
     assert "function Format-ModelSwitchError" in desktop
     assert "Format-ModelSwitchError $detail" in desktop
 
+
+def test_desktop_reads_the_real_context_back_from_the_server():
+    """MAX/FLASH may load with a SMALLER context than the UI default: manage-mamidlabs.ps1 tries
+    32K and falls back to 16K when 32K does not fully fit VRAM. The compaction threshold must
+    follow the server's REAL context, otherwise a long turn would exceed --ctx-size and fail. So
+    when a model becomes ready the UI reads /props' n_ctx and updates ctxLimit/compactAt."""
+    desktop = (ROOT / "mamidlabs-desktop.ps1").read_text(encoding="utf-8-sig")
+    assert "$script:effectiveCtxAlias" in desktop
+    assert "if ($script:activeModel -ne $script:effectiveCtxAlias)" in desktop
+    assert "default_generation_settings.n_ctx" in desktop
+    # The read-back must be wired to the model-ready transition, right where modelReady is set.
+    idx_ready = desktop.index("$script:modelReady = $true")
+    idx_props = desktop.index("default_generation_settings.n_ctx")
+    assert idx_ready < idx_props
+    # compactAt is recomputed from the REAL context, not left at the 32K default.
+    assert "$script:compactAt = [int]($realCtx * 0.67)" in desktop
+

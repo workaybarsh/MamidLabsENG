@@ -54,7 +54,8 @@ Launch: the **MamidLabs** shortcut on the desktop → `launch-mamidlabs-desktop.
 | FLASH (fast) | Qwen3.8 27B IQ4_XS | 32K | `low` | 8192 | ~42-58 token/s |
 | LITE (8 GB) | Huihui-Qwen3.5 9B Q5_K_M | 32K | unlimited (no budget) | 8192 | ~40–79 token/s (8 GB) · ~97 token/s (16 GB) |
 
-MAX and FLASH share the same 27B file: 32K context, `--gpu-layers 99`, flash-attn on, KV cache q4_0,
+MAX and FLASH share the same 27B file: 32K context (auto 16K fallback when 32K does not fully fit
+VRAM, see the memory-budget section), `--gpu-layers 99`, flash-attn on, KV cache q4_0,
 the image projector (mmproj) on the CPU (`--no-mmproj-offload`; on the GPU it did not fit on a 16 GB
 card and spilled into shared memory). **If you do not change** the selector at the bottom right,
 **the model is not reloaded**.
@@ -72,21 +73,29 @@ fail with "model doesn't contain MTP layers". It can be disabled by putting `"mt
 
 ### 16 GB memory budget (MAX/FLASH)
 
-Measured on an RTX 5060 Ti 16 GB with llama.cpp's memory dump (32K context):
+Measured on an RTX 5060 Ti 16 GB with llama.cpp's own buffer report (llama.cpp b10998, q4_0 KV, MTP on):
 
 | Component | VRAM |
 |---|---|
-| Model weights (GPU part; `token_embd` stays on the CPU) | 13,729 MiB |
-| KV cache (q4_0) | 576 MiB |
-| Recurrent state | 150 MiB |
-| Compute buffer | 184 MiB |
-| **Total** | **~14,640 MiB** |
+| Model weights (GPU part; `token_embd` stays on the CPU) | 13,945 MiB |
+| KV cache (q4_0) | 288 MiB @16K · 576 MiB @32K |
+| Recurrent state | 598.5 MiB (fixed; cannot be shrunk) |
+| Compute buffer | 112 MiB |
+| CUDA context | ~380 MiB |
+| **Total footprint** | **~15.3 GiB @16K · ~15.8 GiB @32K** |
 
 On the GPU the image projector asked for another 1,133 MiB with weights and compute buffer; it
 exceeded the total free space and spilled ~420 MiB into shared memory. With the projector moved to
-the CPU, chat went from 19.6 to 25.0 tok/s and reading a single image from 56–58 s to 29 s. The
-memory check in `scripts/manage-mamidlabs.ps1` asks for the model file + 750 MiB (threshold 15350 = the
-measured footprint). **ComfyUI lifecycle**
+the CPU, chat went from 19.6 to 25.0 tok/s and reading a single image from 56–58 s to 29 s.
+
+**A 32K context does not fit a normal desktop:** free VRAM with only the Windows desktop running is
+~15.5 GiB while a 32K context needs ~15.8 GiB, so it spilled ~400 MiB into shared memory and chat
+dropped from ~40 to ~27 tok/s; at 16K the footprint is 15,324 MiB, it fits and runs at ~40 tok/s.
+The memory check in `scripts/manage-mamidlabs.ps1` is therefore **context-aware**
+(`Get-ModelOverheadMiB`: 1200 MiB @32K, 800 @16K, 600 below) and MAX/FLASH **tries 32K first and
+falls back to 16K** when 32K does not fully fit (same weights, half the KV cache). The chosen value
+is used for `--ctx-size` too, and the UI reads the real context back from the server so its
+compaction threshold matches. **ComfyUI lifecycle**
 (`settings/api.json` → `comfyKeepAlive`, default `false`): ComfyUI runs **only during image/video
 generation**; it is closed when the job ends and before the language model loads, so it holds
 **neither VRAM nor RAM while idle** (an idle ComfyUI kept ~300 MiB of CUDA context plus RAM). It
@@ -298,6 +307,7 @@ prefill and generation speed, and shows the reprocessing traces in the server lo
 | prefill < ~200 token/s | Layers are not on the GPU or VRAM overflows |
 | generation < ~12 token/s | VRAM overflow (Windows shared memory) is very likely |
 | VRAM 95%+ | Lower `--ctx-size` or reduce `--image-min-tokens` |
+| generation ~27 tok/s on PRO | The 32K context did not fully fit and spilled ~400 MiB into shared memory; the auto 16K fallback prevents this (see the memory-budget section) |
 
 If the answer stays empty (thinking alone may have used up the tokens reserved for the answer), a
 single low-effort retry is made. The

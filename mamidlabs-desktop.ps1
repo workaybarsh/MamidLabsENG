@@ -105,6 +105,9 @@ $chatDir = Join-Path $root 'chats'
 if (!(Test-Path -LiteralPath $chatDir)) { New-Item -ItemType Directory -Path $chatDir -Force | Out-Null }
 $script:ctxLimit = 32768
 $script:compactAt = 22000
+# Alias whose REAL server context has already been read back (see the model-ready timer): the
+# manager may load MAX/FLASH with a smaller context (32K -> 16K fallback) than the UI default.
+$script:effectiveCtxAlias = $null
 
 $chatMessages = New-Object System.Collections.ArrayList
 $bubbles = New-Object System.Collections.ArrayList
@@ -3428,6 +3431,21 @@ $timer.Add_Tick({
         if (!$active -or $active -ne (Get-SelectedLocalAlias)) { throw 'The selected model is not ready yet' }
         $script:activeModel = $active
         $script:modelReady = $true
+        # The manager may load the model with a SMALLER context than the UI default: MAX/FLASH
+        # tries 32K and falls back to 16K when 32K does not fully fit VRAM (see
+        # manage-mamidlabs.ps1). The compaction threshold must follow the server's REAL context,
+        # otherwise a long turn would exceed --ctx-size and fail. Read it once per load.
+        if ($script:activeModel -ne $script:effectiveCtxAlias) {
+            $script:effectiveCtxAlias = $script:activeModel
+            try {
+                $props = Invoke-RestMethod 'http://127.0.0.1:8080/props' -TimeoutSec 2 -ErrorAction Stop
+                $realCtx = [int]$props.default_generation_settings.n_ctx
+                if ($realCtx -gt 0 -and $realCtx -ne [int]$script:ctxLimit) {
+                    $script:ctxLimit = $realCtx
+                    $script:compactAt = [int]($realCtx * 0.67)
+                }
+            } catch { }
+        }
         if ($script:pendingSend) { Begin-Generation }
         $state = if ($script:busy) { 'Responding' } elseif ($script:multiImageOcrMode) { 'Multi-image reading on' } else { 'Ready' }
         $warn = if ($script:contextTokens -gt $script:compactAt) { '  [compaction queued]' } else { '' }
