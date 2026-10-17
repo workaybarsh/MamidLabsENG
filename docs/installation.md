@@ -23,7 +23,7 @@ Running `MamidLabs_Setup.exe` brings up these pages:
 
 | Page | Job |
 |---|---|
-| Welcome and license | Proprietary license (all rights reserved) |
+| Welcome and license | PolyForm Strict 1.0.0 (noncommercial use) |
 | Install folder | Default is the standard per-user program folder (`%LOCALAPPDATA%\Programs\MamidLabs`); can be changed. 40-80 GB including the models, an SSD is recommended |
 | Profile report | GPU, VRAM, RAM and free disk are measured; a suitable / borderline / not suitable verdict and a recommendation for each profile (`scripts\profile-report.ps1`) |
 | Model profile | LITE, Qwen3.8 27B (covers both the FLASH and MAX runtime presets — switchable from the app's model bar after install), **do not download now (I will install later)** or **my own model / my API account** |

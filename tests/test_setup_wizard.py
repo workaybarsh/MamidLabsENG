@@ -253,10 +253,12 @@ def test_wizard_optional_components_are_default_on_and_passed_as_skips():
     assert "[switch]$SkipMedia" in setup and "[switch]$SkipAudio" in setup
 
 
-def test_repository_is_proprietary_licensed():
+def test_repository_is_polyform_strict_licensed():
     license_text = read_text(ROOT / "LICENSE")
-    assert "All Rights Reserved" in license_text
+    assert "PolyForm Strict License 1.0.0" in license_text
+    assert "https://polyformproject.org/licenses/strict/1.0.0" in license_text
     assert "Aybars Haydar Altuntaş" in license_text
+    assert "All Rights Reserved" not in license_text
     assert "Permission is hereby granted, free of charge" not in license_text
 
 

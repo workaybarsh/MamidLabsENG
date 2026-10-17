@@ -46,7 +46,7 @@ has two **experimental** ports that share the tool set and the pinned constants:
 
 | Platform | Install | Status |
 |---|---|---|
-| **Windows** (this repository) | [MamidLabs_Setup.exe](https://github.com/workaybarsh/MamidLabsENG/releases/latest/download/MamidLabs_Setup.exe) | **Stable** (PowerShell + WinForms) |
+| **Windows** | [MamidLabs_Setup.exe](https://github.com/workaybarsh/MamidLabsENG/releases/latest/download/MamidLabs_Setup.exe) | **Stable** (PowerShell + WinForms) |
 | **[Linux](https://github.com/workaybarsh/mamidlabs_linux)** | [mamidlabs.deb](https://github.com/workaybarsh/mamidlabs_linux/releases/latest/download/mamidlabs.deb) | **Experimental** (Python 3.12 + PySide6) |
 | **[macOS](https://github.com/workaybarsh/mamidlabs_mac)** | [MamidLabs.dmg](https://github.com/workaybarsh/mamidlabs_mac/releases/latest/download/MamidLabs.dmg) | **Experimental** (Python 3.12 + PySide6) |
 
@@ -209,8 +209,10 @@ The images and videos below were generated locally with MamidLabs.
 
 ## License
 
-The MamidLabs source code is proprietary and closed (private repository) and **All Rights Reserved**;
-copyright is held by Aybars Haydar Altuntaş. It may not be used, copied, modified or distributed
-without prior written permission. See the [LICENSE](LICENSE) file for details. The models used (Qwen, Krea 2, the Krea 2 Identity Edit LoRA, Wan 2.2 etc.) and third-party
+The MamidLabs source code is licensed under the **PolyForm Strict License 1.0.0** (source-available;
+**noncommercial** use only). You may not distribute the software, make changes or create new works
+based on it; commercial use requires prior written permission from the licensor. Copyright is held
+by Aybars Haydar Altuntaş. See the [LICENSE](LICENSE) file and
+https://polyformproject.org/licenses/strict/1.0.0 for details. The models used (Qwen, Krea 2, the Krea 2 Identity Edit LoRA, Wan 2.2 etc.) and third-party
 components (llama.cpp, ComfyUI, ComfyUI-GGUF, comfyui-krea2edit etc.) are subject to their own
 licenses; this license does not cover them.

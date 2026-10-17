@@ -1,98 +1,81 @@
-﻿MAMIDLABS — END USER LICENSE AGREEMENT (EULA)
+﻿MAMIDLABS — LICENSE NOTICE (PolyForm Strict 1.0.0)
 
 Version 1.0 — Effective date: 2026
-Copyright (c) 2026 Aybars Haydar Altuntas. All Rights Reserved.
+Copyright (c) 2026 Aybars Haydar Altuntaş.
 
-This End User License Agreement ("Agreement") applies to the MamidLabs software together with
-all of its source code, compiled files, assets, documentation, updates and related files (the
-"Software"). By installing, copying or using the Software you acknowledge that you have read and
-accept all of the terms of this Agreement. If you do not accept the terms, do not install or use
-the Software.
+This software is offered under the PolyForm Strict License 1.0.0. The binding text is below:
+the software may be used for NONCOMMERCIAL purposes only; you may not distribute the software
+or make changes or new works based on it. Commercial use requires prior written permission from
+the licensor. Official text and current version:
+https://polyformproject.org/licenses/strict/1.0.0
 
-1) DEFINITIONS
-"Owner" means the developer and rights holder of the Software, Aybars Haydar Altuntas.
-"User" means the natural or legal person who installs, uses or accesses the Software.
+The AI models used (Qwen, Krea 2, the Krea 2 Identity Edit LoRA, Wan 2.2 etc.) and third-party
+components (llama.cpp, ComfyUI, ComfyUI-GGUF, comfyui-krea2edit etc.) are not owned by the
+licensor and are subject to their own licenses; this license does not cover them. The user is
+solely responsible for any malicious, unlawful or rights-infringing use of those models and must
+comply with applicable law and third-party rights.
 
-2) OWNERSHIP AND INTELLECTUAL PROPERTY RIGHTS
-The Software is owned by the Owner. The copyright, trademark, design, patent and all other
-intellectual and industrial property rights in and to the Software belong exclusively to the
-Owner. This Agreement does NOT transfer any ownership right in the Software to the User; it
-grants only the limited license of use described below. The Software is licensed, not sold,
-under this Agreement.
+--------------------------------------------------------------------
 
-3) SCOPE OF LICENSE AND RIGHT OF USE
-The Owner grants the User the right to install and use the Software solely for personal and/or
-purposes expressly authorized by the Owner, on the User's own device(s) that the User owns or
-lawfully controls. The User may not spread the Software beyond the permitted devices or transfer
-the license. The granted license is non-transferable, non-exclusive and revocable, and is subject
-to the terms of this Agreement.
+PolyForm Strict License 1.0.0
+https://polyformproject.org/licenses/strict/1.0.0
 
-4) PROHIBITED ACTIONS
-Without the Owner's prior written permission, the User may NOT:
-  a) copy, reproduce, distribute, publish, sell, rent, lease, lend, sublicense or otherwise
-     transfer the Software or any part of it;
-  b) market, sell, rent or otherwise commercialize the Software, or offer it for a fee or service;
-  c) modify, adapt or create derivative works of the Software;
-  d) present the Software as belonging to the User or to any other person; or remove, alter or
-     conceal the Owner's name or any copyright/proprietary notices;
-  e) attempt to reverse engineer, decompile or disassemble the Software; or disable its
-     protection/licensing mechanisms or apply a "crack" (except to the extent expressly permitted
-     by applicable law);
-  f) present the Software to third parties as "your own product" or make it part of a commercial
-     product or service.
-The actions above are prohibited.
+Copyright (c) 2026 Aybars Haydar Altuntaş
 
-5) LEGAL CONSEQUENCES OF UNAUTHORIZED USE
-Any use in violation of the prohibitions in this Agreement constitutes an infringement of, among
-others, copyright, trademark and intellectual/industrial property law. In the event of such
-unauthorized use, the Owner reserves all rights and remedies available under applicable law,
-including identification, cessation and remediation of the infringement, injunctive relief,
-damages, and civil and criminal remedies. Any person who copies, reproduces, steals,
-distributes, modifies, cracks or commercially markets the Software without authorization accepts
-in advance the resulting civil and criminal liability.
+Required Notice: Copyright (c) 2026 Aybars Haydar Altuntaş
 
-6) DISCLAIMER AND LIMITATION OF LIABILITY
-The Software is provided "AS IS" and "AS AVAILABLE". The Owner makes no warranty of any kind,
-express or implied, including merchantability, fitness for a particular purpose and
-non-infringement. The Owner shall not be liable for any direct, indirect, special, incidental or
-consequential damage, including but not limited to data loss, data corruption, crashes,
-downtime, loss of work or loss of profit, arising from the use of, or inability to use, the
-Software. To the maximum extent permitted by applicable law, the Owner's total liability is
-limited to the amount the User paid for the Software (if any).
+Acceptance
 
-7) TERMINATION
-If the User breaches any provision of this Agreement, the rights granted by the license
-terminate automatically and without notice. In that case the User must immediately stop using
-the Software and delete all copies in their possession. Termination of the license does not
-affect the ownership, liability and governing-law provisions of this Agreement.
+In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
 
-8) UPDATES AND CHANGES
-Software updates are provided under this Agreement. The Owner reserves the right to publish new
-versions of this Agreement.
+Copyright License
 
-9) GOVERNING LAW AND JURISDICTION
-This Agreement is governed by the laws of the Republic of Turkey. The courts and enforcement
-offices of the Republic of Turkey have jurisdiction over disputes.
+The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose, other than distributing the software or making changes or new works based on the software.
 
-10) GENERAL PROVISIONS
-If any provision of this Agreement is held invalid, the validity of the remaining provisions is
-not affected. Failure to exercise a right under this Agreement does not constitute a waiver of
-that right.
+Patent License
 
-11) UNCENSORED / OPEN-SOURCE AI MODELS AND THIRD-PARTY COMPONENTS
-The Software facilitates access to, and the running of, AI models that are already published as
-open source and that may be unfiltered (uncensored), so that users may use them for scientific
-research, education and personal development. Such models do not belong to the Owner; the Owner
-does not create, train, own or distribute them, and merely facilitates access to publicly
-available sources. The outputs of those models are not warranted as to accuracy, legality,
-ethical suitability or fitness for a particular purpose.
-The User is solely responsible for any use of those models for malicious, unlawful or harmful
-purposes, or in a manner that infringes the rights of third parties. The User agrees to use those
-models in compliance with applicable law and the rights of third parties. The Owner shall not be
-liable for any direct or indirect damage, nor for any civil or criminal liability, arising or
-that may arise from the use of those models. The User is obliged to comply with the legislation
-of their own country/jurisdiction when using those models.
+The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
 
-12) ACCEPTANCE
-Installing, copying or using the Software indicates that you have read and accept all of the
-provisions of this Agreement. If you do not accept them, do not use the Software.
+Noncommercial Purposes
+
+Any noncommercial purpose is a permitted purpose.
+
+Personal Uses
+
+Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
+
+Noncommercial Organizations
+
+Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
+
+Fair Use
+
+You may have "fair use" rights for the software under the law. These terms do not limit them.
+
+No Other Rights
+
+These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else. These terms do not imply any other licenses.
+
+Patent Defense
+
+If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
+
+Violations
+
+The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice. Otherwise, all your licenses end immediately.
+
+No Liability
+
+As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.
+
+Definitions
+
+The licensor is the individual or entity offering these terms, and the software is the software the licensor makes available under these terms.
+
+You refers to the individual or entity agreeing to these terms.
+
+Your company is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization. Control means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise. Control can be direct or indirect.
+
+Your licenses are all the licenses granted to you for the software under these terms.
+
+Use means anything you do with the software requiring one of your licenses.

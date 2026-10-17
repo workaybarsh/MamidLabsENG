@@ -11,6 +11,13 @@ editing, video generation and chart drawing. The language model runs on `llama.c
 (`llama-server`), the image/video models on `ComfyUI`, on the user's NVIDIA graphics card. OpenAI,
 Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API providers.
 
+### Changed
+- **The license is now PolyForm Strict 1.0.0 (source-available; noncommercial use only).**
+  `LICENSE` and `EULA.txt` carry the official PolyForm Strict 1.0.0 text: it grants no right to
+  distribute the software or make changes/new works; commercial use requires prior written
+  permission. The README license section, `docs/installation.md` and the license test were updated.
+  The version number is unchanged (1.0.0).
+
 ### Documentation
 - **Added a "Platform support" section to the README.** The Linux and macOS ports are
   marked **experimental**, with one-click platform badges linking to those repositories;
