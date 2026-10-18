@@ -340,6 +340,7 @@ function Start-ProfileDownload([string]$id, [string[]]$components = @('core', 'm
             target = (Join-Path $root ([string]$file.target))
             label = [string]$file.label
             bytes = [long]$file.bytes
+            sha256 = [string]$file.sha256
             mtp = $file.mtp
         }
     }

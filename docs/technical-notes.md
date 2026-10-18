@@ -16,7 +16,8 @@ mamidlabs-desktop.ps1  (WinForms interface, single window)
       ├─ agent/mamidlabs-inference.ps1   → llama-server /v1/chat/completions (stream + tool loop)
       │       ├─ agent/mamidlabs-agent-tools.py  → web search, page reading, finding reference images
       │       ├─ agent/office-tools.py      → read/write PDF / Word / Excel / PowerPoint
-      │       └─ agent/ocr-tools.py         → PaddleOCR on the GPU for plain images, on the CPU for PDFs
+      │       ├─ agent/ocr-tools.py         → PaddleOCR on the GPU for plain images, on the CPU for PDFs
+      │       └─ agent/rag-tools.py         → offline BM25 search in the bound folder (search_folder)
       │
       ├─ agent/imagegen-run.ps1     → VRAM swap + ComfyUI + Krea-2 Turbo
       ├─ agent/videogen-run.ps1     → VRAM swap + ComfyUI + Wan 2.2 TI2V-5B

@@ -11,6 +11,35 @@ editing, video generation and chart drawing. The language model runs on `llama.c
 (`llama-server`), the image/video models on `ComfyUI`, on the user's NVIDIA graphics card. OpenAI,
 Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API providers.
 
+### Added
+- **SHA256 verification and resuming a partial download for profile downloads.** `agent/hf-hub.py`
+  compares the downloaded file's SHA256 digest with Hugging Face's LFS digest (offline too when the
+  catalog has an optional `sha256` field); on a mismatch the file is deleted and a clear error is
+  given, so no silently corrupt model remains. The verification is done **before** the MTP injection
+  (the injection changes the file). A partial download resumes where it stopped via
+  `hf_hub_download`, and the worker reports it on the status line.
+  Tests: `tests/test_model_download_integrity.py`.
+- **Automatic effort: MAX/FLASH behavior based on the difficulty of the question (without reloading
+  the model).** Because MAX and FLASH are the same model, instead of switching profiles the
+  `reasoning_effort` for that turn is given per request: short question/greeting `low`, medium
+  `medium`, multi-step math/code/analysis `xhigh`. The choice is made once at the start of the turn
+  and stays constant for the turn (the KV prefix is not broken). It can be turned off with
+  **"Automatic effort (by question)"** in the Profiles menu (`settings\api.json → autoEffort`). It is
+  not applied on LITE or to API providers. Tests: `tests/test_auto_effort.py`.
+- **Prompt-injection hardening.** Web page, document, OCR and bound-file content is given to the
+  model labelled as **data** with `[UNTRUSTED CONTENT …]`; the fixed system prompt says not to follow
+  instructions inside it. If untrusted content was read that turn, approval is asked for
+  `run_command` and `write_bound_file` **even on the "Full access" chip** (`Test-ApprovalRequired`),
+  so an instruction hidden in the content cannot act on the user's behalf. Tests:
+  `tests/test_prompt_injection.py`.
+- **Local RAG: offline (BM25) search in the bound folder.** The new `search_folder` tool finds the
+  relevant text chunks before reading files one by one: `agent/rag-tools.py` scans plain-text files
+  (`node_modules`/`venv`/`.git` skipped), produces ~900-character chunks keeping line boundaries and
+  ranks them with BM25 + an exact-phrase bonus; the result comes back as `path:line`. The index is
+  kept under `tools\rag\` and is not rebuilt while the source files are unchanged; no extra Python
+  package is needed. Like other external sources, the result is labelled **untrusted data**. Tests:
+  `tests/test_rag_tools.py`.
+
 ### Changed
 - **The license is now PolyForm Strict 1.0.0 (source-available; noncommercial use only).**
   `LICENSE` and `EULA.txt` carry the official PolyForm Strict 1.0.0 text: it grants no right to
