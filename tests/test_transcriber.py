@@ -208,12 +208,36 @@ def test_choose_plan_lite_short_uses_cpu_long_uses_gpu_swap():
 
 
 def test_choose_plan_without_local_model_never_swaps():
-    """On an API provider the local language model is not loaded; the GPU is free -> no swap."""
+    """On an API provider the local model is neither loaded nor required; the GPU is free -> no swap."""
     from transcriber import config
 
     profile = config.select_profile(total_mib=8000)
     assert config.choose_plan(profile, vram_free_mib=0, ram_free_mib=0,
-                             local_model_loaded=False) == ("cuda", False)
+                             local_model_required=False, local_model_loaded=False) == ("cuda", False)
+
+
+def test_choose_plan_required_but_not_resident_forces_swap():
+    """Regression (real failure): when an audio turn cancels a model LOAD
+    (Stop-ModelSwitchForAudio) the language model is NOT in VRAM right now but IS required at the
+    end of the turn. Free VRAM looks large; the plan must NOT say "no swap", otherwise the ASR
+    models (~3.9 GB) take the 27B's place, the model is not restored and the next load is rejected
+    with "not enough free VRAM". Required + not resident -> ('cuda', True): drop + stop + restore."""
+    from transcriber import config
+
+    profile = config.select_profile(total_mib=16311)
+    # Even with plenty of free VRAM (model not loaded) and RAM the swap is MANDATORY.
+    assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=10 ** 6,
+                              ram_free_mib=10 ** 6, local_model_required=True,
+                              local_model_loaded=False) == ("cuda", True)
+    # The same rule holds for LITE (8 GB).
+    lite = config.select_profile(total_mib=8000)
+    assert config.choose_plan(lite, duration_seconds=5, vram_free_mib=10 ** 6,
+                              ram_free_mib=10 ** 6, local_model_required=True,
+                              local_model_loaded=False) == ("cuda", True)
+    # When the model really IS loaded the rule is UNCHANGED (VRAM/RAM decides as before).
+    assert config.choose_plan(profile, duration_seconds=5, vram_free_mib=10 ** 6,
+                              ram_free_mib=10 ** 6, local_model_required=True,
+                              local_model_loaded=True) == ("cuda", False)
 
 
 def test_choose_plan_uses_duration_short_cpu_long_gpu_when_vram_tight():
@@ -658,9 +682,13 @@ def test_worker_plan_action_decides_device_and_swap(monkeypatch, tmp_path):
     plan = module.plan({"profile": "pc2", "local_model_loaded": True})
     assert plan["device"] == "cuda" and plan["need_swap"] is True
 
-    # Local model not loaded (API) -> no swap.
-    plan = module.plan({"profile": "pc2", "local_model_loaded": False})
+    # API provider: the local model is neither loaded nor required -> no swap.
+    plan = module.plan({"profile": "pc2", "local_model_required": False, "local_model_loaded": False})
     assert plan["device"] == "cuda" and plan["need_swap"] is False
+    # Local provider + model NOT currently loaded (e.g. an audio turn cancelled the load) -> swap is
+    # MANDATORY; after the transcription the audio models are dropped and the model is restored.
+    plan = module.plan({"profile": "pc2", "local_model_required": True, "local_model_loaded": False})
+    assert plan["device"] == "cuda" and plan["need_swap"] is True
 
 
 def test_lite_profile_plan_short_cpu_long_gpu(monkeypatch, tmp_path):
@@ -686,9 +714,13 @@ def test_lite_profile_plan_short_cpu_long_gpu(monkeypatch, tmp_path):
     monkeypatch.setattr(audio, "probe_duration_seconds", lambda path: 5.0)
     plan = module.plan({"profile": "pc1", "local_model_loaded": True, "path": str(src)})
     assert plan["device"] == "cuda" and plan["need_swap"] is True
-    # Local model not loaded (API) -> the GPU is free, no swap.
-    plan = module.plan({"profile": "pc1", "local_model_loaded": False})
+    # API provider: the local model is neither loaded nor required -> no swap.
+    plan = module.plan({"profile": "pc1", "local_model_required": False, "local_model_loaded": False})
     assert plan["device"] == "cuda" and plan["need_swap"] is False
+    # Local provider + model NOT currently loaded (e.g. an audio turn cancelled the load) -> swap is
+    # MANDATORY: after the transcription the audio models are dropped and the model is restored.
+    plan = module.plan({"profile": "pc1", "local_model_required": True, "local_model_loaded": False})
+    assert plan["device"] == "cuda" and plan["need_swap"] is True
 
 
 def test_worker_plan_action_uses_path_duration(monkeypatch, tmp_path):
@@ -908,6 +940,43 @@ def test_inference_uses_warm_asr_server_with_fallback():
     assert "Start-AsrServerAsync" in block
     # The state file lives under the install root (nothing is written outside it; no uninstaller impact).
     assert "logs\\asr-server.json" in worker
+
+
+def test_audio_turn_releases_asr_and_restores_model_when_local_model_is_down(tmp_path):
+    """Regression (real failure): when an audio turn cancels a language-model LOAD
+    (`Stop-ModelSwitchForAudio`) the plan may say "no swap" because free VRAM looks large. So at
+    the end of the turn it is checked AGAIN: on the local provider, if the language model is NOT in
+    VRAM the audio models are dropped, the warm worker is stopped and the model is restored.
+    Otherwise the ASR holds ~3.9 GB, the model is not restored and the next load is rejected with
+    "not enough free VRAM". `Test-LocalModelResident` measures whether the model is loaded right now
+    via /health."""
+    worker = read_text("agent/mamidlabs-inference.ps1")
+    assert "function Test-LocalModelResident" in worker
+    resident = worker.split("function Test-LocalModelResident")[1].split("function ")[0]
+    assert "8080/health" in resident
+    # The plan carries TWO SEPARATE fields: 'is it required' (local provider) + 'is it loaded now'.
+    plan = worker.split("function Get-AudioTranscriptionPlan")[1].split("function ")[0]
+    assert "$localProvider = ($provider -eq 'local')" in plan
+    assert "local_model_required = $localProvider" in plan
+    assert "local_model_loaded = ($localProvider -and (Test-LocalModelResident))" in plan
+    # End-of-turn safety net: even with NO swap plan, drop + restore when the model is not loaded.
+    block = worker.split("function Invoke-TranscribeWithModelSwap")[1].split("function ")[0]
+    assert "$releaseAsr = $swapModel -or ($provider -eq 'local' -and !(Test-LocalModelResident))" in block
+    assert "if ($releaseAsr) {" in block
+    assert "if ($releaseAsr -and !$Shared.Cancel) { Start-AsrServerAsync }" in block
+    # Real pwsh: the probe returns True on a healthy reply and False on a closed/failing endpoint
+    # (no exception escapes).
+    fn = _extract_ps_function(worker, "Test-LocalModelResident")
+    script = fn + r"""
+$script:mode = 'ok'
+function Invoke-RestMethod { param($Uri, $TimeoutSec, $ErrorAction) if ($script:mode -eq 'ok') { [pscustomobject]@{ status = 'ok' } } else { throw 'closed' } }
+'OK=' + (Test-LocalModelResident)
+$script:mode = 'down'
+'DOWN=' + (Test-LocalModelResident)
+"""
+    out = _run_ps1(script, tmp_path)
+    assert "OK=True" in out, out
+    assert "DOWN=False" in out, out
 
 
 def test_worker_steers_model_away_from_reading_failed_audio():

@@ -10,7 +10,7 @@ are enabled by default. Output is chronological and timestamp-free:
 
 UI/worker contract: reads JSON on stdin, writes JSON on stdout.
     request: {"action":"transcribe","path":...,"device":"auto|cuda|cpu","need_swap":bool,"profile":"lite|pro","language":"auto", ...}
-    request: {"action":"plan","local_model_loaded":bool,"profile":"lite|pro"}  -> {"device":..,"need_swap":..}
+    request: {"action":"plan","local_model_required":bool,"local_model_loaded":bool,"profile":"lite|pro"} -> {"device":..,"need_swap":..}
     request: {"action":"unload"}  -> drops the loaded models from memory (frees VRAM/RAM)
     reply:   {"text":..., "model":..., "chars":..., "events":N, "diarized":bool} or {"error":...}
 
@@ -100,11 +100,16 @@ def plan(req: dict) -> dict:
     system RAM on the CPU -> CPU + no swap; (3) otherwise (long recording, or RAM
     insufficient) -> GPU + mandatory swap. The duration is estimated from `path` without
     decoding. The worker reports this plan to the UI/worker layer; the language model is
-    unloaded ONLY when a swap is required.
+    unloaded ONLY when a swap is required. `local_model_required` says the local model must be in
+    VRAM at the end of the turn and `local_model_loaded` says it is ACTUALLY loaded right now; when
+    it is required but not loaded (e.g. an audio turn cancelled the load) the plan FORCES a swap
+    (see config.choose_plan).
     """
     profile = _profile(req)
-    local = req.get('local_model_loaded')
-    local = True if local is None else bool(local)
+    local_loaded = req.get('local_model_loaded')
+    local_loaded = True if local_loaded is None else bool(local_loaded)
+    local_required = req.get('local_model_required')
+    local_required = True if local_required is None else bool(local_required)
     vram = config.free_vram_mib()
     ram = config.available_ram_mib()
     # Recording duration (short -> CPU, long -> GPU economy). Estimated without decoding.
@@ -118,7 +123,7 @@ def plan(req: dict) -> dict:
             duration = None
     device, need_swap = config.choose_plan(
         profile, duration_seconds=duration, vram_free_mib=vram, ram_free_mib=ram,
-        local_model_loaded=local)
+        local_model_loaded=local_loaded, local_model_required=local_required)
     return {
         'device': device,
         'need_swap': need_swap,

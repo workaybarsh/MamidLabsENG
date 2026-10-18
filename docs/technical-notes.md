@@ -571,7 +571,13 @@ pipeline lives in the `agent/transcriber/` package and runs in `venv\asr`:
   Whisper + AST fit together with the language model in free VRAM, GPU (no swap); if not and the
   recording is shorter than the threshold, CPU (no swap); otherwise GPU + mandatory swap. Threshold
   **pro ~20 s**, **lite ~15 s** (`agent/transcriber/config.py` → `DEFAULT_CPU_MAX_SECONDS` /
-  `Profile.cpu_max_seconds`).
+  `Profile.cpu_max_seconds`). When the model is required but **not currently loaded** (an audio turn
+  cancelled a model load, `Stop-ModelSwitchForAudio`) the plan **forces** the swap
+  (`local_model_required` + the measured `local_model_loaded`): even though free VRAM looks large,
+  the ASR models (~3.9 GB) take the language model's place and, if the model is not restored after
+  the turn, the next load is rejected with "not enough free VRAM".
+  `Invoke-TranscribeWithModelSwap` also re-measures at the end of the turn (`Test-LocalModelResident`)
+  and restores the model.
 - **Warm (persistent) worker:** the fixed cost repeated on every audio turn (Python start-up +
   `torch`/`transformers`/`faster-whisper` imports; measured ~10 s, ~25 s cold/disk) is paid once per
   session: `agent/whisper-tools.py --serve` runs as a single persistent process listening on

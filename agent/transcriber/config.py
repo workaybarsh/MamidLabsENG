@@ -250,7 +250,7 @@ def choose_device(duration_seconds: float | None, profile: Profile, need_swap: b
 
 def choose_plan(profile: Profile, duration_seconds: float | None = None,
                 vram_free_mib: int | None = None, ram_free_mib: int | None = None,
-                local_model_loaded: bool = True,
+                local_model_loaded: bool = True, local_model_required: bool = True,
                 cpu_max_seconds: float | None = None) -> tuple[str, bool]:
     """Returns the (device, need_swap) plan for the audio pipeline, in PRIORITY order.
 
@@ -276,14 +276,32 @@ def choose_plan(profile: Profile, duration_seconds: float | None = None,
     rule applies (CPU when RAM suffices, otherwise a mandatory swap). This avoids an
     unnecessary language-model unload/reload for a single recording.
 
-    If the local language model is not loaded (API provider) the GPU is already free
-    -> ('cuda', False). The CPU path is never a FORCED choice: if the chosen device fails the
+    There are TWO separate flags and they must NOT be confused:
+      - `local_model_required`: must the local language model be in VRAM at the END of this
+        turn? True on the local provider; False on an API provider (GPU free, no swap).
+      - `local_model_loaded`: is the local language model ACTUALLY in VRAM right now? The caller
+        MEASURES this with a health probe (`/health`). The name does NOT mean "is the provider
+        local".
+    When the local model is REQUIRED but NOT currently loaded (e.g. an audio turn cancelled the
+    model load, `Stop-ModelSwitchForAudio`) free VRAM looks large; still, saying "there is room"
+    is WRONG because the ASR models (~3.9 GB) take the language model's place and, if the model
+    is not restored after the turn, the next load is rejected with "not enough free VRAM". That
+    case therefore returns `('cuda', True)`: ASR runs on the GPU, then after the transcription the
+    audio models are dropped, the worker is stopped and the language model is restored.
+    The CPU path is never a FORCED choice: if the chosen device fails the
     worker layer falls back to the CPU; if there is no GPU at all (no CUDA/nvidia-smi) the CPU
     remains as a last resort. When `vram_free_mib`/`ram_free_mib` are omitted they are read
     from the machine (if unreadable -> 0, i.e. assumed not to fit).
     """
-    if not local_model_loaded:
+    if not local_model_required:
+        # API provider: the local language model is neither present nor needed -> GPU free, no swap.
         return 'cuda', False
+    if not local_model_loaded:
+        # The local model is REQUIRED this turn but is NOT currently in VRAM (e.g. the load was
+        # cancelled for an audio turn). Free VRAM looks large, but saying "there is room" to the
+        # ASR would be wrong: the models hold ~3.9 GB and, if the model is not restored after the
+        # turn, the next load is rejected. Swap is MANDATORY -> drop + stop + restore the model.
+        return 'cuda', True
     if vram_free_mib is None:
         vram_free_mib = free_vram_mib()
     if ram_free_mib is None:

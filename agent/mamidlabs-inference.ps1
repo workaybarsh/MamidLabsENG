@@ -448,6 +448,19 @@ function Wait-LocalModelReady {
     throw 'The local language model did not become ready.'
 }
 
+function Test-LocalModelResident {
+    # Is the local language model ACTUALLY in VRAM right now? The audio plan MUST know this: when
+    # an audio turn cancels a model load (Stop-ModelSwitchForAudio) free VRAM looks large but the
+    # language model is REQUIRED at the end of the turn. If the plan says "no swap" the ASR models
+    # (~3.9 GB) take the 27B's place, the model is not restored and the next load is rejected with
+    # "not enough free VRAM" (a real failure). On a closed port the connection is refused at once,
+    # so the measurement costs ~0.
+    try {
+        $health = Invoke-RestMethod 'http://127.0.0.1:8080/health' -TimeoutSec 3 -ErrorAction Stop
+        return [bool]($health.status -eq 'ok')
+    } catch { return $false }
+}
+
 function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = $true) {
     $swapModel = ($provider -eq 'local')
     $ocrResponse = $null
@@ -697,7 +710,19 @@ function Get-AudioTranscriptionPlan([string]$path) {
         $whisperPy = Get-WhisperPyPath; $asrPy = Get-AsrPythonExe
         # The tier comes from the selected language-model profile (lite/pro); without a profile
         # the worker picks the tier from the machine's total VRAM.
-        $planPayload = @{ action = 'plan'; local_model_loaded = ($provider -eq 'local'); path = $path }
+        # `local_model_required`: on the local provider the language model must be in VRAM at the
+        # END of the turn. `local_model_loaded`: is the model ACTUALLY in VRAM right now (health
+        # probe). They are DIFFERENT: when an audio turn cancels a model load
+        # (Stop-ModelSwitchForAudio) free VRAM looks large but the model is required; if the plan
+        # does not know that it says "no swap" and the ASR holds ~3.9 GB
+        # (see transcriber/config.choose_plan).
+        $localProvider = ($provider -eq 'local')
+        $planPayload = @{
+            action = 'plan'
+            local_model_required = $localProvider
+            local_model_loaded = ($localProvider -and (Test-LocalModelResident))
+            path = $path
+        }
         $asrProfile = Get-AsrProfileName
         if ($asrProfile) { $planPayload.profile = $asrProfile }
         # The warm worker is tried first (imports are kept between turns); if UNREACHABLE, one-shot.
@@ -789,7 +814,14 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
             } catch { $err = $_ }
         }
     }
-    if ($swapModel) {
+    # At the END of the turn the language model MUST be in VRAM (local provider). Even when the
+    # plan said "no swap" the model load may have been cancelled for this turn
+    # (Stop-ModelSwitchForAudio) or the model may have died; free VRAM then looks large but the
+    # model is REQUIRED. Safety net: if the model is NOT loaded, force the swap path. Otherwise the
+    # ASR models hold ~3.9 GB, the language model is not restored and the next load is rejected
+    # with "not enough free VRAM" (a real failure).
+    $releaseAsr = $swapModel -or ($provider -eq 'local' -and !(Test-LocalModelResident))
+    if ($releaseAsr) {
         # Before the language model is reloaded into VRAM the audio models are dropped and the
         # warm worker is STOPPED: the worker process's remaining CUDA context (~140 MiB) could
         # eat the 27B's thin VRAM margin (see AGENTS §5/§13). The worker is restarted IN THE
@@ -810,7 +842,7 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
     }
     # Restart the warm worker IN THE BACKGROUND: imports finish before the NEXT audio turn
     # (the critical path only pays the model LOAD cost). Not started on cancel.
-    if ($swapModel -and !$Shared.Cancel) { Start-AsrServerAsync }
+    if ($releaseAsr -and !$Shared.Cancel) { Start-AsrServerAsync }
     if ($Shared.Cancel) { throw [OperationCanceledException]::new() }
     if ($err) { throw $err }
     return $resp

@@ -67,6 +67,20 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   row; the links still lead to the direct download.
 
 ### Fixed
+- **The language model was not restored when an audio turn cancelled a model load ("not enough free VRAM").**
+  On the local provider an audio turn cancels the in-flight language-model load
+  (`Stop-ModelSwitchForAudio`); at that moment the model is **not** in VRAM but it **is** required at
+  the end of the turn. The audio plan looked only at "free VRAM", which looks large (~15.5 GB) while
+  the model is absent, and said "no swap": the ASR models (~3.9 GB) took the 27B's place, the
+  language model was never restored and the next load was rejected with **"not enough free VRAM"**
+  (the app stayed without a model). The plan now separates two things: `local_model_required` (must
+  the model be present at the end of the turn) and the **measured** `local_model_loaded`
+  (`Test-LocalModelResident` → `/health`); when it is required but not loaded the swap is
+  **forced**. `Invoke-TranscribeWithModelSwap` also re-measures at the end of the turn as a
+  **safety net**; if the model is absent it drops the audio models, stops the worker and restores the
+  model. Tests: `tests/test_transcriber.py`
+  (`test_choose_plan_required_but_not_resident_forces_swap`,
+  `test_audio_turn_releases_asr_and_restores_model_when_local_model_is_down`).
 - **The VRAM spill that halved PRO/FLASH speed is fixed with an automatic 32K → 16K context
   fallback.** Live measurement (llama.cpp's own buffer report on an RTX 5060 Ti 16 GB) showed the
   27B has a **real GPU footprint of ~15.77 GiB at a 32K context** (model buffer 13945 MiB + KV
