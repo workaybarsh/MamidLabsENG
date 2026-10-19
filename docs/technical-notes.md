@@ -554,11 +554,8 @@ pipeline lives in the `agent/transcriber/` package and runs in `venv\asr`:
 - **Speech:** `faster-whisper` **large-v3**. Silero VAD keeps non-speech spans away from Whisper;
   `condition_on_previous_text=False` plus `no_speech`/`log_prob`/`compression_ratio` thresholds and
   low-temperature fallback reduce hallucination.
-- **Non-speech sounds:** AST (`MIT/ast-finetuned-audioset-10-10-0.4593`) tags events (footsteps,
-  door, applause…). Speech labels are filtered. Default **on**; toggled by the microphone-menu
-  **"Non-speech sounds"** checkbox (`api.json -> audioEvents`).
 - **Speaker diarization:** pyannote (needs a HF token; skipped without one).
-- **Output** is chronological and timestamp-free: `(footsteps)` / `Speaker: ...` lines.
+- **Output** is chronological and timestamp-free: `Speaker: ...` lines.
 - **Profiles (tier):** `config.py` now chooses the tier from the **selected language-model
   profile** (`select_profile_for`): **pro** (MAX/FLASH) → `float16`, models resident together;
   **lite** → `int8_float16`, models loaded sequentially and long recordings split into 30-minute
@@ -568,7 +565,7 @@ pipeline lives in the `agent/transcriber/` package and runs in `venv\asr`:
 - **CPU / GPU choice:** a GPU transcription requires unloading and restoring the local language
   model (swap). The device/swap decision is not made from the tier name but from the **measured real
   free VRAM + system RAM and the recording's duration** when the audio job starts (`choose_plan`): if
-  Whisper + AST fit together with the language model in free VRAM, GPU (no swap); if not and the
+  Whisper fits together with the language model in free VRAM, GPU (no swap); if not and the
   recording is shorter than the threshold, CPU (no swap); otherwise GPU + mandatory swap. Threshold
   **pro ~20 s**, **lite ~15 s** (`agent/transcriber/config.py` → `DEFAULT_CPU_MAX_SECONDS` /
   `Profile.cpu_max_seconds`). When the model is required but **not currently loaded** (an audio turn
@@ -587,14 +584,13 @@ pipeline lives in the `agent/transcriber/` package and runs in `venv\asr`:
   27B's margin) and restarted in the background after the turn; it exits itself after 600 s idle /
   when the app closes. If the worker is unreachable the transcript falls back to the one-shot
   `Invoke-PythonTool` path (behavior preserved).
-- **HF cache (`HF_HOME`):** the audio models (whisper large-v3 + AST) live in the install root's HF
-  cache (`tools\hf-home`) and are used **offline** at runtime; the app sets
+- **HF cache (`HF_HOME`):** the audio model (whisper large-v3) lives in the install root's HF
+  cache (`tools\hf-home`) and is used **offline** at runtime; the app sets
   `$env:HF_HOME = <root>\tools\hf-home` in `mamidlabs-desktop.ps1` and `agent/mamidlabs-inference.ps1` passes
   `Get-HfHome` to both the one-shot `Invoke-PythonTool` (child process env) and the persistent
-  `Start-AsrServerProcess`. Without it the worker falls back to the DEFAULT HF cache, AST is not
-  there, and because `events.tag()` guards the load with `try/except` the transcript still completes
-  but the **events are skipped** (empty list). So AST working depends on `HF_HOME` (the same path the
-  installer uses).
+  `Start-AsrServerProcess`. Without it the worker falls back to the DEFAULT HF cache, the Whisper
+  model is not found and voice input fails. So transcription working depends on `HF_HOME` (the same
+  path the installer uses).
 
 ## Verifying the fixes
 

@@ -1,11 +1,9 @@
 """Chronological merge (NO timestamps in the text). Output shape:
 
-    (footsteps)
     Speaker: Did you come?
-    (door closing)
-    Speaker: Yes, a bit late.
+    Speaker 2: Yes, a bit late.
 
-Speech lines use "Speaker" (or "Speaker N" when diarized); events appear in parentheses.
+Speech lines use "Speaker" (or "Speaker N" when diarized).
 Lines are ordered CHRONOLOGICALLY only; timestamps are not written to the text
 (enable with `include_timestamps=True`).
 """
@@ -33,27 +31,21 @@ def _speaker_for(start: float, end: float, turns: list[dict]) -> str | None:
     return best
 
 
-def merge(segments: list[dict], events: list[dict], turns: list[dict] | None = None,
+def merge(segments: list[dict], turns: list[dict] | None = None,
           speaker_prefix: str = 'Speaker', include_timestamps: bool = False) -> str:
-    rows: list[tuple[float, int, str, dict]] = []
-    for segment in segments or []:
-        rows.append((float(segment['start']), 0, 'speech', segment))
-    for event in events or []:
-        rows.append((float(event['start']), 1, 'event', event))
-    # Chronological: when a speech line and an event share the same start, speech first.
-    rows.sort(key=lambda row: (row[0], row[1]))
-
+    """Turns speech segments (and any speaker diarization) into chronological text."""
+    rows = sorted(
+        ((float(segment['start']), segment) for segment in segments or []),
+        key=lambda row: row[0],
+    )
     lines: list[str] = []
-    for start, _, kind, obj in rows:
+    for start, obj in rows:
         prefix = '[%s] ' % timestamp(start) if include_timestamps else ''
-        if kind == 'speech':
-            label = speaker_prefix
-            speaker = _speaker_for(obj['start'], obj['end'], turns or [])
-            if speaker:
-                # 'SPEAKER_00' -> '1'
-                num = ''.join(ch for ch in speaker if ch.isdigit())
-                label = '%s %d' % (speaker_prefix, int(num) + 1) if num else speaker_prefix
-            lines.append('%s%s: %s' % (prefix, label, obj['text']))
-        else:
-            lines.append('%s(%s)' % (prefix, obj['text']))
+        label = speaker_prefix
+        speaker = _speaker_for(obj['start'], obj['end'], turns or [])
+        if speaker:
+            # 'SPEAKER_00' -> '1'
+            num = ''.join(ch for ch in speaker if ch.isdigit())
+            label = '%s %d' % (speaker_prefix, int(num) + 1) if num else speaker_prefix
+        lines.append('%s%s: %s' % (prefix, label, obj['text']))
     return '\n'.join(lines)

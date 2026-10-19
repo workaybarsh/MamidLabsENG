@@ -74,7 +74,7 @@ To **add your own model later**, use "Add local language model (GGUF)…" and
    | `runtime` | Bundled PowerShell 7.6.6 |
    | `llama` | llama.cpp b10998 (CUDA 13.4) |
    | `python` | App and media Python environments (pinned versions) |
-   | `asr` | Audio-transcription environment `venv\asr` (faster-whisper + AST + pyannote; skipped with `-SkipAudio`) |
+   | `asr` | Audio-transcription environment `venv\asr` (faster-whisper + pyannote; skipped with `-SkipAudio`) |
    | `comfyui` | ComfyUI `b0f4b7b`, ComfyUI-GGUF `6ea2651` and comfyui-krea2edit `86f886d` (photo editing) |
    | `verify` | Presence and run check of the components |
 

@@ -79,7 +79,7 @@ FinishedLabelNoIcons=MamidLabs has been installed on your computer. You can open
 
 [Tasks]
 Name: "media"; Description: "Image and video generation - generate/edit photos and generate video (ComfyUI + Krea-2 + Wan 2.2, ~20 GB depending on the profile). Uncheck to install only chat, documents, OCR and audio"; GroupDescription: "Components (recommended):"
-Name: "audio"; Description: "Audio capture - transcribe a microphone recording or an audio file to text; speech plus non-speech audio events (Whisper large-v3 + AST, ~4 GB)"; GroupDescription: "Components (recommended):"
+Name: "audio"; Description: "Audio capture - transcribe a microphone recording or an audio file to text; speech (Whisper large-v3, ~3 GB)"; GroupDescription: "Components (recommended):"
 Name: "ocr"; Description: "OCR - reads the text inside a photo, a scanned page or a screenshot and converts it to text (e.g. an invoice or a handwritten note); about 5.5 GB"; GroupDescription: "Components (recommended):"
 Name: "smoketest"; Description: "Run the smoke test at the end of setup (chat, document, image, model switch) - can take a long time (tens of minutes)"; GroupDescription: "Verification:"; Flags: checkedonce
 

@@ -111,38 +111,52 @@ def test_start_action_accepts_skip_memory_check_switch():
 
 
 def test_max_budget_margin_is_context_aware_and_prevents_spill():
-    """Measured on an RTX 5060 Ti 16 GB with the 27B, from llama.cpp's OWN report (b10998, q4_0
-    KV, MTP on): CUDA0 model buffer 13945 MiB, KV cache 576 MiB @32768 / 288 @16384,
-    recurrent-state buffer 598.5 MiB (fixed), compute buffer ~112 MiB. The non-weight overhead is
-    therefore ~1200 MiB at 32K but only ~800 MiB at 16K. The old fixed 750 MiB margin
-    (threshold 15350) admitted 32K with only ~15.50 GiB free: it SPILLED ~400 MiB into Windows
-    shared memory and chat dropped from ~40 to ~27 tok/s. Measured footprints (dedicated+shared)
-    are 15324 MiB @16384 (no spill, ~40 tok/s) and ~15770 @32768 (spilled)."""
+    """Measured on an RTX 5060 Ti 16 GB with the 27B (llama.cpp's own report + real nvidia-smi):
+    15112 MiB @8192, 15324 @16384, ~15770 @32768 (dedicated + shared). These three points lie on
+    ONE straight line: footprint ~= 14878 + 0.02722*ctx. The old code used a FIXED margin
+    (800/1200) for 16K/32K; it sat on the same line but rejected everything in between (e.g. 20K)
+    and left free VRAM unused. The margin is now linear (278 MiB base + 27.9 MiB per 1K tokens),
+    i.e. it equals 800 at 16K and 1200 at 32K — exactly the measurements."""
     import re
 
     manager = read_text("scripts/manage-mamidlabs.ps1")
     assert "function Get-ModelOverheadMiB" in manager
-    m32 = re.search(r"if \(\$ctx -ge 32768\) \{ return (\d+) \}", manager)
-    m16 = re.search(r"if \(\$ctx -ge 16384\) \{ return (\d+) \}", manager)
-    assert m32, "32K overhead entry not found"
-    assert m16, "16K overhead entry not found"
+    m = re.search(r"return \[int\]\[math\]::Ceiling\((\d+) \+ \(\$ctx / 1024\.0\) \* ([\d.]+)\)", manager)
+    assert m, "linear margin formula not found"
+    base, per_k = int(m.group(1)), float(m.group(2))
     model_mib = 14600
-    threshold_32k = model_mib + int(m32.group(1))  # 15800
-    threshold_16k = model_mib + int(m16.group(1))  # 15400
-    free_normal_desktop = 15497  # measured with only the Windows desktop running
-    assert threshold_16k <= free_normal_desktop, "16K must fit a normal desktop"
-    assert threshold_32k > free_normal_desktop, "32K must NOT load when it would spill"
-    assert threshold_32k >= 15770, "the 32K margin must cover the measured spilled footprint"
+
+    def needed(ctx):
+        return model_mib + base + (ctx / 1024.0) * per_k
+
+    # Agrees with the measured footprints that mark the spill boundary.
+    assert abs(needed(16384) - 15324) <= 20, needed(16384)
+    assert abs(needed(32768) - 15770) <= 20, needed(32768)
+    assert abs(needed(8192) - 15112) <= 20, needed(8192)
+    # On a normal desktop (15497 free) 16K FITS and 32K does NOT (it used to spill).
+    free_normal_desktop = 15497
+    assert needed(16384) <= free_normal_desktop < needed(32768)
 
 
-def test_max_flash_falls_back_from_32k_to_16k_context():
-    """MAX/FLASH tries 32K first and falls back to 16K when 32K does not fully fit VRAM (it used
-    to spill into shared memory). The chosen context feeds both the memory gate and --ctx-size."""
+def test_max_flash_context_is_computed_from_measured_free_vram():
+    """MAX/FLASH context is no longer picked from the coarse 16K/32K steps but computed from the
+    MEASURED free VRAM (2K steps, 100 MiB safety margin), so free VRAM is not wasted: ~20K with
+    15.5 GiB free, ~39K with 15.9 GiB free. The gate still verifies it with a stepped fallback;
+    the chosen context feeds both the gate and --ctx-size. LITE keeps its fixed context."""
     manager = read_text("scripts/manage-mamidlabs.ps1")
-    assert "$ctxCandidates = if ($Profile -eq 'lite') { @([int]$liteCtx) } else { @(32768, 16384) }" in manager
+    assert "function Get-MaxContextForProfile" in manager
+    fn = manager.split("function Get-MaxContextForProfile")[1].split("function ")[0]
+    assert "memory.free" in fn
+    assert "$safetyMiB = 100" in fn
+    assert "[math]::Floor($maxCtx / 2048) * 2048" in fn
+    assert "if ($maxCtx -lt 4096) { return 0 }" in fn
+    assert "$dynamicCtx = Get-MaxContextForProfile $Profile" in manager
+    assert "$ctxCandidates = @($dynamicCtx)" in manager
+    assert "foreach ($fallback in @(32768, 24576, 16384, 12288, 8192, 4096))" in manager
     assert "foreach ($candidate in $ctxCandidates)" in manager
     assert "if ($chosenCtx) { $modelCtx = $chosenCtx; $budgetOk = $true; break }" in manager
     assert "'--ctx-size', \"$modelCtx\", '--predict', $predict, '--parallel', '1'" in manager
+    assert "if ($Profile -eq 'lite') {" in manager and "$ctxCandidates = @([int]$liteCtx)" in manager
 
 
 def test_lite_budget_is_not_tightened_by_the_max_fix():

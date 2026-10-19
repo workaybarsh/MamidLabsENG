@@ -78,11 +78,10 @@ $script:Packages = @{
         file = 'cudart-llama-bin-win-cuda-13.4-x64.zip'; bytes = 423535356
     }
 }
-# Audio transcription models (faster-whisper + AST). Prefetched into the HF cache
+# Audio transcription model (faster-whisper). Prefetched into the HF cache
 # (HF_HOME = root\tools\hf-home) at install time; no network needed at runtime. Whisper is
 # the standard large-v3 English edition (CTranslate2 float16).
 $script:AsrWhisperModel = 'Systran/faster-whisper-large-v3'
-$script:AsrEventsModel = 'MIT/ast-finetuned-audioset-10-10-0.4593'
 $script:LlamaBuild = 'b10998'
 $script:ComfyRepo = 'https://github.com/comfyanonymous/ComfyUI.git'
 # Commit verified end to end with image and video generation.
@@ -114,7 +113,7 @@ $script:AppPackages = Read-Requirements 'app.txt'
 $script:ImagegenTorch = @('torch', 'torchvision', 'torchaudio')
 $script:ImagegenTorchIndex = 'https://download.pytorch.org/whl/cu130'
 $script:ImagegenPackages = Read-Requirements 'imagegen.txt'
-# Audio (ASR) environment: faster-whisper (Whisper large-v3) + AST audio events + pyannote.
+# Audio (ASR) environment: faster-whisper (Whisper large-v3) + pyannote speaker diarization.
 # torch/torchaudio come from the CUDA 13.0 index separately (same index as imagegen).
 $script:AsrTorch = @('torch', 'torchaudio')
 $script:AsrPackages = Read-Requirements 'asr.txt'
@@ -535,11 +534,11 @@ function Invoke-Llama {
 }
 
 # ------------------------------------------------------------------ audio (ASR)
-# Speech transcription: faster-whisper (Whisper large-v3) + AST audio events. Models are
+# Speech transcription: faster-whisper (Whisper large-v3). The model is
 # prefetched into the HF cache (HF_HOME = root\tools\hf-home) at install time; no network is
 # needed at runtime. venv\asr is created in the "python" stage (see Invoke-Python).
 function Invoke-Asr {
-    Write-Step 'Audio transcription models (Whisper large-v3 + AST)'
+    Write-Step 'Audio transcription model (Whisper large-v3)'
     if ($SkipAudio) { Write-Skip 'Audio transcription models (-SkipAudio)'; return }
     $python = Join-Path $Root 'venv\asr\Scripts\python.exe'
     if (!(Test-Path -LiteralPath $python -PathType Leaf)) {
@@ -549,14 +548,13 @@ function Invoke-Asr {
     $env:HF_HOME = Join-Path $Root 'tools\hf-home'
     $env:HF_HUB_DISABLE_TELEMETRY = '1'
     $env:MAMIDLABS_ASR_WHISPER = $script:AsrWhisperModel
-    $env:MAMIDLABS_ASR_EVENTS = $script:AsrEventsModel
     $code = @'
 import os
 from huggingface_hub import snapshot_download
-for repo in (os.environ["MAMIDLABS_ASR_WHISPER"], os.environ["MAMIDLABS_ASR_EVENTS"]):
-    print("downloading: " + repo, flush=True)
-    snapshot_download(repo_id=repo)
-    print("done: " + repo, flush=True)
+repo = os.environ["MAMIDLABS_ASR_WHISPER"]
+print("downloading: " + repo, flush=True)
+snapshot_download(repo_id=repo)
+print("done: " + repo, flush=True)
 '@
     try {
         $output = Invoke-NativeText { $code | & $python - }

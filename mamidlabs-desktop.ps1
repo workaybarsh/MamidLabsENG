@@ -20,6 +20,12 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
+# Text encoding: read/write child processes' output/errors as UTF-8. Otherwise PowerShell writes
+# to the child with `[Console]::OutputEncoding` in the OEM code page and the parent decodes it as
+# UTF-8, turning non-ASCII characters into "boxes" (U+FFFD; see AGENTS pitfall 25).
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
+
 # Prevents inheriting the powershell.exe host's own Application User Model ID;
 # otherwise Windows shows PowerShell's own icon on the taskbar.
 Add-Type -TypeDefinition @'
@@ -84,10 +90,10 @@ if ($existingWindow -ne [IntPtr]::Zero) {
 # This file lives in the install root; $root is derived from its own location, so
 # the app runs from whichever folder it was installed to.
 $root = $PSScriptRoot
-# The HF cache (audio models + downloads) lives UNDER THE INSTALL ROOT; child processes (python
+# The HF cache (audio model + downloads) lives UNDER THE INSTALL ROOT; child processes (python
 # tools, the warm audio worker) must use it offline. The installer uses the same path
-# (install-mamidlabs.ps1). Without it the worker falls back to the DEFAULT HF cache and the AST
-# audio-event model is not found -> voice input fails.
+# (install-mamidlabs.ps1). Without it the worker falls back to the DEFAULT HF cache and the
+# Whisper model is not found -> voice input fails.
 $env:HF_HOME = Join-Path $root 'tools\hf-home'
 . (Join-Path $root 'agent\api-providers.ps1')
 . (Join-Path $root 'agent\api-settings.ps1')
@@ -119,9 +125,9 @@ $script:currentTurnHasImage = $false
 $script:currentTurnImagePaths = @()
 $script:currentTurnAudioPaths = @()
 $script:micRecording = $false
-# Non-speech audio events (AST): toggled by the microphone-menu "Non-speech sounds" checkbox;
-# stored in settings (api.json -> audioEvents).
-$script:audioEvents = $true
+# When the warm ASR worker was last started (Add-SelectedAudio -> Prepare-AudioTurn). Prevents a
+# second worker from being spawned in the short window before the state file is written.
+$script:asrWarmAt = $null
 # Auto effort: since MAX/FLASH are the same model, reasoning_effort is selected per request
 # based on the question difficulty (api.json -> autoEffort; toggled in the Profiles menu).
 $script:autoEffort = $true
@@ -1322,7 +1328,7 @@ $composer.Controls.Add($send)
 
 # Microphone button: immediately left of Send. While the microphone is RED (recording) clicking
 # the button CANCELS the recording (stops it, deletes the file, nothing is sent); when idle it
-# opens a small menu ("Use microphone" / "Non-speech sounds" / "Cancel"). Audio is transcribed
+# opens a small menu ("Use microphone" / "Cancel"). Audio is transcribed
 # automatically (faster-whisper) and the findings are given to the language model (the audio
 # counterpart of OCR). Right-click ALWAYS opens the menu, so a recording can be finished+sent or
 # cancelled even while it is running.
@@ -1340,14 +1346,7 @@ $composer.Controls.Add($micBtn)
 $micMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $micUse = $micMenu.Items.Add('Use microphone')
 [void]$micMenu.Items.Add('-')
-# Non-speech sounds: when checked, AST audio events are captured (default on); when
-# unchecked only the Whisper speech transcript is produced.
-$script:audioEvents = if ($null -ne $script:apiSettings.audioEvents) { [bool]$script:apiSettings.audioEvents } else { $true }
 $script:autoEffort = if ($null -ne $script:apiSettings.autoEffort) { [bool]$script:apiSettings.autoEffort } else { $true }
-$micEvents = New-Object System.Windows.Forms.ToolStripMenuItem('Non-speech sounds')
-$micEvents.CheckOnClick = $true
-$micEvents.Checked = $script:audioEvents
-[void]$micMenu.Items.Add($micEvents)
 [void]$micMenu.Items.Add('-')
 $micCancel = $micMenu.Items.Add('Cancel')
 # While recording the labels become "Finish and send" / "Cancel recording".
@@ -1375,12 +1374,6 @@ $micBtn.Add_MouseUp({
 $micUse.Add_Click({
     if ($script:micRecording) { Complete-MicrophoneCapture }
     else { Start-MicrophoneCapture }
-})
-$micEvents.Add_Click({
-    $script:audioEvents = [bool]$micEvents.Checked
-    $script:apiSettings.audioEvents = $script:audioEvents
-    Save-ApiSettings
-    $metric.Text = if ($script:audioEvents) { 'Non-speech sounds: on' } else { 'Non-speech sounds: off' }
 })
 $micCancel.Add_Click({
     if ($script:micRecording) { Cancel-MicrophoneCapture }
@@ -1607,6 +1600,8 @@ function Add-SelectedAudio([string]$path) {
     if (@($script:selectedAudio) -contains $path) { return }
     [void]$script:selectedAudio.Add($path)
     Update-AttachmentBadge
+    # As SOON AS an audio attachment is added: stop any in-flight model load and start the warm ASR worker.
+    Prepare-AudioTurn
 }
 # File picker for the microphone button / "Upload audio file".
 function Pick-AudioFile {
@@ -1867,6 +1862,13 @@ $statusCtrl.ForeColor = [System.Drawing.Color]::FromArgb(190, 200, 215)
 $controlTab.Controls.Add($statusCtrl)
 
 # ---------------------------------------------------------------- model management
+function Repair-UiText([string]$text) {
+    # The U+FFFD "box" character coming from invalidly encoded bytes must never reach the UI
+    # (source: child-process output). If the text is already UTF-8 it is unchanged.
+    if (!$text) { return $text }
+    return $text.Replace([string][char]0xFFFD, '?')
+}
+
 # Extracts a meaningful single line from the manager process's stderr (e.g. "Not enough free
 # VRAM: ..."); falls back to the generic message when empty/meaningless. Lets the UI show the
 # specific cause instead of a generic "Model operation failed".
@@ -1875,8 +1877,8 @@ function Format-ModelSwitchError([string]$stderrText) {
     if (!$stderrText) { return $generic }
     $lines = @($stderrText -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $vram = @($lines | Where-Object { $_ -match 'VRAM' } | Select-Object -First 1)
-    if ($vram.Count) { return $vram[0] }
-    if ($lines.Count) { return $lines[0] }
+    if ($vram.Count) { return (Repair-UiText $vram[0]) }
+    if ($lines.Count) { return (Repair-UiText $lines[0]) }
     return $generic
 }
 
@@ -1893,8 +1895,14 @@ function Invoke-Manage([string]$action, [string]$profile, [string]$modelId) {
     $psi.CreateNoWindow = $true
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     # Capture stderr so the real cause (e.g. insufficient VRAM) can reach the UI when the
-    # manager fails. Output is tiny, so the pipe cannot fill; it is read after exit.
+    # manager fails. Output is tiny, so the pipe cannot fill; it is read after exit. The encoding
+    # is explicitly UTF-8: if the child process writes stderr with the OEM code page non-ASCII
+    # text becomes "boxes" (U+FFFD; see AGENTS pitfall 25; manage-mamidlabs.ps1 also writes UTF-8).
+    # NOTE: StandardOutputEncoding can ONLY be set when RedirectStandardOutput is enabled;
+    # otherwise .NET throws "StandardOutputEncoding is only supported when standard output is
+    # redirected" and the model can NEVER be started (real bug). Only stderr is redirected here.
     $psi.RedirectStandardError = $true
+    $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
     return [System.Diagnostics.Process]::Start($psi)
 }
 
@@ -1924,8 +1932,10 @@ function Update-ModelSwitch {
 # worker). The fields are cleared first so the killed process's exit code is not shown as
 # "Model operation failed".
 function Stop-ModelSwitchForAudio {
-    if ($script:pendingModelChange) { $script:pendingModelChange = $null }
+    $hadSwitch = $false
+    if ($script:pendingModelChange) { $hadSwitch = $true; $script:pendingModelChange = $null }
     if ($script:switchProcess) {
+        $hadSwitch = $true
         try {
             if (!$script:switchProcess.HasExited) {
                 $script:switchProcess.Kill($true)
@@ -1938,6 +1948,69 @@ function Stop-ModelSwitchForAudio {
     $script:modelSwitchError = $null
     $script:modelReady = $false
     $script:activeModel = $null
+    # Killing the process is NOT enough: manage-mamidlabs starts llama-server SEPARATELY
+    # (detached); killing the launcher leaves the load running and it can hold the GPU. So
+    # `-Action stop` is ALSO run so VRAM is freed immediately and ASR does not have to wait
+    # (in the background, without waiting).
+    # NO NEEDLESS WORK: only run it when a load/process actually exists (so adding several audio
+    # files in a row does not spawn an empty manager process each time).
+    $hadLoad = [bool]$hadSwitch
+    if (!$hadLoad) {
+        $hadLoad = [bool](Get-Process -Name 'llama-server' -ErrorAction SilentlyContinue)
+    }
+    if ($hadLoad) {
+        try {
+            $psi = [Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+            foreach ($a in @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                             (Join-Path $root 'scripts\manage-mamidlabs.ps1'), '-Action', 'stop')) {
+                $psi.ArgumentList.Add($a)
+            }
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+            [void][Diagnostics.Process]::Start($psi)
+        } catch { }
+    }
+}
+
+function Start-AsrWarmForAudio {
+    # Starts the warm (persistent) ASR worker IN THE BACKGROUND. Goal: the fixed cost of the
+    # first audio turn (Python + torch/transformers/faster-whisper imports; measured ~10-25 s)
+    # starts AS SOON AS the audio attachment is added, so it is largely done by the time the
+    # user presses Send. The worker holds NO VRAM until it actually transcribes (see AGENTS
+    # §5/§13), so it does not affect the language model.
+    try {
+        $python = Join-Path $root 'venv\asr\Scripts\python.exe'
+        $worker = Join-Path $root 'agent\whisper-tools.py'
+        if (!(Test-Path -LiteralPath $python -PathType Leaf) -or !(Test-Path -LiteralPath $worker -PathType Leaf)) { return }
+        $statePath = Join-Path $root 'logs\asr-server.json'
+        # If a LIVE warm worker already exists (the pid in the state file is alive) leave it alone.
+        if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            $st = $null
+            try { $st = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json } catch { }
+            if ($st -and $st.pid -and (Get-Process -Id ([int]$st.pid) -ErrorAction SilentlyContinue)) { return }
+        }
+        # RACE GUARD: after the worker starts, until it writes the state file (~a few seconds) a
+        # second audio attachment (or a repeat call) must not spawn a second worker. If that
+        # window is missed, two workers load the models at once and double the VRAM.
+        if ($script:asrWarmAt -and ((Get-Date) - $script:asrWarmAt).TotalSeconds -lt 90) { return }
+        $script:asrWarmAt = Get-Date
+        $env:HF_HOME = Join-Path $root 'tools\hf-home'
+        $argList = @($worker, '--serve', '--state-file', $statePath, '--parent-pid', "$PID", '--idle-timeout', '600')
+        $quoted = ($argList | ForEach-Object { '"' + [string]$_ + '"' }) -join ' '
+        [void](Start-Process -FilePath $python -ArgumentList $quoted -WindowStyle Hidden)
+    } catch { }
+}
+
+# Called AS SOON AS an audio attachment is added (see Add-SelectedAudio).
+function Prepare-AudioTurn {
+    # (1) If the local model is not ready yet (first launch / a load in progress) the load is
+    # STOPPED: voice input invalidates the language-model load (see AGENTS §16). So the GPU is
+    # freed early.
+    if ($script:providerId -eq 'local' -and !$script:modelReady) { Stop-ModelSwitchForAudio }
+    # (2) The warm ASR worker is started in the background; the fixed import cost is paid upfront.
+    Start-AsrWarmForAudio
 }
 
 # "Stop": whatever is running right now (the language-model answer, ASR/OCR/tool subprocesses,
@@ -2659,7 +2732,6 @@ function Begin-Generation {
         currentImagePath = $(if ($script:currentTurnImagePaths.Count -gt 0) { [string]$script:currentTurnImagePaths[0] } else { '' })
         currentImagePaths = @($script:currentTurnImagePaths)
         currentAudioPaths = @($script:currentTurnAudioPaths)
-        audioEvents = [bool]$script:audioEvents
         multiImageOcr = [bool]($script:currentTurnMultiImageOcr -and $hasOcr)
         multiImageOcrMode = [bool]$script:multiImageOcrMode
         profile = $profile

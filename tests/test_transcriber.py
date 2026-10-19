@@ -1,6 +1,6 @@
 """Audio transcription pipeline (agent/transcriber) + UI/worker contracts.
 
-Engine: faster-whisper large-v3 + AST audio events + pyannote speaker diarization.
+Engine: faster-whisper large-v3 + pyannote speaker diarization.
 Qwen3-ASR and whisper.cpp were fully removed. Heavy tests are skipped when the model/
 environment is unavailable; the contracts are always checked.
 """
@@ -40,7 +40,7 @@ def load_worker():
 
 # --------------------------------------------------------------- package / config
 def test_package_modules_exist():
-    for name in ("config", "audio", "vad", "asr", "events", "diarize", "merge", "main"):
+    for name in ("config", "audio", "vad", "asr", "diarize", "merge", "main"):
         assert (TRANSCRIBER / f"{name}.py").is_file(), name + ".py missing"
 
 
@@ -80,15 +80,15 @@ def test_select_profile_for_uses_selected_profile_name():
     assert config.select_profile_for("unknown", total_mib=8000).name == "lite"
     assert config.select_profile_for("unknown", total_mib=16311).name == "pro"
     # overrides are applied to the profile selected by name too.
-    tuned = config.select_profile_for("lite", total_mib=16311, language="auto", events=False)
-    assert tuned.name == "lite" and tuned.language == "auto" and tuned.events is False
+    tuned = config.select_profile_for("lite", total_mib=16311, language="auto")
+    assert tuned.name == "lite" and tuned.language == "auto"
 
 
 def test_config_overrides_are_applied():
     from transcriber import config
 
-    profile = config.select_profile(total_mib=8000, language="en", events=False)
-    assert profile.language == "en" and profile.events is False
+    profile = config.select_profile(total_mib=8000, language="en")
+    assert profile.language == "en"
 
 
 # ---------------------------------------------------- automatic device choice
@@ -280,8 +280,8 @@ def test_choose_plan_no_duration_falls_back_to_memory_only():
 
 
 def test_audio_budget_matches_measured_pipeline():
-    """The VRAM margin must cover the documented components (Whisper int8 ~1.5-2.5 GB + AST
-    ~0.4 GB + torch/CUDA ~0.3-0.5 GB); on 8 GB LITE the language model holds ~7.5 GB so this
+    """The VRAM margin must cover the documented components (Whisper int8 ~1.5-2.5 GB +
+    torch/CUDA ~0.3-0.5 GB); on 8 GB LITE the language model holds ~7.5 GB so this
     margin is not available and the plan falls back to CPU/swap."""
     from transcriber import config
 
@@ -293,16 +293,13 @@ def test_audio_budget_matches_measured_pipeline():
 def test_merge_is_chronological_without_timestamps_and_uses_speaker_labels():
     from transcriber import merge
 
+    # The input order is scrambled; the output must be CHRONOLOGICAL.
     text = merge.merge(
-        [{"start": 7, "end": 9, "text": "Did you come?"},
-         {"start": 11, "end": 13, "text": "Yes, a bit late."}],
-        [{"start": 3, "end": 5, "text": "footsteps"},
-         {"start": 9, "end": 10.5, "text": "door closing"}],
+        [{"start": 11, "end": 13, "text": "Yes, a bit late."},
+         {"start": 7, "end": 9, "text": "Did you come?"}],
     )
     assert text == (
-        "(footsteps)\n"
         "Speaker: Did you come?\n"
-        "(door closing)\n"
         "Speaker: Yes, a bit late."
     )
     assert "[" not in text
@@ -314,7 +311,6 @@ def test_merge_numbers_speakers_when_diarized():
     text = merge.merge(
         [{"start": 7, "end": 9, "text": "Did you come?"},
          {"start": 11, "end": 13, "text": "Yes."}],
-        [],
         turns=[{"start": 7, "end": 9, "speaker": "SPEAKER_00"},
                {"start": 11, "end": 13, "speaker": "SPEAKER_01"}],
     )
@@ -325,7 +321,7 @@ def test_merge_numbers_speakers_when_diarized():
 def test_merge_can_include_timestamps_when_asked():
     from transcriber import merge
 
-    text = merge.merge([{"start": 65, "end": 70, "text": "Hello"}], [], include_timestamps=True)
+    text = merge.merge([{"start": 65, "end": 70, "text": "Hello"}], include_timestamps=True)
     assert text.startswith("[01:05] Speaker: Hello")
 
 
@@ -352,46 +348,6 @@ def test_asr_whisper_accuracy_settings():
     assert "condition_on_previous_text=False" in src
     assert "vad_filter=True" in src
     assert "no_speech_threshold" in src and "compression_ratio_threshold" in src
-
-
-# ------------------------------------------------------------------- events
-def test_events_filters_speech_labels_and_translates():
-    from transcriber import events
-
-    assert events._translate("Walk, footsteps") == "footsteps"
-    assert events._translate("Door") == "door sound"
-    assert "speech" in events.SPEECH_LABELS
-    assert "male speech, man speaking" in events.SPEECH_LABELS
-    src = read_text("agent/transcriber/events.py")
-    assert "SPEECH_LABELS" in src and "_merge_repeats" in src
-
-
-def test_events_load_failure_does_not_break_transcription():
-    """If the AST model cannot be loaded (e.g. the HF cache is missing) the WHOLE transcription
-    must NOT fail; the events are skipped. Regression: `_load_events_model` was called OUTSIDE a
-    try; when the app did not set HF_HOME at runtime (the default cache has no AST) voice input
-    failed completely."""
-    import re
-
-    src = read_text("agent/transcriber/events.py")
-    assert re.search(
-        r"try:\s*\n\s*extractor, model = _load_events_model\(profile\)\s*\n"
-        r"\s*except Exception:\s*\n\s*return \[\]",
-        src,
-    ), "events.tag must guard the AST model load with try/except"
-
-
-def test_events_tag_returns_empty_when_model_missing(monkeypatch):
-    """Behavior: when the events model cannot be loaded `tag` does not leak an exception and
-    returns an empty list."""
-    from transcriber import events
-
-    def boom(profile):
-        raise OSError("no model")
-
-    monkeypatch.setattr(events, "_load_events_model", boom)
-    profile = SimpleNamespace(events=True, events_model="MIT/ast-x", name="pro")
-    assert events.tag("missing.wav", profile) == []
 
 
 # ------------------------------------------------------------- worker / UI
@@ -427,14 +383,13 @@ def test_worker_dispatch_ping_unknown_and_unload(monkeypatch):
     assert module._dispatch({"action": "ping"})["ok"] is True
     assert "error" in module._dispatch({"action": "no-such-action"})
 
-    from transcriber import asr, diarize, events
+    from transcriber import asr, diarize
     calls = []
     monkeypatch.setattr(asr, "unload_model", lambda: calls.append("asr"))
-    monkeypatch.setattr(events, "unload_events_model", lambda: calls.append("events"))
     monkeypatch.setattr(diarize, "unload_pipeline", lambda: calls.append("diarize"))
     out = module._dispatch({"action": "unload"})
     assert out["ok"] is True
-    assert calls == ["asr", "events", "diarize"]
+    assert calls == ["asr", "diarize"]
 
 
 @pytest.mark.skipif(not WORKER.is_file(), reason="worker missing")
@@ -499,7 +454,7 @@ def test_serve_mode_ping_and_idle_exit(tmp_path):
 
 def _patch_transcriber_pipeline(monkeypatch, duration, capture):
     """Replaces the heavy model calls with fakes; captures the chosen device."""
-    from transcriber import asr, audio, diarize, events, merge
+    from transcriber import asr, audio, diarize, merge
 
     monkeypatch.setattr(audio, "to_wav16k_mono", lambda p: str(p))
     monkeypatch.setattr(audio, "duration_seconds", lambda p: duration)
@@ -511,8 +466,6 @@ def _patch_transcriber_pipeline(monkeypatch, duration, capture):
 
     monkeypatch.setattr(asr, "transcribe", fake_transcribe)
     monkeypatch.setattr(asr, "unload_model", lambda: None)
-    monkeypatch.setattr(events, "tag", lambda *a, **k: [])
-    monkeypatch.setattr(events, "unload_events_model", lambda: None)
     monkeypatch.setattr(diarize, "diarize", lambda *a, **k: [])
     monkeypatch.setattr(diarize, "unload_pipeline", lambda: None)
     monkeypatch.setattr(merge, "merge", lambda *a, **k: "")
@@ -622,7 +575,7 @@ def test_worker_accepts_auto_and_need_swap(monkeypatch, tmp_path):
     def fake_run(path, **kw):
         captured.clear()
         captured.update(kw)
-        return {"text": "hello", "language": "auto", "events": [], "diarized": False,
+        return {"text": "hello", "language": "auto", "diarized": False,
                 "model": "m"}
 
     monkeypatch.setattr(transcriber_main, "run", fake_run)
@@ -755,9 +708,9 @@ def test_transcription_uses_asr_environment_not_imagegen():
 
 def test_asr_worker_uses_install_hf_cache():
     """The audio worker must use the INSTALL HF cache (root\\tools\\hf-home). Regression: the app
-    never set HF_HOME at runtime; the worker fell back to the DEFAULT HF cache, the AST audio-event
-    model was not there, so the events model could not be loaded and ALL voice input failed. The
-    installer uses the same path (install-mamidlabs.ps1)."""
+    never set HF_HOME at runtime; the worker fell back to the DEFAULT HF cache, the Whisper model
+    was not there, so ALL voice input failed. The installer uses the same path
+    (install-mamidlabs.ps1)."""
     worker = read_text("agent/mamidlabs-inference.ps1")
     assert "function Get-HfHome" in worker
     assert "tools\\hf-home" in worker
@@ -845,17 +798,20 @@ def test_microphone_red_button_cancels_recording():
     assert "$micBtn.Add_MouseUp({" in desktop
 
 
-def test_microphone_menu_has_non_speech_events_toggle():
-    """The microphone menu has a "Non-speech sounds" checkbox: checked -> AST events are
-    captured, unchecked -> only the speech transcript. Stored in api.json -> audioEvents and
-    passed to the worker."""
+def test_non_speech_audio_events_structure_is_removed():
+    """The non-speech audio events (AudioSet/AST) structure was FULLY removed: no microphone-menu
+    checkbox, no `audioEvents` setting, no `events` field passed to the worker and no
+    `transcriber/events.py`."""
     desktop = read_text("mamidlabs-desktop.ps1")
-    assert "Non-speech sounds" in desktop
-    assert "$script:audioEvents" in desktop
-    assert "audioEvents = [bool]$script:audioEvents" in desktop
-    assert "$script:apiSettings.audioEvents = $script:audioEvents" in desktop
+    assert "Non-speech sounds" not in desktop
+    assert "audioEvents" not in desktop
     worker = read_text("agent/mamidlabs-inference.ps1")
-    assert "events = $audioEvents" in worker
+    assert "audioEvents" not in worker
+    assert "events = " not in worker
+    assert "audioEvents" not in read_text("agent/whisper-tools.py")
+    assert not (TRANSCRIBER / "events.py").exists()
+    assert "events" not in read_text("agent/transcriber/config.py")
+    assert "events" not in read_text("agent/transcriber/main.py")
 
 
 def test_transcription_uses_model_swap_for_local_provider():
@@ -1349,8 +1305,9 @@ def test_stop_cancels_work_but_never_kills_an_in_flight_model_load():
 
 # ------------------------------------------------------------------ installer
 def test_installer_builds_asr_venv_and_downloads_models():
-    """Engine is faster-whisper (Whisper large-v3) + AST. The installer creates venv\\asr and
-    prefetches models into the HF cache (whisper.cpp and Qwen3-ASR removed)."""
+    """Engine is faster-whisper (Whisper large-v3) + pyannote speaker diarization. The installer
+    creates venv\\asr and prefetches the Whisper model into the HF cache (whisper.cpp and
+    Qwen3-ASR removed)."""
     installer = read_text("scripts/install-mamidlabs.ps1")
     assert "venv\\asr" in installer
     assert "Systran/faster-whisper-large-v3" in installer

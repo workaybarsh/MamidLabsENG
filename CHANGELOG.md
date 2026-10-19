@@ -67,6 +67,35 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   row; the links still lead to the direct download.
 
 ### Fixed
+- **The context size is now computed from the measured free VRAM so the card is fully used.**
+  The old code used COARSE steps (16K/32K): with 15.5 GiB free it rejected 32K and fell back to
+  16K, wasting 4–8K tokens. The margin is now a measured **linear** model (`Get-ModelOverheadMiB`:
+  base 278 MiB + ~27.9 MiB per 1K tokens; derived from 15112 MiB @8K, 15324 @16K, ~15770 @32K) and
+  **`Get-MaxContextForProfile`** picks the largest context that fits this card's REAL free VRAM in
+  2K steps with a 100 MiB safety margin (`--fit` was also tried, but its default `--fit-target`
+  leaves 1024 MiB free and ran at ~23 tok/s; not used). E.g. ~20K with 15.5 GiB free, ~39K with
+  15.9 GiB free. The gate still verifies with a stepped fallback; the chosen context feeds both the
+  gate and `--ctx-size`, and the UI reads the real value back from `/props`. Tests:
+  `tests/test_memory_admission.py` (`test_max_budget_margin_is_context_aware_and_prevents_spill`,
+  `test_max_flash_context_is_computed_from_measured_free_vram`).
+- **Child-process text is now read and written as UTF-8, so non-ASCII characters no longer become
+  "boxes" (U+FFFD).** PowerShell wrote the model manager's stderr with the OEM code page while the UI
+  read it as UTF-8; both sides are now explicitly UTF-8 (`[Console]::OutputEncoding`,
+  `StandardErrorEncoding`, and `PYTHONIOENCODING=utf-8` for Python tools),
+  and `Repair-UiText` strips any stray U+FFFD before it reaches the UI.
+  **Note:** `StandardOutputEncoding` may only be set with `RedirectStandardOutput` enabled;
+  otherwise .NET throws and **the model can never be started** (caught live; `Invoke-Manage` now uses
+  only `StandardErrorEncoding` and a test locks that in).
+- **Adding an audio attachment now stops an in-flight model load and warms the ASR worker.** So the
+  first audio turn is not heavy: as soon as the audio is attached, `Prepare-AudioTurn` stops the
+  language-model load on the local provider (and `manage -Action stop` frees VRAM immediately) and
+  starts the warm ASR worker (`whisper-tools.py --serve`, `logs\asr-server.json`) in the background;
+  the fixed import cost is paid before Send.
+- **Removed the non-speech audio events (AudioSet/AST) feature.** Transcription is now only
+  faster-whisper large-v3 + optional pyannote diarization: the `events` module/model, the
+  microphone-menu "Non-speech sounds" checkbox, the `audioEvents` setting, the worker's `events`
+  field, the `--no-events` flag and the installer's AST prefetch were removed (the
+  `transformers==5.17.0` pin stays as a pyannote/speechbrain dependency).
 - **The language model was not restored when an audio turn cancelled a model load ("not enough free VRAM").**
   On the local provider an audio turn cancels the in-flight language-model load
   (`Stop-ModelSwitchForAudio`); at that moment the model is **not** in VRAM but it **is** required at

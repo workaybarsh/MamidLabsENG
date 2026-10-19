@@ -43,15 +43,14 @@ function Get-OcrPythonExe { Join-Path (Get-InstallRoot) 'venv\ocr\Scripts\python
 function Get-OcrCpuPythonExe { Join-Path (Get-InstallRoot) 'venv\ocr-cpu\Scripts\python.exe' }
 function Get-WhisperPyPath { Join-Path (Get-InstallRoot) 'agent\whisper-tools.py' }
 function Get-MediaPythonExe { Join-Path (Get-InstallRoot) 'venv\imagegen\Scripts\python.exe' }
-# The audio transcription pipeline runs in its own environment (faster-whisper + transformers/AST + pyannote).
+# The audio transcription pipeline runs in its own environment (faster-whisper + pyannote).
 function Get-AsrPythonExe { Join-Path (Get-InstallRoot) 'venv\asr\Scripts\python.exe' }
 function Get-ManageMamidLabsPath { Join-Path (Get-InstallRoot) 'scripts\manage-mamidlabs.ps1' }
 function Get-AuditLogPath { Join-Path (Get-InstallRoot) 'logs\audit.jsonl' }
-# The HF cache (whisper large-v3-tr + the AST audio-event model) lives UNDER THE INSTALL ROOT;
-# the worker/tools must use it OFFLINE. If the app does not set HF_HOME at runtime the worker
-# falls back to the DEFAULT HF cache; the AST model is not there, so the events model cannot be
-# loaded and voice input fails. The installer uses the same path
-# (install-mamidlabs.ps1 -> $env:HF_HOME = <root>\tools\hf-home).
+# The HF cache (whisper large-v3) lives UNDER THE INSTALL ROOT; the worker/tools must use it
+# OFFLINE. If the app does not set HF_HOME at runtime the worker falls back to the DEFAULT
+# HF cache and the Whisper model cannot be found; voice input fails. The installer uses the
+# same path (install-mamidlabs.ps1 -> $env:HF_HOME = <root>\tools\hf-home).
 function Get-HfHome { Join-Path (Get-InstallRoot) 'tools\hf-home' }
 
 # Action audit log: after each tool call one JSON line is appended to logs/audit.jsonl
@@ -220,8 +219,12 @@ function Invoke-PythonTool([hashtable]$payload, [string]$scriptPath = $null, [st
     $psi.RedirectStandardError = $true
     $psi.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
     $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+    # Python writes its output to a PIPE using the ANSI code page by default; if the parent decodes
+    # it as UTF-8 non-ASCII text becomes "boxes" (U+FFFD). PYTHONIOENCODING forces UTF-8.
+    $psi.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
     # Python tools (including the audio worker whisper-tools.py) use the install HF cache OFFLINE:
-    # without HF_HOME the default cache is used and the AST model is not found.
+    # without HF_HOME the default cache is used and the Whisper model is not found.
     $psi.EnvironmentVariables['HF_HOME'] = Get-HfHome
     $p = [Diagnostics.Process]::Start($psi)
     try {
@@ -512,7 +515,7 @@ function Invoke-ImageOcrWithModelSwap([string[]]$paths, [bool]$waitForRestore = 
 # int8_float16/float16, loading sequential/parallel, CPU/GPU threshold 15/20 s). The DEVICE
 # and SWAP decision is made from the tier's memory thresholds + the REAL free VRAM + system
 # RAM measured when the audio job starts and the recording DURATION (see config.choose_plan):
-#   1) Whisper + AST fit in free VRAM ALONGSIDE the language model -> GPU, NO swap.
+#   1) Whisper fits in free VRAM ALONGSIDE the language model -> GPU, NO swap.
 #   2) They do not fit, but the recording is SHORT (swap cost outweighs the gain) and the
 #      pipeline fits in system RAM on the CPU -> CPU, NO swap (slower, but the language
 #      model stays resident in VRAM).
@@ -552,8 +555,8 @@ function Get-AudioTimeoutSeconds([double]$durationSeconds) {
 # The fixed cost repeated on EVERY audio turn (Python start-up + torch/transformers/
 # faster-whisper imports) is paid ONCE per session by keeping a single persistent worker
 # process (agent/whisper-tools.py --serve). Measured (RTX 5060 Ti, venv\asr): `import
-# transformers` alone ~25 s cold (~10 s warm); because audio events (AST) default ON this
-# cost was paid on every cold turn. The worker listens on 127.0.0.1; port/pid are published
+# transformers` alone ~25 s cold (~10 s warm); this cost was paid on every cold turn. The
+# worker listens on 127.0.0.1; port/pid are published
 # in `logs\asr-server.json`. It exits itself when the app closes (parent-pid) or after being
 # idle (idle-timeout), so there is no orphan process/VRAM/RAM leak. If the worker is
 # UNREACHABLE or a transport error occurs we FALL BACK to the one-shot Invoke-PythonTool
@@ -760,11 +763,7 @@ function Invoke-TranscribeWithModelSwap([string]$path, [bool]$waitForRestore = $
     }
     if (!$err) {
         $whisperPy = Get-WhisperPyPath; $asrPy = Get-AsrPythonExe
-        # Non-speech audio events (AST) setting: the microphone-menu checkbox.
-        $audioEvents = if ($null -eq $JobData.audioEvents) { $true } else { [bool]$JobData.audioEvents }
-        # The device/swap plan was decided above (free VRAM + RAM); the tier comes from the
-        # selected profile (lite/pro); pass them to the worker as-is.
-        $payloadBase = @{ action = 'transcribe'; path = $path; language = 'auto'; events = $audioEvents; device = $device; need_swap = $needSwap; timeoutSeconds = $audioTimeout }
+        $payloadBase = @{ action = 'transcribe'; path = $path; language = 'auto'; device = $device; need_swap = $needSwap; timeoutSeconds = $audioTimeout }
         $asrProfile = Get-AsrProfileName
         if ($asrProfile) { $payloadBase.profile = $asrProfile }
         try {

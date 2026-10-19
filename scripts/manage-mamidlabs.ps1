@@ -7,6 +7,10 @@
 )
 
 $ErrorActionPreference = 'Stop'
+# Write stderr as UTF-8: the caller (the UI) reads it with `StandardErrorEncoding = UTF8`.
+# Otherwise PowerShell writes stderr with the OEM code page and non-ASCII text becomes
+# "boxes" (U+FFFD) in the parent process (see AGENTS pitfall 25).
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 # Derive the install root from this file's own location: this file always lives under <root>\scripts\.
 $root = Split-Path -Parent $PSScriptRoot
 $server = Join-Path $root 'llama.cpp\b10998\llama-server.exe'
@@ -70,19 +74,41 @@ $ownsGate = $false
 # otherwise the layers would spill into Windows' shared memory and slow the chat down many
 # times over. The user is told the reason explicitly.
 # Non-weight VRAM overhead (KV cache + recurrent-state buffer + compute buffers + the CUDA
-# context) of the 27B MAX/FLASH model on an RTX 5060 Ti 16 GB, read from llama.cpp's OWN report
-# (llama.cpp b10998, q4_0 KV, MTP on): CUDA0 model buffer 13945 MiB, KV 144 MiB @8192 /
-# 288 @16384 / 576 @32768, recurrent-state buffer 598.5 MiB (fixed), compute buffer 76-112 MiB;
-# the remainder is the CUDA context. So the KV cache grows ~18 MiB per 1K tokens and the rest is
-# fixed. Measured GPU footprint (dedicated + shared): 15112 MiB @8192, 15324 @16384,
-# ~15770 @32768. The 32K figure is WHY a fixed 750 MiB margin was wrong: it admitted the model
-# with only ~15.50 GiB free, so ~400 MiB spilled into Windows shared memory and chat dropped from
-# ~40 to ~27 tok/s. LITE keeps its own small margin (the 9B already fits an 8 GB card).
+# context) of the 27B MAX/FLASH model on an RTX 5060 Ti 16 GB. Measured GPU footprint
+# (dedicated + shared): 15112 MiB @8192, 15324 @16384, ~15770 @32768. These three measurements
+# lie on ONE straight line:  footprint ~= 14878 MiB + 0.02722 * ctx  (the 14600 MiB model file is
+# included in that total). The old code used a FIXED margin (800/1200) for 16K/32K; it sat on the
+# same line but rejected everything in between (e.g. 20K) and left part of the free VRAM unused.
+# The margin is now LINEAR: 278 MiB base + ~27.9 MiB per 1K tokens. Context can therefore be picked
+# in fine steps (2K) from the card's REAL free VRAM.
 function Get-ModelOverheadMiB([string]$profileName, [int]$ctx) {
     if ($profileName -eq 'lite') { return 300 }
-    if ($ctx -ge 32768) { return 1200 }
-    if ($ctx -ge 16384) { return 800 }
-    return 600
+    return [int][math]::Ceiling(278 + ($ctx / 1024.0) * 27.9)
+}
+
+# Largest context that fits this profile's REAL free VRAM (MAX/FLASH). Computed from the measured
+# linear model; rounded down to a multiple of 2K and clamped to 4K..131072. 100 MiB safety margin:
+# when the model sits exactly at the limit the driver can spill into shared memory (that spill
+# dropped chat from ~40 to ~27 tok/s). 0 -> nothing fits, $null -> cannot measure (the caller then
+# falls back to the old coarse steps). LITE keeps its fixed context.
+function Get-MaxContextForProfile([string]$profileName) {
+    if ($profileName -eq 'lite') { return $null }
+    $smi = (Get-Command nvidia-smi -ErrorAction SilentlyContinue).Source
+    if (!$smi) { return $null }
+    $freeMiB = 0
+    try {
+        $line = (& $smi --query-gpu=memory.free --format=csv,noheader,nounits | Select-Object -First 1)
+        $freeMiB = [int]($line -replace '\D', '')
+    } catch { return $null }
+    if ($freeMiB -le 0) { return $null }
+    $baseMiB = 14878
+    $perToken = 0.02722
+    $safetyMiB = 100
+    $maxCtx = [int][math]::Floor(($freeMiB - $baseMiB - $safetyMiB) / $perToken)
+    $maxCtx = [int]([math]::Floor($maxCtx / 2048) * 2048)
+    if ($maxCtx -lt 4096) { return 0 }
+    if ($maxCtx -gt 131072) { $maxCtx = 131072 }
+    return $maxCtx
 }
 
 # $ctx is the context size the model would be loaded with; the KV-cache share of the overhead
@@ -361,14 +387,31 @@ try {
     # immediately, so a language model started right away is rejected for "not enough
     # memory" and stays down. So the memory check is retried a bounded number of times with
     # short waits.
-    # Context selection (MAX/FLASH): try 32K first, then fall back to 16K. Measured: 32K needs
-    # ~15.77 GiB on a 16 GB card but a normal Windows desktop only leaves ~15.50 GiB free, so
-    # loading it spilled ~400 MiB into shared memory and chat dropped to ~27 tok/s. At 16K the
-    # footprint is ~15.32 GiB, it fully fits and runs at ~40 tok/s (same model/weights, half the
-    # KV cache). The chosen context is used by BOTH the memory gate and --ctx-size below; the UI
-    # reads the real value back from the running server (see mamidlabs-desktop.ps1). LITE keeps
-    # its own context and has no fallback (the 9B already fits an 8 GB card).
-    $ctxCandidates = if ($Profile -eq 'lite') { @([int]$liteCtx) } else { @(32768, 16384) }
+    # Context selection (MAX/FLASH): instead of COARSE steps (16K/32K) the largest context that
+    # fits this card's REAL free VRAM is computed from the measured linear footprint model
+    # (Get-ModelOverheadMiB) in 2K steps. So e.g. with ~15.5 GiB free it picks ~20K instead of 32K
+    # and with ~15.9 GiB free ~39K; the old code fell back to 16K and left 4-8K tokens unused. The
+    # gate still verifies it with a stepped fallback (in case other processes left less room). The
+    # chosen context is used by BOTH the memory gate and --ctx-size below; the UI reads the real
+    # value back from the running server (see mamidlabs-desktop.ps1). LITE keeps its fixed context.
+    if ($Profile -eq 'lite') {
+        $ctxCandidates = @([int]$liteCtx)
+    } else {
+        $dynamicCtx = Get-MaxContextForProfile $Profile
+        if ($null -eq $dynamicCtx) {
+            # nvidia-smi missing/unreadable: fall back to the old coarse steps (behavior preserved).
+            $ctxCandidates = @(32768, 16384)
+        } elseif ($dynamicCtx -eq 0) {
+            # Measured free VRAM does not even cover the model BASE: ask the gate with the smallest
+            # context so the user gets a clear "not enough free VRAM" error.
+            $ctxCandidates = @(4096)
+        } else {
+            $ctxCandidates = @($dynamicCtx)
+            foreach ($fallback in @(32768, 24576, 16384, 12288, 8192, 4096)) {
+                if ($fallback -lt $dynamicCtx) { $ctxCandidates += $fallback }
+            }
+        }
+    }
     $modelCtx = $ctxCandidates[0]
     if (!$SkipMemoryCheck) {
         $budgetOk = $false

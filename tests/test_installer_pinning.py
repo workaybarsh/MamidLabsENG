@@ -23,12 +23,15 @@ def test_runtime_packages_carry_source_and_verified_size():
 
 
 def test_installer_builds_asr_venv_and_prefetches_models():
-    """Engine is faster-whisper (Whisper large-v3) + AST. The installer creates venv\\asr and
-    prefetches models into the HF cache (whisper.cpp and Qwen3-ASR removed)."""
+    """Engine is faster-whisper (Whisper large-v3) + pyannote speaker diarization. The installer
+    creates venv\\asr and prefetches the Whisper model into the HF cache (whisper.cpp, Qwen3-ASR
+    and the non-speech audio events/AST were removed)."""
     installer = read_text("scripts/install-mamidlabs.ps1")
     assert "venv\\asr" in installer
     assert "Systran/faster-whisper-large-v3" in installer
     assert "snapshot_download" in installer
+    assert "AsrEventsModel" not in installer
+    assert "MAMIDLABS_ASR_EVENTS" not in installer
     assert "asr       = { Invoke-Asr }" in installer
 
 

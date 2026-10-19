@@ -1,6 +1,6 @@
-# venv\asr: local speech + audio-event transcription pipeline.
+# venv\asr: local speech transcription pipeline.
 #   - faster-whisper: Whisper large-v3 (CTranslate2) speech transcription + built-in Silero VAD
-#   - transformers: AST (AudioSet) audio-event tagging
+#   - transformers: pyannote/speechbrain dependency (pinned version; prevents version drift)
 #   - pyannote.audio: speaker diarization (optional; needs a HF token)
 #   - av: convert to 16 kHz mono WAV (no ffmpeg needed)
 #

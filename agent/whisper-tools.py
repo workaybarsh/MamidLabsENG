@@ -1,18 +1,16 @@
 """Audio transcription worker: calls the `transcriber` package.
 
-Engine: faster-whisper large-v3. Audio events (AST) and speaker diarization (pyannote)
-are enabled by default. Output is chronological and timestamp-free:
+Engine: faster-whisper large-v3 + speaker diarization (pyannote, optional).
+Output is chronological and timestamp-free:
 
-    (footsteps)
     Speaker: Did you come?
-    (door closing)
-    Speaker: Yes, a bit late.
+    Speaker 2: Yes, a bit late.
 
 UI/worker contract: reads JSON on stdin, writes JSON on stdout.
     request: {"action":"transcribe","path":...,"device":"auto|cuda|cpu","need_swap":bool,"profile":"lite|pro","language":"auto", ...}
     request: {"action":"plan","local_model_required":bool,"local_model_loaded":bool,"profile":"lite|pro"} -> {"device":..,"need_swap":..}
     request: {"action":"unload"}  -> drops the loaded models from memory (frees VRAM/RAM)
-    reply:   {"text":..., "model":..., "chars":..., "events":N, "diarized":bool} or {"error":...}
+    reply:   {"text":..., "model":..., "chars":..., "diarized":bool} or {"error":...}
 
 WARM (persistent) worker: with `--serve` it keeps running on 127.0.0.1 instead of one-shot
 stdin and holds the models IN-PROCESS. So the fixed per-turn cost (Python start-up +
@@ -73,7 +71,6 @@ def transcribe(req: dict) -> dict:
         device=device,
         need_swap=need_swap,
         initial_prompt=req.get('initial_prompt'),
-        events=req.get('events'),
         diarize_enabled=req.get('diarize'),
         token=req.get('token'),
         include_timestamps=False,
@@ -87,7 +84,6 @@ def transcribe(req: dict) -> dict:
         'chars': len(payload['text']),
         'language': payload['language'],
         'profile': profile.name,
-        'events': len(payload['events']),
         'diarized': payload['diarized'],
     }
 
@@ -135,16 +131,15 @@ def plan(req: dict) -> dict:
 
 
 def unload(_req: dict | None = None) -> dict:
-    """Drops the loaded ASR/AST/diarization models from memory (frees VRAM/RAM).
+    """Drops the loaded ASR/diarization models from memory (frees VRAM/RAM).
 
     The persistent (warm) worker holds the models in-process; this is called before the
     language model is reloaded into VRAM so the audio models are released first (see
     mamidlabs-inference.ps1). The process KEEPS RUNNING (only the models are dropped), so the
     imports/caches stay warm.
     """
-    from transcriber import asr, diarize, events
+    from transcriber import asr, diarize
     for fn in (getattr(asr, 'unload_model', None),
-               getattr(events, 'unload_events_model', None),
                getattr(diarize, 'unload_pipeline', None)):
         if callable(fn):
             try:

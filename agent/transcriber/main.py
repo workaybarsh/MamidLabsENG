@@ -1,4 +1,4 @@
-"""Hatti calistirir: audio -> vad/asr + events -> diarize -> merge -> txt + json.
+"""Hatti calistirir: audio -> vad/asr -> diarize -> merge -> txt + json.
 
 Iki kullanim:
     python -m transcriber.main <ses_dosyasi> [--json cikti.json] [--timestamps]
@@ -19,11 +19,11 @@ import json
 import os
 import sys
 
-from . import asr, audio, config, diarize, events as events_mod, merge
+from . import asr, audio, config, diarize, merge
 
 
 def run(path: str, profile=None, device: str = 'cuda', initial_prompt: str | None = None,
-        events: bool | None = None, diarize_enabled: bool | None = None,
+        diarize_enabled: bool | None = None,
         token: str | None = None, include_timestamps: bool = False,
         out_base: str | None = None, keep_wav: bool = False,
         need_swap: bool | None = None) -> dict:
@@ -31,7 +31,6 @@ def run(path: str, profile=None, device: str = 'cuda', initial_prompt: str | Non
         raise ValueError('Ses dosyasi bulunamadi: %s' % path)
     profile = profile or config.select_profile()
     sequential = (profile.load_mode == 'sequential')
-    want_events = profile.events if events is None else bool(events)
     want_diarize = profile.diarize if diarize_enabled is None else bool(diarize_enabled)
 
     wav = audio.to_wav16k_mono(path)
@@ -68,14 +67,6 @@ def run(path: str, profile=None, device: str = 'cuda', initial_prompt: str | Non
     if sequential:
         asr.unload_model()
 
-    # --- Ses olaylari (AST) ------------------------------------------------
-    event_rows: list[dict] = []
-    if want_events:
-        for chunk_path, offset in chunks:
-            event_rows.extend(events_mod.tag(chunk_path, profile, device=device, offset=offset))
-        if sequential:
-            events_mod.unload_events_model()
-
     # --- Konusmaci ayrimi (pyannote) --------------------------------------
     turns: list[dict] = []
     if want_diarize:
@@ -83,7 +74,7 @@ def run(path: str, profile=None, device: str = 'cuda', initial_prompt: str | Non
         if sequential:
             diarize.unload_pipeline()
 
-    text = merge.merge(segments, event_rows, turns, include_timestamps=include_timestamps)
+    text = merge.merge(segments, turns, include_timestamps=include_timestamps)
 
     payload = {
         'text': text,
@@ -93,10 +84,8 @@ def run(path: str, profile=None, device: str = 'cuda', initial_prompt: str | Non
         'profile': profile.name,
         'compute_type': profile.compute_type,
         'model': profile.whisper_model,
-        'events_model': profile.events_model if want_events else None,
         'diarized': bool(turns),
         'segments': segments,
-        'events': event_rows,
         'speakers': turns,
     }
 
@@ -132,7 +121,6 @@ def main(argv=None) -> int:
     parser.add_argument('--device', default='auto', choices=['auto', 'cuda', 'cpu'])
     parser.add_argument('--profile', default=None, choices=['lite', 'pro', 'pc1', 'pc2', 'max', 'flash'])
     parser.add_argument('--prompt', default=None, help='initial_prompt (ozel isim/terim)')
-    parser.add_argument('--no-events', action='store_true')
     parser.add_argument('--no-diarize', action='store_true')
     parser.add_argument('--timestamps', action='store_true')
     parser.add_argument('--json', dest='json_out', default=None)
@@ -154,7 +142,6 @@ def main(argv=None) -> int:
                 device=str(request.get('device') or 'auto'),
                 need_swap=request.get('need_swap'),
                 initial_prompt=request.get('initial_prompt'),
-                events=request.get('events'),
                 diarize_enabled=request.get('diarize'),
                 token=request.get('token'),
                 include_timestamps=bool(request.get('include_timestamps')),
@@ -175,7 +162,6 @@ def main(argv=None) -> int:
     if args.profile:
         profile = config.select_profile_for(args.profile)
     result = run(args.path, profile=profile, device=args.device, initial_prompt=args.prompt,
-                 events=not args.no_events if args.no_events else None,
                  diarize_enabled=not args.no_diarize if args.no_diarize else None,
                  include_timestamps=args.timestamps, keep_wav=args.keep_wav)
     print(result['text'])

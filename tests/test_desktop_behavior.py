@@ -519,3 +519,80 @@ def test_desktop_reads_the_real_context_back_from_the_server():
     # compactAt is recomputed from the REAL context, not left at the 32K default.
     assert "$script:compactAt = [int]($realCtx * 0.67)" in desktop
 
+
+def test_child_process_stderr_is_read_as_utf8_and_boxes_are_stripped(tmp_path):
+    """Regression (the status text beside "Full access"): the model-manager process's stderr was
+    written with the OEM code page; the UI assumed UTF-8 and decoded it, turning non-ASCII
+    characters into "boxes" (U+FFFD). Now both sides are explicitly UTF-8: the child process
+    WRITES with `[Console]::OutputEncoding = UTF8`, the UI READS with
+    `StandardErrorEncoding = UTF8`. Also, U+FFFD never reaches the UI (`Repair-UiText`)."""
+    desktop = (ROOT / "mamidlabs-desktop.ps1").read_text(encoding="utf-8-sig")
+    assert "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)" in desktop
+    assert "$OutputEncoding = [Text.UTF8Encoding]::new($false)" in desktop
+    assert "$psi.StandardErrorEncoding = [Text.Encoding]::UTF8" in desktop
+    # NOTE: StandardOutputEncoding can only be set when RedirectStandardOutput is enabled;
+    # otherwise .NET throws and the model can NEVER be started.
+    invoke_manage = desktop.split("function Invoke-Manage")[1].split("function ")[0]
+    if "$psi.StandardOutputEncoding =" in invoke_manage:
+        assert "RedirectStandardOutput = $true" in invoke_manage, (
+            "Invoke-Manage uses StandardOutputEncoding without redirecting stdout "
+            "(.NET exception -> the model cannot load)"
+        )
+    # The child process (the manager) must also write UTF-8; otherwise the parent decoding UTF-8
+    # corrupts the text.
+    manager = (ROOT / "scripts" / "manage-mamidlabs.ps1").read_text(encoding="utf-8-sig")
+    assert "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)" in manager
+    # Python tools must write UTF-8 to the pipe (otherwise non-ASCII in tool results is corrupt).
+    worker = (ROOT / "agent" / "mamidlabs-inference.ps1").read_text(encoding="utf-8-sig")
+    assert "$psi.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'" in worker
+    assert "$psi.StandardErrorEncoding = [Text.Encoding]::UTF8" in worker
+    # Real pwsh: U+FFFD is stripped; correct non-ASCII text is UNCHANGED.
+    body = r"""
+$broken = 'Not enough free VRAM: ' + [string][char]0xFFFD + 'sample ' + [string][char]0xFFFD + 'text'
+$clean = Repair-UiText $broken
+Assert ($clean -notlike "*$([string][char]0xFFFD)*") 'U+FFFD was not stripped'
+Assert ($clean -like 'Not enough free VRAM:*') 'text was not preserved'
+$good = 'Résumé café — agent turn 3/8 ✓'
+Assert ((Repair-UiText $good) -eq $good) 'correct text was changed'
+Assert ((Format-ModelSwitchError $broken) -notlike "*$([string][char]0xFFFD)*") 'the formatter did not clean it'
+'OK'
+"""
+    out = run_ps(tmp_path, body)
+    assert "OK" in out
+
+
+def test_audio_attach_stops_model_load_and_warms_asr(tmp_path):
+    """The first audio turn must not be heavy: AS SOON AS an audio attachment is added
+    (a) an in-flight language-model load is stopped (local provider + model not ready) and
+    (b) the warm ASR worker is started in the background. Also, when the load is stopped,
+    `manage -Action stop` kills llama-server too (so a detached load does not hold the GPU)."""
+    desktop = (ROOT / "mamidlabs-desktop.ps1").read_text(encoding="utf-8-sig")
+    assert "function Prepare-AudioTurn" in desktop
+    assert "function Start-AsrWarmForAudio" in desktop
+    add = desktop.split("function Add-SelectedAudio")[1].split("function ")[0]
+    assert "Prepare-AudioTurn" in add
+    prep = desktop.split("function Prepare-AudioTurn")[1].split("function ")[0]
+    assert "$script:providerId -eq 'local' -and !$script:modelReady" in prep
+    assert "Stop-ModelSwitchForAudio" in prep
+    assert "Start-AsrWarmForAudio" in prep
+    warm = desktop.split("function Start-AsrWarmForAudio")[1].split("function ")[0]
+    assert "'--serve'" in warm and "'--parent-pid'" in warm
+    assert "logs\\asr-server.json" in warm
+    stop = desktop.split("function Stop-ModelSwitchForAudio")[1].split("function ")[0]
+    assert "'-Action', 'stop'" in stop
+    # Behavior: local + model not ready -> the load stops + ASR starts; if the model is ready the
+    # load does NOT stop.
+    body = r"""
+$script:providerId = 'local'; $script:modelReady = $false
+$script:calls = @()
+function Stop-ModelSwitchForAudio { $script:calls += 'stop-switch' }
+function Start-AsrWarmForAudio { $script:calls += 'warm-asr' }
+Prepare-AudioTurn
+$script:modelReady = $true
+Prepare-AudioTurn
+Assert (($script:calls -join ',') -eq 'stop-switch,warm-asr,warm-asr') ('unexpected: ' + ($script:calls -join ','))
+'OK'
+"""
+    out = run_ps(tmp_path, body)
+    assert "OK" in out
+

@@ -58,8 +58,6 @@ LITE_CPU_MAX_SECONDS = 15.0
 
 # English edition: the standard Whisper large-v3 CTranslate2 model (no Turkish fine-tune).
 DEFAULT_WHISPER_MODEL = 'Systran/faster-whisper-large-v3'
-# AudioSet-based audio event model (AST). Set to 'none' to disable.
-DEFAULT_EVENTS_MODEL = 'MIT/ast-finetuned-audioset-10-10-0.4593'
 
 # --- Audio pipeline memory requirements (MiB) --------------------------------
 # The device/swap decision is made from the REAL free VRAM and system RAM measured
@@ -67,13 +65,13 @@ DEFAULT_EVENTS_MODEL = 'MIT/ast-finetuned-audioset-10-10-0.4593'
 # profile runs on both 8 GB (target machine) and 16 GB cards, so the profile name
 # alone is not enough.
 #
-# `audio_vram_mib`: worst-case margin for Whisper large-v3 + AST + the torch/CUDA
-# context. Measured: int8_float16 large-v3 ~1.5-2.5 GB, AST (fp32) ~0.4 GB, the
+# `audio_vram_mib`: worst-case margin for Whisper large-v3 + the torch/CUDA
+# context. Measured: int8_float16 large-v3 ~1.5-2.5 GB, the
 # torch/CUDA context ~0.3-0.5 GB; on pro (old name PC2) float16 Whisper grows to ~2.9 GB.
 DEFAULT_AUDIO_VRAM_MIB = 4096
 # `audio_ram_mib`: worst-case system RAM the pipeline holds on the CPU path (no
-# swap): Whisper int8 (~2 GB) + AST (fp32 ~0.4 GB) + torch/Python (~0.8 GB) + the
-# chunk/decode buffers (30 min float32 ~0.15 GB; chunked transcription).
+# swap): Whisper int8 (~2 GB) + torch/Python (~0.8 GB) +
+# the chunk/decode buffers (30 min float32 ~0.15 GB; chunked transcription).
 DEFAULT_AUDIO_RAM_MIB = 5120
 
 # LITE (8 GB card) CPU co-resident audio-pipeline RAM threshold. TWO measurements conflicted;
@@ -96,9 +94,7 @@ class Profile:
     load_mode: str         # 'parallel' | 'sequential'
     chunk_minutes: int     # split long recordings; 0 = no split
     whisper_model: str
-    events_model: str      # 'ast' | 'none'
     language: str
-    events: bool
     diarize: bool
     auto_device: bool = True              # choose cuda/cpu automatically from the recording duration
     cpu_max_seconds: float | None = None  # recordings shorter than this use the CPU (None -> DEFAULT_CPU_MAX_SECONDS)
@@ -109,13 +105,13 @@ class Profile:
 PROFILES = {
     PC2: Profile(
         name=PC2, compute_type='float16', load_mode='parallel', chunk_minutes=0,
-        whisper_model=DEFAULT_WHISPER_MODEL, events_model=DEFAULT_EVENTS_MODEL,
-        language='auto', events=True, diarize=True,
+        whisper_model=DEFAULT_WHISPER_MODEL,
+        language='auto', diarize=True,
     ),
     PC1: Profile(
         name=PC1, compute_type='int8_float16', load_mode='sequential', chunk_minutes=30,
-        whisper_model=DEFAULT_WHISPER_MODEL, events_model=DEFAULT_EVENTS_MODEL,
-        language='auto', events=True, diarize=True,
+        whisper_model=DEFAULT_WHISPER_MODEL,
+        language='auto', diarize=True,
         # LITE ASR policy: the CPU co-resident path is chosen ONLY when the recording is
         # SHORTER than `cpu_max_seconds` AND system RAM suffices (the language model stays in
         # VRAM, the audio model runs on the CPU/system RAM; NO swap). For a long recording or
@@ -258,7 +254,7 @@ def choose_plan(profile: Profile, duration_seconds: float | None = None,
     decision is made from the tier's memory thresholds + REAL free VRAM + system RAM and the
     recording DURATION:
 
-      1) Whisper + AST fit in free VRAM ALONGSIDE the local language model
+      1) Whisper fits in free VRAM ALONGSIDE the local language model
          (`audio_vram_mib`) -> ('cuda', False): GPU transcription, NO swap (fastest, free).
       2) They do not fit and the CPU co-resident condition holds -> ('cpu', False): the
          language model STAYS in VRAM and the audio model runs on the CPU/system RAM (NO swap;
