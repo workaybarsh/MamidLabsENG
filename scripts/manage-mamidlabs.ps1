@@ -21,6 +21,8 @@ $profileAliases = @{ max = 'qwen3.8-27b-max'; flash = 'qwen3.8-27b-flash'; lite 
 $liteDir = Join-Path $root 'models\Huihui-Qwen3.5-9B-abliterated-i1-GGUF'
 $logs = Join-Path $root 'logs'
 . (Join-Path $root 'agent\process-launch.ps1')
+# VRAM measurement from the SINGLE source (agent\gpu-info.ps1): strict parsing, $null if unmeasurable.
+. (Join-Path $root 'agent\gpu-info.ps1')
 
 # The settings are needed for the profile choice, so they are read before the model path is determined.
 $settings = $null
@@ -86,22 +88,21 @@ function Get-ModelOverheadMiB([string]$profileName, [int]$ctx) {
     return [int][math]::Ceiling(278 + ($ctx / 1024.0) * 27.9)
 }
 
-# Largest context that fits this profile's REAL free VRAM (MAX/FLASH). Computed from the measured
-# linear model; rounded down to a multiple of 2K and clamped to 4K..131072. 100 MiB safety margin:
-# when the model sits exactly at the limit the driver can spill into shared memory (that spill
-# dropped chat from ~40 to ~27 tok/s). 0 -> nothing fits, $null -> cannot measure (the caller then
-# falls back to the old coarse steps). LITE keeps its fixed context.
-function Get-MaxContextForProfile([string]$profileName) {
+# Largest context that fits this profile's REAL free VRAM (MAX/FLASH). The base is derived from
+# the REAL model file (model + 278 MiB fixed buffers), so a user's own (custom) model is sized
+# correctly too (the constant 14878 is only right for the 27B). Rounded down to a multiple of 2K
+# and clamped to 4K..131072. 100 MiB safety margin: when the model sits exactly at the limit the
+# driver can spill into shared memory (that spill dropped chat from ~40 to ~27 tok/s).
+# 0 -> nothing fits, $null -> cannot measure (the caller then falls back to the old coarse steps).
+# LITE keeps its fixed context.
+function Get-MaxContextForProfile([string]$profileName, [string]$modelPath) {
     if ($profileName -eq 'lite') { return $null }
-    $smi = (Get-Command nvidia-smi -ErrorAction SilentlyContinue).Source
-    if (!$smi) { return $null }
-    $freeMiB = 0
-    try {
-        $line = (& $smi --query-gpu=memory.free --format=csv,noheader,nounits | Select-Object -First 1)
-        $freeMiB = [int]($line -replace '\D', '')
-    } catch { return $null }
-    if ($freeMiB -le 0) { return $null }
+    $freeMiB = Get-NvidiaFreeVramMiB
+    if ($null -eq $freeMiB -or $freeMiB -le 0) { return $null }
     $baseMiB = 14878
+    if ($modelPath -and (Test-Path -LiteralPath $modelPath -PathType Leaf)) {
+        $baseMiB = [int][math]::Ceiling((Get-Item -LiteralPath $modelPath).Length / 1MB) + 278
+    }
     $perToken = 0.02722
     $safetyMiB = 100
     $maxCtx = [int][math]::Floor(($freeMiB - $baseMiB - $safetyMiB) / $perToken)
@@ -114,13 +115,9 @@ function Get-MaxContextForProfile([string]$profileName) {
 # $ctx is the context size the model would be loaded with; the KV-cache share of the overhead
 # depends on it, so the estimate is context-aware.
 function Test-MemoryBudget([string]$modelPath, [string]$profileName, [string]$projectorPath, [int]$ctx) {
-    $smi = (Get-Command nvidia-smi -ErrorAction SilentlyContinue).Source
-    if (!$smi) { return }  # Without NVIDIA drivers the check is meaningless; the real error comes from llama-server.
-    $freeMiB = 0
-    try {
-        $line = (& $smi --query-gpu=memory.free --format=csv,noheader,nounits | Select-Object -First 1)
-        $freeMiB = [int]($line -replace '\D', '')
-    } catch { return }  # If nvidia-smi gives unexpected output skip the check, do not block the installation.
+    # Measurement from the SINGLE source (agent\gpu-info.ps1): strict parsing. $null = unmeasurable.
+    $freeMiB = Get-NvidiaFreeVramMiB
+    if ($null -eq $freeMiB) { return }  # no/failed driver: the check is meaningless, do not block install
     if ($freeMiB -le 0) { return }
     $modelMiB = [math]::Ceiling((Get-Item -LiteralPath $modelPath).Length / 1MB)
     # The image projector (mmproj) now runs on the CPU in all three profiles
@@ -397,7 +394,7 @@ try {
     if ($Profile -eq 'lite') {
         $ctxCandidates = @([int]$liteCtx)
     } else {
-        $dynamicCtx = Get-MaxContextForProfile $Profile
+        $dynamicCtx = Get-MaxContextForProfile $Profile $model
         if ($null -eq $dynamicCtx) {
             # nvidia-smi missing/unreadable: fall back to the old coarse steps (behavior preserved).
             $ctxCandidates = @(32768, 16384)

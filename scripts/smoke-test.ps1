@@ -62,6 +62,8 @@ $ProgressPreference = 'SilentlyContinue'
 if (!(Get-Command Start-ThreadJob -ErrorAction SilentlyContinue)) { Import-Module ThreadJob -ErrorAction Stop }
 
 $manage = Join-Path $Root 'scripts\manage-mamidlabs.ps1'
+# VRAM measurement from the SINGLE source (agent\gpu-info.ps1): strict parsing, $null if unmeasurable.
+. (Join-Path $Root 'agent\gpu-info.ps1')
 $results = [ordered]@{}
 $lite = ($Profile -eq 'lite')
 $script:chatBaseline = $null
@@ -95,9 +97,8 @@ function Skip([string]$name, [string]$reason) {
 }
 
 function Get-FreeVramMiB {
-    $smi = (Get-Command nvidia-smi -ErrorAction SilentlyContinue).Source
-    if (!$smi) { return $null }
-    try { return [int](((& $smi --query-gpu=memory.free --format=csv,noheader,nounits) | Select-Object -First 1) -replace '\D', '') } catch { return $null }
+    # SINGLE source: agent\gpu-info.ps1 (strict parsing; $null if unmeasurable, NOT 0).
+    return (Get-NvidiaFreeVramMiB)
 }
 
 # Does the GGUF header contain an MTP/nextn block? (see scripts\manage-mamidlabs.ps1 Test-GgufHasMtp

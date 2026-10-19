@@ -155,9 +155,16 @@ change and the KV cache is not broken). If disabled the server's profile value i
 file + a **linear margin** (measured: 278 MiB base + ~27.9 MiB per 1K tokens; equals 800 MiB at 16K
 and 1200 MiB at 32K) (MAX/FLASH; 300 MiB on LITE, unchanged);
 the mmproj runs on the CPU in all profiles so it does not count toward the VRAM
-budget. **MAX/FLASH context selection:** instead of coarse steps (16K/32K) the largest context that
-fits the **measured free VRAM** is computed in **2K steps** (`Get-MaxContextForProfile`, 100 MiB
-safety margin); e.g. ~20K with 15.5 GiB free, ~39K with 15.9 GiB free. The gate still verifies it
+budget. Free VRAM is measured from a **single source** (`agent/gpu-info.ps1` →
+`Get-NvidiaFreeVramMiB`): only a plain integer ("12345" / "12345 MiB") is accepted; `[N/A]`, error
+text or a negative value means **"could not measure"** (`$null`) — the old `-replace '\D',''`
+turned them into 0 or a fake huge value (0 made `Release-Comfy` close ComfyUI for nothing; a fake
+huge value could skip the gate and let the model spill). **MAX/FLASH context selection:** instead of
+coarse steps (16K/32K) the largest context that fits the **measured free VRAM** is computed in
+**2K steps** (`Get-MaxContextForProfile $profile $modelPath`, 100 MiB safety margin; the base is
+derived from the **real model file**: file size + 278 MiB — it falls back to 14878 MiB for the 27B
+when the file is missing, so a user's own model is computed correctly too); e.g. ~20K with
+15.5 GiB free, ~39K with 15.9 GiB free. The gate still verifies it
 with a stepped fallback; the chosen
 value feeds both the gate and `--ctx-size`, and the UI reads the real value back from the server
 (`/props` → `default_generation_settings.n_ctx`) so the compaction threshold matches. **ComfyUI lifecycle (default: runs only during generation):** ComfyUI runs **only
@@ -431,7 +438,7 @@ and only touches MamidLabs processes under the install root.
 
 ```powershell
 python -m pip install pytest -r requirements\app.txt
-python -m pytest -q          # ~159 s (509 collected, 505 passed, 4 skipped); no extra setup needed (tests/conftest.py)
+python -m pytest -q          # ~153 s (514 collected, 510 passed, 4 skipped); no extra setup needed (tests/conftest.py)
 %LOCALAPPDATA%\Programs\MamidLabs\runtime\pwsh\pwsh.exe -NoProfile -ExecutionPolicy Bypass -File %LOCALAPPDATA%\Programs\MamidLabs\scripts\smoke-test.ps1 -Profile flash -SkipVideo
 ```
 
@@ -468,6 +475,11 @@ python -m pytest -q          # ~159 s (509 collected, 505 passed, 4 skipped); no
 | Regenerate from an image (`regenerate`) | not measured | ~110–140 s |
 | Photo editing (`identity_edit`) | 74–160 s (one/two images) | **not supported** |
 | Post-media switch | ratio 1.01, 319 MiB free VRAM | ratio 0.99–1, 310–369 MiB free VRAM |
+
+**Dynamic-context live measurement (2026-10-19):** with 15592 MiB free VRAM `n_ctx = 22528` was
+chosen; the 27B fitted fully (nvidia-smi 15733 MiB used / 318 MiB free) and generation ran at
+**51.1 tok/s** (MTP acceptance 130/205) — no spill into shared memory; the linear model held, so
+no recalibration was needed.
 
 Desktop apps hold VRAM: NVIDIA Overlay ~1.45 GB and dwm ~0.8 GB were measured. For per-process VRAM
 use `Get-Counter '\GPU Process Memory(*)\Dedicated Usage'`; `nvidia-smi` does not show per-process
@@ -648,6 +660,7 @@ Add one line per feature/change (newest first).
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-10-19 | **VRAM measurement was consolidated into a single source and parsed strictly; fake 0 / fake huge values are gone (including Release-Comfy closing ComfyUI for nothing).** Four separate places used to join every digit with `-replace '\D',''`: `[N/A]`/error -> **0**, `-5` -> **5**, a version number in an error string (e.g. "580.88") -> a fake HUGE value. Impact: `Release-Comfy` took 0 for "not enough VRAM" and closed ComfyUI needlessly (~30 s to reopen); a fake huge value could pass the gate and let the model spill (chat ~40 -> ~27 tok/s). New `agent/gpu-info.ps1`: `ConvertFrom-MiBText` (only a plain integer, optional "MiB"; anything else is `$null`) + `Get-NvidiaFreeVramMiB`; `scripts/manage-mamidlabs.ps1`, `agent/media-model-swap.ps1` and `scripts/smoke-test.ps1` now delegate to it. `Get-MaxContextForProfile` now takes `$modelPath`: its base is derived from the **real model file** (file + 278 MiB; falls back to 14878 MiB for the 27B when missing). Live check (FLASH, RTX 5060 Ti): 15592 MiB free -> `n_ctx=22528`, **51.1 tok/s**, no spill. Tests: `tests/test_vram_measurement.py` (parsing, `$null` behavior, single source, parameter binding, LITE exception). | agent/gpu-info.ps1, scripts/manage-mamidlabs.ps1, agent/media-model-swap.ps1, scripts/smoke-test.ps1, tests/test_vram_measurement.py, tests/test_media_release.py, tests/test_memory_admission.py, AGENTS.md, CHANGELOG.md |
 | 2026-10-19 | **Context is now computed from the measured free VRAM in fine steps (the card is fully used).** The old code used coarse 16K/32K steps: with 15.5 GiB free it rejected 32K and fell back to 16K, wasting 4-8K tokens. The margin is now a measured LINEAR model: `Get-ModelOverheadMiB` = base 278 MiB + ~27.9 MiB per 1K tokens (derived from 15112 MiB @8K, 15324 @16K, ~15770 @32K; equals 800 at 16K and 1200 at 32K). The new `Get-MaxContextForProfile` picks the largest context that fits this card's REAL free VRAM in 2K steps with a 100 MiB safety margin (e.g. ~20K with 15.5 GiB free, ~39K with 15.9 GiB free); the gate still verifies with a stepped fallback and LITE keeps its fixed context. `--fit` was also evaluated: its default `--fit-target` leaves 1024 MiB free and ran at ~23 tok/s, so it is not used. Tests: `tests/test_memory_admission.py` (linear margin + dynamic context). | scripts/manage-mamidlabs.ps1, tests/test_memory_admission.py, AGENTS.md, CHANGELOG.md |
 | 2026-10-19 | **The non-speech audio events (AudioSet/AST) feature was fully removed; non-ASCII "box" (U+FFFD) text was fixed at the root; and adding an audio attachment now stops the model load and warms the ASR worker.** (1) The `events.py` module, the `events`/`events_model` config fields, the `merge` event rows, the worker's `events` field, `--no-events`, the installer's AST prefetch (`AsrEventsModel`/`MAMIDLABS_ASR_EVENTS`), the microphone-menu "Non-speech sounds" checkbox and the `audioEvents` setting were removed; transcription is now only faster-whisper large-v3 + optional pyannote (the `transformers==5.17.0` pin stays as a pyannote/speechbrain dependency). (2) Child-process stderr was read as UTF-8 while it was written with the OEM code page, turning non-ASCII into U+FFFD; both sides are now explicitly UTF-8 (`[Console]::OutputEncoding`, `StandardErrorEncoding`/`StandardOutputEncoding`, `PYTHONIOENCODING=utf-8`) and `Repair-UiText` strips any stray U+FFFD (pitfall 25). (3) Adding an audio attachment calls `Prepare-AudioTurn`: if the local model is not ready the in-flight load is stopped (and `manage -Action stop` frees VRAM) and the warm ASR worker starts in the background (`--serve`, `logs\asr-server.json`), so the first audio turn is not heavy. Tests: `tests/test_transcriber.py`, `tests/test_installer_pinning.py`, `tests/test_desktop_behavior.py`. | agent/transcriber/events.py (deleted), agent/transcriber/config.py, agent/transcriber/merge.py, agent/transcriber/main.py, agent/transcriber/__init__.py, agent/whisper-tools.py, agent/mamidlabs-inference.ps1, mamidlabs-desktop.ps1, scripts/install-mamidlabs.ps1, scripts/manage-mamidlabs.ps1, requirements/asr.txt, packaging/windows/mamidlabs.iss, tests/test_transcriber.py, tests/test_installer_pinning.py, tests/test_desktop_behavior.py, README.md, docs/technical-notes.md, docs/installation.md, CHANGELOG.md, AGENTS.md |
 | 2026-10-18 | **The language model was not restored when an audio turn cancelled a model load ("not enough free VRAM") — fixed.** On the local provider an audio turn cancels the in-flight load (`Stop-ModelSwitchForAudio`) but the model is not in VRAM at that moment; the old plan looked only at "free VRAM" (large while the model is absent) and said "no swap", so the ASR held ~3.9 GB, the model was never restored and the next load was rejected. `config.choose_plan` now separates `local_model_required` from the **measured** `local_model_loaded` (`Test-LocalModelResident` → `/health`) and forces a swap when it is required but not loaded; `Invoke-TranscribeWithModelSwap` re-measures at the end of the turn as a safety net. Tests: `tests/test_transcriber.py`. | agent/transcriber/config.py, agent/whisper-tools.py, agent/mamidlabs-inference.ps1, tests/test_transcriber.py, docs/technical-notes.md, AGENTS.md, CHANGELOG.md |

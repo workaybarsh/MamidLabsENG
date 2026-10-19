@@ -92,7 +92,8 @@ def test_idle_comfy_is_only_stopped_when_its_queue_is_empty():
 
 def test_memory_budget_uses_measured_free_vram_and_estimated_need():
     manager = read_text("scripts/manage-mamidlabs.ps1")
-    assert "memory.free" in manager
+    assert "Get-NvidiaFreeVramMiB" in manager
+    assert "gpu-info.ps1" in manager
     assert "(Get-Item -LiteralPath $modelPath).Length" in manager
     assert "$freeMiB -lt $neededMiB" in manager
 
@@ -102,7 +103,9 @@ def test_memory_budget_skips_cleanly_when_no_nvidia_gpu():
     skipped silently - it must not block the installation, llama-server will give
     the real error anyway."""
     manager = read_text("scripts/manage-mamidlabs.ps1")
-    assert "if (!$smi) { return }" in manager
+    assert "if ($null -eq $freeMiB) { return }" in manager
+    gpu_info = read_text("agent/gpu-info.ps1")
+    assert "if (!$smi) { return $null }" in gpu_info
 
 
 def test_start_action_accepts_skip_memory_check_switch():
@@ -146,11 +149,11 @@ def test_max_flash_context_is_computed_from_measured_free_vram():
     manager = read_text("scripts/manage-mamidlabs.ps1")
     assert "function Get-MaxContextForProfile" in manager
     fn = manager.split("function Get-MaxContextForProfile")[1].split("function ")[0]
-    assert "memory.free" in fn
+    assert "Get-NvidiaFreeVramMiB" in fn
     assert "$safetyMiB = 100" in fn
     assert "[math]::Floor($maxCtx / 2048) * 2048" in fn
     assert "if ($maxCtx -lt 4096) { return 0 }" in fn
-    assert "$dynamicCtx = Get-MaxContextForProfile $Profile" in manager
+    assert "$dynamicCtx = Get-MaxContextForProfile $Profile $model" in manager
     assert "$ctxCandidates = @($dynamicCtx)" in manager
     assert "foreach ($fallback in @(32768, 24576, 16384, 12288, 8192, 4096))" in manager
     assert "foreach ($candidate in $ctxCandidates)" in manager

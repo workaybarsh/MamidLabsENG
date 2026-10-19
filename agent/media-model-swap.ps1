@@ -7,6 +7,7 @@
 
 . (Join-Path $PSScriptRoot 'process-launch.ps1')
 . (Join-Path $PSScriptRoot 'media-paths.ps1')
+. (Join-Path $PSScriptRoot 'gpu-info.ps1')
 
 function Stop-LocalModelForMedia([string]$manage) {
     Emit 'status' 'Unloading the language model from VRAM...'
@@ -133,11 +134,11 @@ function Start-OrReuseComfy([string]$python, [string]$comfyDir, [string]$comfyOu
 
 # Instant free VRAM (MiB) via nvidia-smi. Returns $null if unavailable/unreadable; the
 # caller then skips the extra check (llama-server gives the real error anyway).
+# Measurement comes from the SINGLE source (agent\gpu-info.ps1): strict parsing, so
+# [N/A]/error text/negative -> $null. IMPORTANT: it used to return 0 on bad output and
+# Release-Comfy read that as "not enough VRAM" and killed ComfyUI for nothing (~30 s reopen).
 function Get-MediaFreeVramMiB {
-    $smi = (Get-Command nvidia-smi -ErrorAction SilentlyContinue).Source
-    if (!$smi) { return $null }
-    try { return [int](((& $smi --query-gpu=memory.free --format=csv,noheader,nounits) | Select-Object -First 1) -replace '\D', '') }
-    catch { return $null }
+    return (Get-NvidiaFreeVramMiB)
 }
 
 # Unloads the models and the cache; before the language model is reloaded it waits until VRAM

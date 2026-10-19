@@ -67,6 +67,20 @@ Claude, Gemini, DeepSeek and custom OpenAI-compatible endpoints are optional API
   row; the links still lead to the direct download.
 
 ### Fixed
+- **VRAM measurement now lives in a single source; fake "0" and fake huge values are gone.** The
+  `-replace '\D',''` parsing in four separate places joined every digit, so `[N/A]`/error output
+  became **0**, `-5` became **5**, and a version number in an error string (e.g. "580.88") became a
+  fake **huge** value; `Release-Comfy` took 0 for "not enough VRAM" and closed ComfyUI needlessly
+  (~30 s to reopen), while a fake huge value could bypass the memory gate and spill the model into
+  shared memory (chat ~40 → ~27 tok/s). New `agent/gpu-info.ps1` parses strictly
+  (`ConvertFrom-MiBText`: only a plain integer, optional "MiB"; anything else = "could not measure"
+  = `$null`), and `scripts/manage-mamidlabs.ps1`, `agent/media-model-swap.ps1`,
+  `scripts/smoke-test.ps1` now use this single source. Also, `Get-MaxContextForProfile` now derives
+  the context base from the **real model file** (file size + 278 MiB; falls back to 14878 MiB for
+  the 27B when the file is missing) so a user's own model is computed correctly too. Live check
+  (FLASH, RTX 5060 Ti): 15592 MiB free VRAM → **n_ctx 22528**, **51.1 tok/s** (MTP acceptance
+  130/205), no spill. Tests: `tests/test_vram_measurement.py` (parsing, `$null` behavior, single
+  source, parameter binding, LITE exception).
 - **The context size is now computed from the measured free VRAM so the card is fully used.**
   The old code used COARSE steps (16K/32K): with 15.5 GiB free it rejected 32K and fell back to
   16K, wasting 4–8K tokens. The margin is now a measured **linear** model (`Get-ModelOverheadMiB`:
